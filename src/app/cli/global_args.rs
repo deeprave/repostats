@@ -1,5 +1,5 @@
 //! Global arguments parsing for the full command line interface
-//! 
+//!
 //! This module handles the complete parsing of global arguments after segmentation.
 //! It uses standard clap parsing since we have clean global args at this stage.
 
@@ -7,7 +7,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 /// Global arguments structure with all command-line options
-/// 
+///
 /// This is parsed AFTER segmentation, so we have clean global args
 /// without any command-specific arguments mixed in.
 #[derive(Parser, Debug, Clone)]
@@ -15,58 +15,50 @@ use std::path::PathBuf;
 #[command(about = "Repository statistics and analysis tool")]
 #[command(version)]
 pub struct Args {
-    /// Repository path to analyze (defaults to current directory)
+    /// Repository path to analyse (defaults to current directory)
     #[arg(short = 'r', long = "repo", value_name = "PATH")]
     pub repository: Option<PathBuf>,
-    
+
     /// Configuration file path
     #[arg(long = "config-file", value_name = "FILE")]
     pub config_file: Option<PathBuf>,
-    
+
     /// Plugin directory override
     #[arg(long = "plugin-dir", value_name = "DIR")]
     pub plugin_dir: Option<String>,
-    
+
     /// Plugin exclusion list
     #[arg(long = "plugin-exclude", value_name = "LIST")]
     pub plugin_exclude: Option<String>,
-    
-    /// Verbose output (can be used multiple times for more verbosity)
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
-    pub verbose: u8,
-    
-    /// Quiet mode (can be used multiple times for less verbosity)
-    #[arg(short = 'q', long = "quiet", action = clap::ArgAction::Count)]
-    pub quiet: u8,
-    
+
     /// Force colored output (overrides TTY detection and NO_COLOR)
     #[arg(long = "color")]
     pub color: bool,
-    
+
     /// Disable colored output
     #[arg(long = "no-color", conflicts_with = "color")]
     pub no_color: bool,
-    
+
     /// Cache directory
     #[arg(long = "cache-dir", value_name = "DIR")]
     pub cache_dir: Option<PathBuf>,
-    
+
     /// Disable caching
     #[arg(long = "no-cache")]
     pub no_cache: bool,
-    
+
     /// Log level (trace, debug, info, warn, error)
     #[arg(long = "log-level", value_name = "LEVEL")]
     pub log_level: Option<String>,
-    
+
     /// Log file path (use 'none' to disable file logging)
     #[arg(long = "log-file", value_name = "FILE")]
-    pub log_file: Option<PathBuf>,
-    
+    pub log_file: Option<String>,
+
     /// Log output format (text, json)
     #[arg(long = "log-format", value_name = "FORMAT")]
     pub log_format: Option<String>,
-    
+
 }
 
 impl Default for Args {
@@ -76,8 +68,6 @@ impl Default for Args {
             config_file: None,
             plugin_dir: None,
             plugin_exclude: None,
-            verbose: 0,
-            quiet: 0,
             color: false,
             no_color: false,
             cache_dir: None,
@@ -95,7 +85,7 @@ impl Args {
     }
 
     /// Parse global arguments from a provided argument list
-    /// 
+    ///
     pub fn parse_from_args(margs: &mut Self, args: &[String], color: bool, no_color: bool) {
 
         // Build a full clap Command with all arguments
@@ -106,7 +96,7 @@ impl Args {
         } else {
             clap::ColorChoice::Auto
         };
-        
+
         let cmd = clap::Command::new("repostats")
             .about("Repository statistics and analysis tool")
             .version(env!("CARGO_PKG_VERSION"))
@@ -128,16 +118,6 @@ impl Args {
                 .long("plugin-exclude")
                 .value_name("LIST")
                 .help("Plugin exclusion list"))
-            .arg(clap::Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .action(clap::ArgAction::Count)
-                .help("Verbose output (can be used multiple times for more verbosity)"))
-            .arg(clap::Arg::new("quiet")
-                .short('q')
-                .long("quiet")
-                .action(clap::ArgAction::Count)
-                .help("Quiet mode (can be used multiple times for less verbosity)"))
             .arg(clap::Arg::new("color")
                 .long("color")
                 .action(clap::ArgAction::SetTrue)
@@ -167,10 +147,10 @@ impl Args {
                 .long("log-format")
                 .value_name("FORMAT")
                 .help("Log output format (text, json)"));
-        
+
         match cmd.try_get_matches_from(args) {
             Ok(matches) => {
-                // Apply command line args (overrides config file)
+                // Apply command line args (overrides the config file)
                 Self::apply_command_line(margs, &matches);
             },
             Err(e) => {
@@ -180,15 +160,15 @@ impl Args {
             }
         }
     }
-    
+
     /// Apply configuration file values to Args
     pub fn parse_config_file(margs: &mut Self, config_file: Option<PathBuf>) {
         let config_path = match config_file {
             Some(path) => {
-                // User specified a config file - it must exist
+                // User specified a config file-it must exist
                 let path = PathBuf::from(path);
                 if !path.exists() {
-                    eprintln!("Error: Specified configuration file does not exist: {}", path.display());
+                    eprintln!("Error: The specified configuration file does not exist: {}", path.display());
                     std::process::exit(1);
                 }
                 Some(path)
@@ -197,14 +177,14 @@ impl Args {
                 // Use default config path if it exists
                 let default_path = dirs::config_dir()
                     .map(|d| d.join("Repostats").join("repostats.toml"));
-                
+
                 match default_path {
                     Some(path) if path.exists() => Some(path),
                     _ => None, // No config file to load
                 }
             }
         };
-        
+
         // If we have a config path, load and parse it
         if let Some(path) = config_path {
             match std::fs::read_to_string(&path) {
@@ -224,7 +204,7 @@ impl Args {
             }
         }
     }
-    
+
     /// Apply TOML configuration values to Args
     fn apply_toml_values(args: &mut Self, config: &toml::Table) {
         if let Some(repo) = config.get("repository").and_then(|v| v.as_str()) {
@@ -235,12 +215,6 @@ impl Args {
         }
         if let Some(plugin_exclude) = config.get("plugin-exclude").and_then(|v| v.as_str()) {
             args.plugin_exclude = Some(plugin_exclude.to_string());
-        }
-        if let Some(verbose) = config.get("verbose").and_then(|v| v.as_integer()) {
-            args.verbose = verbose as u8;
-        }
-        if let Some(quiet) = config.get("quiet").and_then(|v| v.as_integer()) {
-            args.quiet = quiet as u8;
         }
         if let Some(color) = config.get("color").and_then(|v| v.as_bool()) {
             args.color = color;
@@ -258,13 +232,13 @@ impl Args {
             args.log_level = Some(log_level.to_string());
         }
         if let Some(log_file) = config.get("log-file").and_then(|v| v.as_str()) {
-            args.log_file = Some(PathBuf::from(log_file));
+            args.log_file = Some(log_file.to_string());
         }
         if let Some(log_format) = config.get("log-format").and_then(|v| v.as_str()) {
             args.log_format = Some(log_format.to_string());
         }
     }
-    
+
     /// Apply command line arguments to Args (overrides config file values)
     fn apply_command_line(args: &mut Self, matches: &clap::ArgMatches) {
         if let Some(repo) = matches.get_one::<String>("repository") {
@@ -278,14 +252,6 @@ impl Args {
         }
         if let Some(plugin_exclude) = matches.get_one::<String>("plugin-exclude") {
             args.plugin_exclude = Some(plugin_exclude.clone());
-        }
-        let verbose_count = matches.get_count("verbose");
-        if verbose_count > 0 {
-            args.verbose = verbose_count;
-        }
-        let quiet_count = matches.get_count("quiet");
-        if quiet_count > 0 {
-            args.quiet = quiet_count;
         }
         if matches.get_flag("color") {
             args.color = true;
@@ -306,7 +272,7 @@ impl Args {
             if log_file == "none" {
                 args.log_file = None; // Magic "none" value disables file logging
             } else {
-                args.log_file = Some(PathBuf::from(log_file));
+                args.log_file = Some(log_file.clone());
             }
         }
         if let Some(log_format) = matches.get_one::<String>("log-format") {
@@ -318,17 +284,7 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    #[test]
-    fn test_parse_minimal() {
-        let args = vec!["repostats".to_string()];
-        
-        let result = Args::try_parse_from(&args).unwrap();
-        
-        assert_eq!(result.verbose, 0);
-        assert_eq!(result.quiet, 0);
-    }
-    
+
     #[test]
     fn test_parse_with_repository() {
         let args = vec![
@@ -336,53 +292,25 @@ mod tests {
             "--repo".to_string(),
             "/path/to/repo".to_string(),
         ];
-        
+
         let result = Args::try_parse_from(&args).unwrap();
-        
+
         assert_eq!(result.repository, Some(PathBuf::from("/path/to/repo")));
     }
-    
-    #[test]
-    fn test_parse_verbose_levels() {
-        let args = vec!["repostats".to_string(), "-vvv".to_string()];
-        let result = Args::try_parse_from(&args).unwrap();
-        assert_eq!(result.verbose, 3);
-        
-        let args = vec!["repostats".to_string(), "-v".to_string(), "-v".to_string()];
-        let result = Args::try_parse_from(&args).unwrap();
-        assert_eq!(result.verbose, 2);
-        
-        let args = vec!["repostats".to_string(), "--verbose".to_string()];
-        let result = Args::try_parse_from(&args).unwrap();
-        assert_eq!(result.verbose, 1);
-    }
-    
+
     #[test]
     fn test_conflicting_args() {
-        // Verbose and quiet no longer conflict - they work together as counters
-        let args = vec![
-            "repostats".to_string(),
-            "--verbose".to_string(),
-            "--quiet".to_string(),
-        ];
-        
-        let result = Args::try_parse_from(&args);
-        assert!(result.is_ok());
-        let parsed = result.unwrap();
-        assert_eq!(parsed.verbose, 1);
-        assert_eq!(parsed.quiet, 1);
-        
         // Color and no-color still conflict
         let args = vec![
             "repostats".to_string(),
             "--color".to_string(),
             "--no-color".to_string(),
         ];
-        
+
         let result = Args::try_parse_from(&args);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_parse_all_fields() {
         let args = vec![
@@ -393,7 +321,6 @@ mod tests {
             "/plugins".to_string(),
             "--plugin-exclude".to_string(),
             "bad-plugin".to_string(),
-            "--verbose".to_string(),
             "--repo".to_string(),
             "/path/to/repo".to_string(),
             "--cache-dir".to_string(),
@@ -402,13 +329,12 @@ mod tests {
             "debug".to_string(),
             "--color".to_string(),
         ];
-        
+
         let result = Args::try_parse_from(&args).unwrap();
-        
+
         assert_eq!(result.config_file, Some(PathBuf::from("custom.toml")));
         assert_eq!(result.plugin_dir, Some("/plugins".to_string()));
         assert_eq!(result.plugin_exclude, Some("bad-plugin".to_string()));
-        assert_eq!(result.verbose, 1);
         assert_eq!(result.repository, Some(PathBuf::from("/path/to/repo")));
         assert_eq!(result.cache_dir, Some(PathBuf::from("/cache")));
         assert_eq!(result.log_level, Some("debug".to_string()));
