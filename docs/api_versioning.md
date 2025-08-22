@@ -7,7 +7,7 @@ The repostats project uses a **Cargo.toml-based API versioning system** that pro
 ## How It Works
 
 ### Source-Controlled Versioning
-- API version is defined in `Cargo.toml` under `package.metadata.repostats.api_version`
+- API version is defined in `Cargo.toml` under `package.metadata.plugin_api_version`
 - Build script reads version from Cargo.toml and generates constant at build time
 - **Same source code always produces same API version** across all developers
 - No dependency on build date or environment
@@ -15,7 +15,7 @@ The repostats project uses a **Cargo.toml-based API versioning system** that pro
 ### Current Version
 ```bash
 # Check current API version in source
-grep 'api_version' Cargo.toml
+grep 'plugin_api_version' Cargo.toml
 
 # Check generated constant
 grep 'BASE_API_VERSION' target/*/build/repostats-*/out/version.rs
@@ -27,7 +27,7 @@ grep 'BASE_API_VERSION' target/*/build/repostats-*/out/version.rs
 ./scripts/increment_api_version.sh
 
 # Method 2: Manual edit
-# Edit Cargo.toml: package.metadata.repostats.api_version = YYYYMMDD
+# Edit Cargo.toml: package.metadata.plugin_api_version = YYYYMMDD
 # Commit the change and rebuild
 ```
 
@@ -57,12 +57,12 @@ Uses **YYYYMMDD** format for human-readable dates:
 
 ### Cargo.toml Configuration
 ```toml
-[package.metadata.repostats]
-api_version = 20250822
+[package.metadata]
+plugin_api_version = 20250822
 ```
 
 ### Build Script (`build.rs`)
-- Reads `package.metadata.repostats.api_version` from Cargo.toml
+- Reads `package.metadata.plugin_api_version` from Cargo.toml
 - Generates `version.rs` with `BASE_API_VERSION` constant
 - Triggers rebuild when Cargo.toml changes
 - Implements comprehensive version generation including command name and CLI interface integration
