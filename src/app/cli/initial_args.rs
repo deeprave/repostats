@@ -9,7 +9,7 @@ use clap::{Parser, ArgAction};
 use std::path::PathBuf;
 
 /// Minimal clap parser for configuration discovery only
-/// 
+///
 /// This parser uses clap's derive API but with settings that allow
 /// it to ignore unknown arguments gracefully. Only configuration-related
 /// arguments are captured here.
@@ -22,7 +22,7 @@ pub struct InitialArgs {
     /// Configuration file path
     #[arg(long = "config-file", value_name = "FILE")]
     pub config_file: Option<PathBuf>,
-    
+
     /// Plugin directory override
     #[arg(long = "plugin-dir", value_name = "DIR")]
     pub plugin_dir: Option<String>,
@@ -30,31 +30,31 @@ pub struct InitialArgs {
     /// Plugin exclusion list
     #[arg(long = "plugin-exclude", value_name = "LIST")]
     pub plugin_exclude: Option<String>,
-    
+
     /// Verbose output (can be used multiple times for more verbosity)
     #[arg(short = 'v', long = "verbose", action = ArgAction::Count)]
     pub verbose: u8,
-    
+
     /// Quiet mode (can be used multiple times for less verbosity)
     #[arg(short = 'q', long = "quiet", action = ArgAction::Count)]
     pub quiet: u8,
-    
+
     /// Force colored output (overrides TTY detection and NO_COLOR)
     #[arg(long = "color", action = ArgAction::SetTrue)]
     pub color: bool,
-    
+
     /// Disable colored output (overrides configuration and NO_COLOR)
     #[arg(long = "no-color", action = ArgAction::SetTrue)]
     pub no_color: bool,
-    
-    /// Log output format (text, json)
-    #[arg(long = "log-format", value_name = "FORMAT")]
+
+    /// Log output format
+    #[arg(long = "log-format", value_name = "FORMAT", value_parser = ["text", "json"])]
     pub log_format: Option<String>,
-    
-    /// Log level (trace, debug, info, warn, error)
-    #[arg(long = "log-level", value_name = "LEVEL")]
+
+    /// Log level
+    #[arg(long = "log-level", value_name = "LEVEL", value_parser = ["trace", "debug", "info", "warn", "error", "off"])]
     pub log_level: Option<String>,
-    
+
     /// Log file path (use 'none' to disable file logging)
     #[arg(long = "log-file", value_name = "FILE")]
     pub log_file: Option<String>,
@@ -68,7 +68,7 @@ impl InitialArgs {
     }
 
     /// Parse minimal arguments from command line using clap with proper error handling
-    /// 
+    ///
     /// This builds a clap parser that only includes configuration-related arguments
     /// and uses clap's proper parsing with error handling for unknown arguments.
     pub fn parse_from_env() -> Self {
@@ -76,7 +76,7 @@ impl InitialArgs {
         let args: Vec<String> = env::args().collect();
         Self::parse_from_args(&args)
     }
-    
+
     /// Parse minimal arguments from a provided argument list using clap's try_parse_from
     pub fn parse_from_args(args: &[String]) -> Self {
         let cmd = clap::Command::new("repostats")  // Use hardcoded name to avoid lifetime issues
@@ -115,24 +115,26 @@ impl InitialArgs {
             .arg(clap::Arg::new("log-format")
                 .long("log-format")
                 .value_name("FORMAT")
+                .value_parser(["text", "json"])
                 .help("Log output format (text, json)"))
             .arg(clap::Arg::new("log-level")
                 .long("log-level")
                 .value_name("LEVEL")
-                .help("Log level (trace, debug, info, warn, error)"))
+                .value_parser(["trace", "debug", "info", "warn", "error", "off"])
+                .help("Log level (trace, debug, info, warn, error, off)"))
             .arg(clap::Arg::new("log-file")
                 .long("log-file")
                 .value_name("FILE")
                 .help("Log file path (use 'none' to disable file logging)"))
             .allow_external_subcommands(true)
             .ignore_errors(true);
-        
+
         match cmd.try_get_matches_from(args) {
             Ok(matches) => Self::from_matches(&matches),
             Err(_) => Self::create_minimal_fallback(),
         }
     }
-    
+
     /// Create InitialArgs from clap ArgMatches
     fn from_matches(matches: &clap::ArgMatches) -> Self {
         Self {
@@ -149,7 +151,7 @@ impl InitialArgs {
             log_file: matches.get_one::<String>("log-file").cloned(),
         }
     }
-    
+
     /// Create a minimal fallback when initial parsing fails
     fn create_minimal_fallback() -> Self {
         Self {
@@ -165,13 +167,13 @@ impl InitialArgs {
             log_file: None,
         }
     }
-    
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_config_file() {
         let args = vec![
@@ -180,11 +182,11 @@ mod tests {
             "custom.toml".to_string(),
             "commits".to_string(),  // Unknown subcommand, but should be ignored
         ];
-        
+
         let initial = InitialArgs::parse_from_args(&args);
         assert_eq!(initial.config_file, Some(PathBuf::from("custom.toml")));
     }
-    
+
     #[test]
     fn test_parse_plugin_dir() {
         let args = vec![
@@ -195,12 +197,12 @@ mod tests {
             "unwanted".to_string(),
             "output".to_string(),  // Unknown subcommand, should be ignored
         ];
-        
+
         let initial = InitialArgs::parse_from_args(&args);
         assert_eq!(initial.plugin_dir, Some("/custom/plugins".to_string()));
         assert_eq!(initial.plugin_exclude, Some("unwanted".to_string()));
     }
-    
+
     #[test]
     fn test_mixed_known_unknown_args() {
         let args = vec![
@@ -209,15 +211,15 @@ mod tests {
             "test.toml".to_string(),
             "--verbose".to_string(),     // Unknown to initial parser
             "commits".to_string(),       // Unknown subcommand
-            "--since".to_string(),       // Unknown to initial parser  
+            "--since".to_string(),       // Unknown to initial parser
             "1 week".to_string(),        // Unknown argument
         ];
-        
+
         let initial = InitialArgs::parse_from_args(&args);
         assert_eq!(initial.config_file, Some(PathBuf::from("test.toml")));
     }
-    
-    
+
+
     #[test]
     fn test_equals_syntax() {
         let args = vec![
@@ -226,12 +228,12 @@ mod tests {
             "--plugin-dir=/plugins".to_string(),
             "commits".to_string(),
         ];
-        
+
         let initial = InitialArgs::parse_from_args(&args);
         assert_eq!(initial.config_file, Some(PathBuf::from("custom.toml")));
         assert_eq!(initial.plugin_dir, Some("/plugins".to_string()));
     }
-    
+
     #[test]
     fn test_fallback_on_parse_failure() {
         let args = vec![
@@ -239,31 +241,31 @@ mod tests {
             "--config-file".to_string(),
             // Missing value for config-file
         ];
-        
+
         // Should not panic, should return fallback
         let initial = InitialArgs::parse_from_args(&args);
         assert_eq!(initial.config_file, None);
     }
-    
+
     #[test]
     fn test_color_flags() {
         let args = vec![
             "repostats".to_string(),
             "--color".to_string(),
         ];
-        
+
         let initial = InitialArgs::parse_from_args(&args);
         assert!(initial.color);
         assert!(!initial.no_color);
-        
+
         let args = vec![
             "repostats".to_string(),
             "--no-color".to_string(),
         ];
-        
+
         let initial = InitialArgs::parse_from_args(&args);
         assert!(!initial.color);
         assert!(initial.no_color);
     }
-    
+
 }

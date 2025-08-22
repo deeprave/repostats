@@ -82,8 +82,9 @@ impl FernStyleLogger {
         Ok(())
     }
 
-    fn format_console_message(&self, record: &Record, config: &LogConfig) -> String {
+    fn format_message(&self, record: &Record, config: &LogConfig, is_console: bool) -> String {
         if config.format_json {
+            // JSON format is the same for both console and file
             format!(
                 r#"{{"timestamp":"{}","level":"{}","target":"{}","message":"{}"}}"#,
                 chrono::Local::now().to_rfc3339(),
@@ -91,43 +92,37 @@ impl FernStyleLogger {
                 record.target(),
                 record.args()
             )
-        } else if config.color_enabled {
-            // Use fern-style colours
-            let colors = fern::colors::ColoredLevelConfig::new()
-                .info(fern::colors::Color::Green)
-                .warn(fern::colors::Color::Yellow)
-                .error(fern::colors::Color::Red)
-                .debug(fern::colors::Color::Blue)
-                .trace(fern::colors::Color::Magenta);
+        } else if is_console {
+            // Console-specific formatting with optional colors
+            let timestamp = chrono::Local::now().format("%H:%M:%S");
 
-            format!(
-                "{}[{}][{}] {}",
-                chrono::Local::now().format("%H:%M:%S"),
-                record.target(),
-                colors.color(record.level()),
-                record.args()
-            )
-        } else {
-            format!(
-                "{}[{}][{}] {}",
-                chrono::Local::now().format("%H:%M:%S"),
-                record.target(),
-                record.level(),
-                record.args()
-            )
-        }
-    }
+            if config.color_enabled {
+                // Use fern-style colours
+                let colors = fern::colors::ColoredLevelConfig::new()
+                    .info(fern::colors::Color::Green)
+                    .warn(fern::colors::Color::Yellow)
+                    .error(fern::colors::Color::Red)
+                    .debug(fern::colors::Color::Blue)
+                    .trace(fern::colors::Color::Magenta);
 
-    fn format_file_message(&self, record: &Record, config: &LogConfig) -> String {
-        if config.format_json {
-            format!(
-                r#"{{"timestamp":"{}","level":"{}","target":"{}","message":"{}"}}"#,
-                chrono::Local::now().to_rfc3339(),
-                record.level(),
-                record.target(),
-                record.args()
-            )
+                format!(
+                    "{}[{}][{}] {}",
+                    timestamp,
+                    record.target(),
+                    colors.color(record.level()),
+                    record.args()
+                )
+            } else {
+                format!(
+                    "{}[{}][{}] {}",
+                    timestamp,
+                    record.target(),
+                    record.level(),
+                    record.args()
+                )
+            }
         } else {
+            // File-specific formatting with full timestamp
             format!(
                 "{}[{}][{}] {}",
                 chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
@@ -153,16 +148,20 @@ impl Log for FernStyleLogger {
         let config = self.config.lock().unwrap();
 
         // Console output
-        let console_message = self.format_console_message(record, &config);
+        let console_message = self.format_message(record, &config, true);
         println!("{}", console_message);
 
         // File output (only if the file_path is set, and file_writer exists)
         if config.file_path.is_some() {
             if let Ok(mut file_opt) = self.file_writer.lock() {
                 if let Some(ref mut file) = file_opt.as_mut() {
-                    let file_message = self.format_file_message(record, &config);
-                    let _ = writeln!(file, "{}", file_message);
-                    let _ = file.flush();
+                    let file_message = self.format_message(record, &config, false);
+                    if let Err(e) = writeln!(file, "{}", file_message) {
+                        eprintln!("Failed to write to log file: {}", e);
+                    }
+                    if let Err(e) = file.flush() {
+                        eprintln!("Failed to flush log file: {}", e);
+                    }
                 }
             }
         }

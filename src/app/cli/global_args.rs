@@ -47,16 +47,16 @@ pub struct Args {
     #[arg(long = "no-cache")]
     pub no_cache: bool,
 
-    /// Log level (trace, debug, info, warn, error)
-    #[arg(long = "log-level", value_name = "LEVEL")]
+    /// Log level
+    #[arg(long = "log-level", value_name = "LEVEL", value_parser = ["trace", "debug", "info", "warn", "error", "off"])]
     pub log_level: Option<String>,
 
     /// Log file path (use 'none' to disable file logging)
-    #[arg(long = "log-file", value_name = "FILE")]
+    #[arg(long = "log-file", value_name = "FILE", help = "Log file path (use 'none' to disable file logging)")]
     pub log_file: Option<String>,
 
-    /// Log output format (text, json)
-    #[arg(long = "log-format", value_name = "FORMAT")]
+    /// Log output format
+    #[arg(long = "log-format", value_name = "FORMAT", value_parser = ["text", "json"])]
     pub log_format: Option<String>,
 
 }
@@ -138,7 +138,8 @@ impl Args {
             .arg(clap::Arg::new("log-level")
                 .long("log-level")
                 .value_name("LEVEL")
-                .help("Log level (trace, debug, info, warn, error)"))
+                .value_parser(["trace", "debug", "info", "warn", "error", "off"])
+                .help("Log level (trace, debug, info, warn, error, off)"))
             .arg(clap::Arg::new("log-file")
                 .long("log-file")
                 .value_name("FILE")
@@ -146,6 +147,7 @@ impl Args {
             .arg(clap::Arg::new("log-format")
                 .long("log-format")
                 .value_name("FORMAT")
+                .value_parser(["text", "json"])
                 .help("Log output format (text, json)"));
 
         match cmd.try_get_matches_from(args) {
