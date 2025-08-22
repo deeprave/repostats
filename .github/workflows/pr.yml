@@ -1,0 +1,82 @@
+name: Pull Request Validation
+
+# Step 1.1: Basic PR workflow skeleton (TDD Red Phase)
+# This workflow validates PRs and can be manually triggered on any branch
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to run the workflow against'
+        required: false
+        default: 'main'
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Step 1.3: Cross-platform validation with matrix strategy
+  validate:
+    name: Validate (${{ matrix.os }}, ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # Don't cancel other matrix jobs if one fails
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, beta]
+        # Optional: exclude problematic combinations
+        exclude:
+          # Beta on Windows can be flaky, exclude for now
+          - os: windows-latest
+            rust: beta
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy, rust-src
+
+      - name: Configure Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Cache key includes OS, Rust version, and dependencies
+          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Save cache even on failure to speed up subsequent runs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # TODO: Step 1.4 - Add quality checks
+      # TODO: Step 1.5 - Add code coverage
+
+      - name: Verify toolchain setup
+        run: |
+          echo "Rust toolchain setup completed for ${{ matrix.os }} with ${{ matrix.rust }}"
+          rustc --version
+          cargo --version
+          rustfmt --version
+          cargo clippy --version
+
+      - name: Basic build validation
+        run: |
+          echo "Running basic build validation across matrix..."
+          # Check main targets but exclude benchmarks that may have outdated dependencies
+          cargo check --bins --tests --lib --verbose
+        env:
+          # Allow warnings in basic validation - detailed linting will be in step 1.4
+          RUSTFLAGS: "-A warnings"
