@@ -75,8 +75,8 @@ jobs:
       - name: Basic build validation
         run: |
           echo "Running basic build validation across matrix..."
-          # Check main targets but exclude benchmarks that may have outdated dependencies
-          cargo check --bins --tests --lib --verbose
+          # Check main targets (binary-only crate, no library)
+          cargo check --bins --tests --verbose
         env:
           # Allow warnings in basic validation - detailed linting will be in step 1.4
           RUSTFLAGS: "-A warnings"
