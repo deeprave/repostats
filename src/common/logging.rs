@@ -1,150 +1,216 @@
-//! Logging configuration and setup
-//! 
-//! This module handles the setup of tracing-based logging with support for
-//! configurable levels, formats (text/json), file output, and color control.
+use log::{Log, Metadata, Record, LevelFilter};
+use std::sync::{Arc, Mutex};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use chrono;
 
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::Level;
-use tracing_subscriber::{fmt, EnvFilter};
+#[derive(Clone)]
+struct LogConfig {
+    level: LevelFilter,
+    format_json: bool,
+    file_path: Option<String>,
+    color_enabled: bool,
+}
 
-static LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
+struct FernStyleLogger {
+    config: Arc<Mutex<LogConfig>>,
+    file_writer: Arc<Mutex<Option<File>>>,
+}
 
-/// Initialize logging from individual configuration values
-/// 
-/// This is called during startup to enable logging throughout the application.
-/// Exits the process on error.
+impl FernStyleLogger {
+    fn new() -> Self {
+        Self {
+            config: Arc::new(Mutex::new(LogConfig {
+                level: LevelFilter::Info,
+                format_json: false,
+                file_path: None,
+                color_enabled: true,
+            })),
+            file_writer: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn reconfigure(&self,
+                   log_level: Option<&str>,
+                   log_format: Option<&str>,
+                   log_file: Option<&str>,
+                   color_enabled: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let level = match log_level {
+            Some(level_str) => match level_str.to_lowercase().as_str() {
+                "trace" => LevelFilter::Trace,
+                "debug" => LevelFilter::Debug,
+                "info" => LevelFilter::Info,
+                "warn" => LevelFilter::Warn,
+                "error" => LevelFilter::Error,
+                "off" => LevelFilter::Off,
+                _ => LevelFilter::Info,
+            },
+            None => LevelFilter::Info,
+        };
+
+        let format_json = log_format == Some("json");
+        let file_path = log_file.map(|s| s.to_string());
+
+        // Handle file writer changes
+        match &file_path {
+            Some(path) => {
+                // Open/reopen file
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?;
+                *self.file_writer.lock().unwrap() = Some(file);
+            },
+            None => {
+                // Close file if no path specified
+                *self.file_writer.lock().unwrap() = None;
+            }
+        }
+
+        // Update config with the actual file_path value
+        *self.config.lock().unwrap() = LogConfig {
+            level,
+            format_json,
+            file_path, // Now this correctly reflects the current file path
+            color_enabled,
+        };
+
+        // Update global max level
+        log::set_max_level(level);
+
+        Ok(())
+    }
+
+    fn format_console_message(&self, record: &Record, config: &LogConfig) -> String {
+        if config.format_json {
+            format!(
+                r#"{{"timestamp":"{}","level":"{}","target":"{}","message":"{}"}}"#,
+                chrono::Local::now().to_rfc3339(),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        } else if config.color_enabled {
+            // Use fern-style colours
+            let colors = fern::colors::ColoredLevelConfig::new()
+                .info(fern::colors::Color::Green)
+                .warn(fern::colors::Color::Yellow)
+                .error(fern::colors::Color::Red)
+                .debug(fern::colors::Color::Blue)
+                .trace(fern::colors::Color::Magenta);
+
+            format!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S"),
+                record.target(),
+                colors.color(record.level()),
+                record.args()
+            )
+        } else {
+            format!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S"),
+                record.target(),
+                record.level(),
+                record.args()
+            )
+        }
+    }
+
+    fn format_file_message(&self, record: &Record, config: &LogConfig) -> String {
+        if config.format_json {
+            format!(
+                r#"{{"timestamp":"{}","level":"{}","target":"{}","message":"{}"}}"#,
+                chrono::Local::now().to_rfc3339(),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        } else {
+            format!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.target(),
+                record.level(),
+                record.args()
+            )
+        }
+    }
+}
+
+impl Log for FernStyleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        let config = self.config.lock().unwrap();
+        metadata.level() <= config.level
+    }
+
+    fn log(&self, record: &Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+
+        let config = self.config.lock().unwrap();
+
+        // Console output
+        let console_message = self.format_console_message(record, &config);
+        println!("{}", console_message);
+
+        // File output (only if the file_path is set, and file_writer exists)
+        if config.file_path.is_some() {
+            if let Ok(mut file_opt) = self.file_writer.lock() {
+                if let Some(ref mut file) = file_opt.as_mut() {
+                    let file_message = self.format_file_message(record, &config);
+                    let _ = writeln!(file, "{}", file_message);
+                    let _ = file.flush();
+                }
+            }
+        }
+    }
+
+    fn flush(&self) {
+        if let Ok(mut file_opt) = self.file_writer.lock() {
+            if let Some(ref mut file) = file_opt.as_mut() {
+                let _ = file.flush();
+            }
+        }
+    }
+}
+
+
+// Global static logger
+static LOGGER: std::sync::OnceLock<FernStyleLogger> = std::sync::OnceLock::new();
+
+
 pub fn init_logging(
     log_level: Option<&str>,
     log_format: Option<&str>,
     log_file: Option<&str>,
     color_enabled: bool,
-) {
-    if let Err(e) = init_early_logging(log_level, log_format, log_file, color_enabled) {
-        eprintln!("Failed to initialise logging: {}", e);
-        std::process::exit(1);
-    }
-}
-
-pub fn configure_logging(
-    log_level: Option<&str>,
-    log_format: Option<&str>,
-    log_file: Option<&Path>,
-    color_enabled: bool,
-) {
-    if let Err(e) = reconfigure_logging(log_level, log_format, log_file, color_enabled) {
-        eprintln!("Failed to reconfigure logging: {}", e);
-    }
-}
-
-/// Set logging level based on verbosity value
-/// 
-/// Maps verbosity levels to tracing levels:
-///  <= -2 = error
-///     -1 = warn
-///      0 = info (default)
-///      1 = debug
-///  >=  2 = trace
-pub fn set_logging_level(verbosity: i8) {
-    let level_str = match verbosity {
-        v if v <= -2 => "error",
-        -1 => "warn",
-        0 => "info",
-        1 => "debug",
-        _ => "trace",
-    };
-    
-    if LOGGING_INITIALIZED.load(Ordering::SeqCst) {
-        tracing::info!("Logging level adjusted to: {}", level_str);
-        // Note: tracing doesn't support runtime reconfiguration
-        // This would need to be handled at initialization
-    }
-}
-
-/// Initialize logging with early defaults
-/// 
-/// This is called immediately after InitialArgs parsing to enable
-/// logging throughout the rest of the startup process.
-fn init_early_logging(
-    initial_log_level: Option<&str>,
-    initial_log_format: Option<&str>,
-    initial_log_file: Option<&str>,
-    color_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let level = parse_log_level(initial_log_level).unwrap_or(Level::INFO);
-    let format = initial_log_format.unwrap_or("text");
-    
-    setup_tracing(level, format, initial_log_file, color_enabled)
-}
 
-/// Reconfigure logging after final args are parsed
-/// 
-/// Since tracing doesn't support reconfiguration, this just logs
-/// a message about what the final configuration would be.
-fn reconfigure_logging(
-    log_level: Option<&str>,
-    log_format: Option<&str>, 
-    log_file: Option<&Path>,
-    _color_enabled: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if LOGGING_INITIALIZED.load(Ordering::SeqCst) {
-        tracing::info!(
-            "Final logging configuration: level={:?}, format={:?}, file={:?}",
-            log_level.unwrap_or("info"),
-            log_format.unwrap_or("text"),
-            log_file.map(|p| p.to_string_lossy()).unwrap_or("none".into())
-        );
-        tracing::warn!("Tracing reconfiguration not supported - using initial settings");
-    }
+    let logger = LOGGER.get_or_init(|| FernStyleLogger::new());
+
+    // Set as the global logger (only works once)
+    log::set_logger(logger)?;
+
+    // Configure it
+    logger.reconfigure(log_level, log_format, log_file, color_enabled)?;
+
     Ok(())
 }
 
-/// Parse log level string to tracing Level
-fn parse_log_level(level_str: Option<&str>) -> Option<Level> {
-    match level_str?.to_lowercase().as_str() {
-        "trace" => Some(Level::TRACE),
-        "debug" => Some(Level::DEBUG),
-        "info" => Some(Level::INFO),
-        "warn" | "warning" => Some(Level::WARN),
-        "error" => Some(Level::ERROR),
-        _ => None,
-    }
-}
-
-/// Setup tracing subscriber with specified configuration
-fn setup_tracing(
-    level: Level,
-    format: &str,
+pub fn reconfigure_logging(
+    log_level: Option<&str>,
+    log_format: Option<&str>,
     log_file: Option<&str>,
     color_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Only initialize if not already done
-    if LOGGING_INITIALIZED.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-        return Ok(()); // Already initialized
-    }
-    
-    let filter = EnvFilter::new(format!("{}", level));
-    
-    // Use the FmtSubscriber builder for simpler configuration
-    let subscriber = fmt::Subscriber::builder()
-        .with_env_filter(filter)
-        .with_target(false)
-        .with_ansi(color_enabled);
-    
-    match format.to_lowercase().as_str() {
-        "json" => {
-            subscriber.json().init();
-        },
-        _ => {
-            // Default to "text" format
-            subscriber.init();
-        }
-    }
+    if let Some(logger) = LOGGER.get() {
+        logger.reconfigure(log_level, log_format, log_file, color_enabled)?;
 
-    // TODO: Add file output support when log_file is Some
-    if let Some(_file_path) = log_file {
-        tracing::warn!("File logging not yet implemented, using stderr only");
+        Ok(())
+    } else {
+        Err("Logger is not initialised. Call init_logging first.".into())
     }
-    
-    Ok(())
 }

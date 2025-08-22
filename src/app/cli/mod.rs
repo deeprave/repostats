@@ -13,8 +13,7 @@ pub fn initial_args() -> (
         Option<PathBuf>,
         Option<String>,
         Option<String>,
-        i8,
-        bool, 
+        bool,
         bool,
         Option<String>,
         Option<String>,
@@ -25,7 +24,6 @@ pub fn initial_args() -> (
         args.config_file,
         args.plugin_dir,
         args.plugin_exclude,
-        (args.verbose as i8) - (args.quiet as i8),
         args.color,
         args.no_color,
         args.log_format,
@@ -33,6 +31,3 @@ pub fn initial_args() -> (
         args.log_file,
     )
 }
-
-
-// Re-exports will be added via api module when needed
