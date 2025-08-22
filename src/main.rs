@@ -1,3 +1,8 @@
+mod app;
+mod common;
+
+include!(concat!(env!("OUT_DIR"), "/version.rs"));
+
 fn main() {
-    println!("Hello, world!");
+    app::startup::startup();
 }

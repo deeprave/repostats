@@ -1,6 +1,27 @@
 [package]
 name = "repostats"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+build = "build.rs"
+
+[package.metadata]
+plugin_api_version = 20250727
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
+gix = "0.73"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.9"
+colored = "3.0"
+prettytable-rs = "0.10"
+dirs = "5.0"
+atty = "0.2"
+heck = "0.5"
+unicode-segmentation = "1.12.0"
+
+[build-dependencies]
+chrono = "0.4"
+toml = "0.9"

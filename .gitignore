@@ -60,13 +60,14 @@ benchmark_results/
 # Local configuration
 .env
 .env.local
+.envrc
 
 # Documentation build
 book/
 target/doc/
 .claude/
 .amazonq/
-
+.todo/
 .tasks/
 AmazonQ.md
 AmazonQ.json
