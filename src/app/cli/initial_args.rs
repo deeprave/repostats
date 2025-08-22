@@ -57,7 +57,7 @@ pub struct InitialArgs {
 
     /// Log file path (use 'none' to disable file logging)
     #[arg(long = "log-file", value_name = "FILE")]
-    pub log_file: Option<String>,
+    pub log_file: Option<PathBuf>,
 }
 
 impl InitialArgs {
@@ -148,7 +148,9 @@ impl InitialArgs {
             no_color: matches.get_flag("no-color"),
             log_format: matches.get_one::<String>("log-format").cloned(),
             log_level: matches.get_one::<String>("log-level").cloned(),
-            log_file: matches.get_one::<String>("log-file").cloned(),
+            log_file: matches.get_one::<String>("log-file")
+                .filter(|s| *s != "none")
+                .map(|s| PathBuf::from(s)),
         }
     }
 
