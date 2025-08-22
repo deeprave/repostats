@@ -22,7 +22,8 @@ pub fn startup() {
     let use_color = (color || atty::is(atty::Stream::Stdout)) && !no_color;
 
     // Initialize logging
-    if let Err(e) = init_logging(log_level.as_deref(), log_format.as_deref(), log_file.as_deref(), use_color) {
+    let log_file_str = log_file.as_ref().map(|p| p.to_string_lossy().to_string());
+    if let Err(e) = init_logging(log_level.as_deref(), log_format.as_deref(), log_file_str.as_deref(), use_color) {
         eprintln!("Failed to initialize logging: {e}");
     } else {
         log::trace!("Initial args parsed and logging initialised");
@@ -46,7 +47,7 @@ pub fn startup() {
     let commands = discover_commands(plugin_dir.as_deref(), plugin_exclude.as_deref());
     let log_level = log_level.clone().or(final_args.log_level.clone());
     let log_format = log_format.clone().or(final_args.log_format.clone());
-    let log_file = log_file.clone().or(final_args.log_file.clone());
+    let log_file = log_file_str.clone().or(final_args.log_file.as_ref().map(|p| p.to_string_lossy().to_string()));
     if let Err(e) = reconfigure_logging(log_level.as_deref(), log_format.as_deref(), log_file.as_deref(), use_color) {
         eprintln!("Failed to reconfigure logging: {e}");
     }

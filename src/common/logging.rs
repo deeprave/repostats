@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use chrono;
+use serde_json::json;
 
 #[derive(Clone)]
 struct LogConfig {
@@ -49,7 +50,10 @@ impl FernStyleLogger {
             None => LevelFilter::Info,
         };
 
-        let format_json = log_format == Some("json");
+        let format_json = log_format
+            .as_ref()
+            .map(|s| s.to_lowercase() == "json")
+            .unwrap_or(false);
         let file_path = log_file.map(|s| s.to_string());
 
         // Handle file writer changes
@@ -85,13 +89,13 @@ impl FernStyleLogger {
     fn format_message(&self, record: &Record, config: &LogConfig, is_console: bool) -> String {
         if config.format_json {
             // JSON format is the same for both console and file
-            format!(
-                r#"{{"timestamp":"{}","level":"{}","target":"{}","message":"{}"}}"#,
-                chrono::Local::now().to_rfc3339(),
-                record.level(),
-                record.target(),
-                record.args()
-            )
+            // Use serde_json for proper escaping
+            json!({
+                "timestamp": chrono::Local::now().to_rfc3339(),
+                "level": record.level().to_string(),
+                "target": record.target(),
+                "message": record.args().to_string()
+            }).to_string()
         } else if is_console {
             // Console-specific formatting with optional colors
             let timestamp = chrono::Local::now().format("%H:%M:%S");

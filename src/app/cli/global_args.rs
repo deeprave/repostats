@@ -53,7 +53,7 @@ pub struct Args {
 
     /// Log file path (use 'none' to disable file logging)
     #[arg(long = "log-file", value_name = "FILE", help = "Log file path (use 'none' to disable file logging)")]
-    pub log_file: Option<String>,
+    pub log_file: Option<PathBuf>,
 
     /// Log output format
     #[arg(long = "log-format", value_name = "FORMAT", value_parser = ["text", "json"])]
@@ -234,7 +234,11 @@ impl Args {
             args.log_level = Some(log_level.to_string());
         }
         if let Some(log_file) = config.get("log-file").and_then(|v| v.as_str()) {
-            args.log_file = Some(log_file.to_string());
+            if log_file != "none" {
+                args.log_file = Some(PathBuf::from(log_file));
+            } else {
+                args.log_file = None;
+            }
         }
         if let Some(log_format) = config.get("log-format").and_then(|v| v.as_str()) {
             args.log_format = Some(log_format.to_string());
@@ -274,7 +278,7 @@ impl Args {
             if log_file == "none" {
                 args.log_file = None; // Magic "none" value disables file logging
             } else {
-                args.log_file = Some(log_file.clone());
+                args.log_file = Some(PathBuf::from(log_file));
             }
         }
         if let Some(log_format) = matches.get_one::<String>("log-format") {

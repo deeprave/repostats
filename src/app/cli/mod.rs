@@ -17,7 +17,7 @@ pub fn initial_args() -> (
         bool,
         Option<String>,
         Option<String>,
-        Option<String>) {
+        Option<PathBuf>) {
     let args = InitialArgs::parse_from_env();
     (
         InitialArgs::command_name(),
