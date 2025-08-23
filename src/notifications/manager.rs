@@ -47,12 +47,21 @@ impl AsyncNotificationManager {
 
         let subscriber_info = SubscriberInfo {
             filter,
-            source,
+            source: source.clone(),
             sender,
             statistics: SubscriberStatistics::new(),
         };
 
-        self.subscribers.insert(subscriber_id, subscriber_info);
+        // Warn if overwriting existing subscriber
+        if let Some(existing) = self.subscribers.insert(subscriber_id.clone(), subscriber_info) {
+            log::warn!(
+                "Subscriber '{}' replaced existing subscription (source: {} -> {})",
+                subscriber_id,
+                existing.source,
+                source
+            );
+        }
+
         Ok(receiver)
     }
 
@@ -527,7 +536,7 @@ mod tests {
         ).expect("Should subscribe successfully");
 
         // Subscribe an active subscriber
-        let mut active_receiver = manager.subscribe(
+        let _active_receiver = manager.subscribe(
             "active".to_string(),
             EventFilter::All,
             "test:active".to_string()
@@ -537,7 +546,6 @@ mod tests {
         assert!(manager.check_stale_subscribers().is_empty());
 
         // Simulate high queue size for both subscribers
-        use crate::notifications::event::{Event, SystemEvent, SystemEventType};
 
         let stale_stats = manager.get_subscriber_statistics("stale").unwrap();
         let active_stats = manager.get_subscriber_statistics("active").unwrap();
@@ -1058,7 +1066,6 @@ mod tests {
     #[tokio::test]
     async fn test_integration_subscriber_lifecycle() {
         use crate::notifications::event::{Event, SystemEvent, SystemEventType};
-        use crate::notifications::traits::Subscriber;
 
         let mut manager = AsyncNotificationManager::new();
 
@@ -1232,6 +1239,34 @@ mod tests {
         // Clean up receivers to avoid warnings
         drop(overloaded_receiver);
         drop(error_prone_receiver);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_subscriber_warning() {
+        let mut manager = AsyncNotificationManager::new();
+
+        // Subscribe first time
+        let _receiver1 = manager.subscribe(
+            "duplicate_test".to_string(),
+            EventFilter::ScanOnly,
+            "test:original".to_string()
+        ).expect("Should subscribe successfully");
+
+        assert_eq!(manager.subscriber_count(), 1);
+
+        // Subscribe with same ID but different source - should warn and replace
+        let _receiver2 = manager.subscribe(
+            "duplicate_test".to_string(),
+            EventFilter::All,
+            "test:replacement".to_string()
+        ).expect("Should subscribe successfully");
+
+        // Should still have only 1 subscriber (replaced, not added)
+        assert_eq!(manager.subscriber_count(), 1);
+
+        // Verify the replacement took effect by checking the source would be updated
+        // (We can't directly check the source without exposing internal state)
+        assert!(manager.has_subscriber("duplicate_test"));
     }
 
     #[tokio::test]
