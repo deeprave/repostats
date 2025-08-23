@@ -2,7 +2,8 @@
 //!
 //! See docs/service_registry.md for complete documentation.
 
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
 use crate::notifications::api::AsyncNotificationManager;
 
 /// Global service registry instance
@@ -21,8 +22,9 @@ impl ServiceRegistry {
         }
     }
 
-    pub fn notification_manager(&self) -> std::sync::MutexGuard<'_, AsyncNotificationManager> {
-        self.notification_manager.lock().unwrap()
+    /// Access notification manager from async context
+    pub async fn notification_manager(&self) -> tokio::sync::MutexGuard<'_, AsyncNotificationManager> {
+        self.notification_manager.lock().await
     }
 }
 

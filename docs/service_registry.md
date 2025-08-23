@@ -60,8 +60,8 @@ use repostats::notifications::api::{EventFilter, Event, SystemEvent, SystemEvent
 // Get the global service registry
 let services = services::get_services();
 
-// Access the notification manager (returns MutexGuard)
-let mut manager = services.notification_manager();
+// Access the notification manager (async, returns MutexGuard)
+let mut manager = services.notification_manager().await;
 
 // Use the manager while the guard is in scope
 let receiver = manager.subscribe(
@@ -77,28 +77,28 @@ manager.publish(event).expect("Failed to publish event");
 // Guard automatically releases when it goes out of scope
 ```
 
-### Multi-threaded Access
+### Async Task Access
 
 ```rust
-use std::thread;
+use tokio::task;
 use repostats::core::services;
 
-// Multiple threads can safely access the service registry
-let handles: Vec<_> = (0..10).map(|i| {
-    thread::spawn(move || {
+// Multiple async tasks can safely access the service registry
+let tasks: Vec<_> = (0..10).map(|i| {
+    task::spawn(async move {
         let services = services::get_services();
-        let manager = services.notification_manager();
+        let manager = services.notification_manager().await;
 
-        // Each thread gets its own MutexGuard
+        // Each task gets its own MutexGuard
         // Work with the notification manager
         let count = manager.subscriber_count();
-        println!("Thread {}: {} subscribers", i, count);
+        println!("Task {}: {} subscribers", i, count);
     })
 }).collect();
 
-// Wait for all threads
-for handle in handles {
-    handle.join().unwrap();
+// Wait for all tasks
+for task in tasks {
+    task.await.unwrap();
 }
 ```
 
@@ -244,10 +244,10 @@ Services can be tested independently of the registry:
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_service_creation() {
+    #[tokio::test]
+    async fn test_service_creation() {
         let registry = ServiceRegistry::new();
-        let manager = registry.notification_manager();
+        let manager = registry.notification_manager().await;
         assert_eq!(manager.subscriber_count(), 0);
     }
 }
@@ -258,14 +258,14 @@ mod tests {
 The global registry can be used in integration tests:
 
 ```rust
-#[test]
-fn test_global_access() {
+#[tokio::test]
+async fn test_global_access() {
     let services = get_services();
-    let manager1 = services.notification_manager();
+    let manager1 = services.notification_manager().await;
     let count1 = manager1.subscriber_count();
     drop(manager1);
 
-    let manager2 = services.notification_manager();
+    let manager2 = services.notification_manager().await;
     let count2 = manager2.subscriber_count();
 
     // Same underlying service
@@ -275,22 +275,22 @@ fn test_global_access() {
 
 ### Concurrent Testing
 
-Test thread safety:
+Test async task safety:
 
 ```rust
-#[test]
-fn test_concurrent_access() {
-    let handles: Vec<_> = (0..10).map(|_| {
-        std::thread::spawn(|| {
+#[tokio::test]
+async fn test_concurrent_access() {
+    let tasks: Vec<_> = (0..10).map(|_| {
+        tokio::task::spawn(async {
             let services = get_services();
-            let _manager = services.notification_manager();
+            let _manager = services.notification_manager().await;
             // Simulate work
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         })
     }).collect();
 
-    for handle in handles {
-        handle.join().unwrap();
+    for task in tasks {
+        task.await.unwrap();
     }
     // Test passes if no deadlocks or panics occur
 }
