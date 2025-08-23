@@ -37,7 +37,13 @@ impl SubscriberStatistics {
     }
 
     pub fn decrement_queue_size(&self) {
-        self.queue_size.fetch_sub(1, Ordering::Relaxed);
+        self.queue_size.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            if current == 0 {
+                Some(0)
+            } else {
+                Some(current - 1)
+            }
+        }).ok();
     }
 
     pub fn messages_processed(&self) -> usize {

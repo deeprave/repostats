@@ -138,6 +138,8 @@ The notification manager includes built-in auto-management capabilities:
 - Events are delivered via unbounded channels for high throughput
 - Interior mutability allows shared access to the notification manager
 - Multiple threads can safely access the service registry concurrently
+- Queue size operations use atomic fetch_update to prevent underflow
+- Comprehensive concurrent testing validates thread safety under load
 
 ## Error Handling
 
@@ -166,6 +168,8 @@ The system uses `NotificationError` for comprehensive error reporting:
 4. **Resource Cleanup**: Subscribers automatically cleaned up when receivers drop
 5. **Error Handling**: Check for `PublishFailed` errors to detect problematic subscribers
 6. **Health Monitoring**: Periodically check subscriber statistics for system health
+7. **Duplicate Subscriptions**: System warns when overwriting existing subscribers with same ID
+8. **Concurrent Safety**: Queue operations are protected against underflow in multi-threaded environments
 
 ## Example: Plugin Integration
 

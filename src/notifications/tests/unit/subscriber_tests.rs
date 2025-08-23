@@ -139,4 +139,70 @@ mod tests {
         let last_error_log_time = stats.last_error_log_time();
         assert!(last_error_log_time.is_some());
     }
+
+    #[test]
+    fn test_concurrent_statistics_updates() {
+        use std::thread;
+        use std::sync::Arc;
+
+        let stats = Arc::new(SubscriberStatistics::new());
+        let num_threads = 10;
+        let operations_per_thread = 100;
+
+        // Test concurrent queue size operations
+        let handles: Vec<_> = (0..num_threads).map(|_| {
+            let stats_clone = Arc::clone(&stats);
+            thread::spawn(move || {
+                for _ in 0..operations_per_thread {
+                    stats_clone.increment_queue_size();
+                    stats_clone.decrement_queue_size();
+                    stats_clone.record_message_processed();
+                    stats_clone.record_error();
+                }
+            })
+        }).collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify final state - queue size should be 0 (equal increments/decrements)
+        assert_eq!(stats.queue_size(), 0);
+
+        // Messages processed should be num_threads * operations_per_thread
+        assert_eq!(stats.messages_processed(), num_threads * operations_per_thread);
+
+        // Error count should be num_threads * operations_per_thread
+        assert_eq!(stats.error_count(), num_threads * operations_per_thread);
+
+        // Timestamps should be set
+        assert!(stats.last_message_time().is_some());
+        assert!(stats.last_error_time().is_some());
+    }
+
+    #[test]
+    fn test_queue_size_underflow_protection() {
+        let stats = SubscriberStatistics::new();
+
+        // Start with queue size 0
+        assert_eq!(stats.queue_size(), 0);
+
+        // Try to decrement - should not underflow
+        stats.decrement_queue_size();
+        assert_eq!(stats.queue_size(), 0);
+
+        // Multiple decrements should still stay at 0
+        for _ in 0..5 {
+            stats.decrement_queue_size();
+        }
+        assert_eq!(stats.queue_size(), 0);
+
+        // Normal operation should still work
+        stats.increment_queue_size();
+        assert_eq!(stats.queue_size(), 1);
+
+        stats.decrement_queue_size();
+        assert_eq!(stats.queue_size(), 0);
+    }
 }

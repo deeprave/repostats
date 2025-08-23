@@ -1,7 +1,6 @@
 //! Tests for the core services module
 
-use super::services::{get_services, ServiceRegistry, SERVICES};
-use crate::notifications::api::{Event, EventFilter, ScanEvent, ScanEventType};
+use super::services::{get_services, SERVICES};
 
 #[tokio::test]
 async fn test_service_registry_initialization() {
@@ -35,7 +34,7 @@ fn test_concurrent_service_access() {
     let handles: Vec<_> = (0..10).map(|i| {
         std::thread::spawn(move || {
             let services = get_services();
-            let notification_manager = services.notification_manager();
+            let _notification_manager = services.notification_manager();
 
             // Each thread gets the notification manager
             // Return the thread ID to verify all completed
