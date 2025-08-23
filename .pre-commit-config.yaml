@@ -7,6 +7,7 @@ repos:
         - id: trailing-whitespace
         - id: check-case-conflict
         - id: check-symlinks
+        - id: end-of-file-fixer
         - id: check-yaml
         - id: check-toml
         - id: check-json
@@ -17,3 +18,34 @@ repos:
         - id: no-commit-to-branch
           args: [--branch, main]
 
+  -   repo: local
+      hooks:
+        - id: cargo-fmt
+          name: cargo fmt
+          entry: cargo fmt
+          language: system
+          types: [ rust ]
+          pass_filenames: false
+
+#        - id: cargo-clippy
+#          name: cargo clippy
+#          entry: cargo clippy
+#          language: system
+#          types: [ rust ]
+#          pass_filenames: false
+#          args: [ "--", "-D", "warnings" ]
+
+        - id: cargo-check
+          name: cargo check
+          entry: cargo check
+          language: system
+          types: [ rust ]
+          pass_filenames: false
+
+        - id: cargo-test
+          name: cargo test
+          entry: cargo test
+          language: system
+          types: [ rust ]
+          pass_filenames: false
+          args: ["--workspace", "--all-targets"]

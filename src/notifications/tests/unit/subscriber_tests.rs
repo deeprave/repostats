@@ -1,9 +1,9 @@
 //! Unit tests for Subscriber trait and SubscriberStatistics
 
-use crate::notifications::traits::{Subscriber, SubscriberStatistics};
 use crate::notifications::event::{Event, SystemEvent, SystemEventType};
-use std::time::Instant;
+use crate::notifications::traits::{Subscriber, SubscriberStatistics};
 use async_trait::async_trait;
+use std::time::Instant;
 
 /// Mock subscriber for testing
 struct MockSubscriber {
@@ -31,10 +31,11 @@ impl Subscriber for MockSubscriber {
 
         // Simulate some processing
         match event {
-            Event::System(SystemEvent { event_type: SystemEventType::Shutdown, .. }) => {
-                Err("Simulated error on shutdown".into())
-            }
-            _ => Ok(())
+            Event::System(SystemEvent {
+                event_type: SystemEventType::Shutdown,
+                ..
+            }) => Err("Simulated error on shutdown".into()),
+            _ => Ok(()),
         }
     }
 
@@ -57,10 +58,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscriber_trait_definition() {
-        let subscriber = MockSubscriber::new(
-            "test_subscriber".to_string(),
-            "test:unit".to_string(),
-        );
+        let subscriber =
+            MockSubscriber::new("test_subscriber".to_string(), "test:unit".to_string());
 
         // Test subscriber_id
         assert_eq!(subscriber.subscriber_id(), "test_subscriber");
@@ -77,10 +76,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscriber_statistics_tracking() {
-        let subscriber = MockSubscriber::new(
-            "stats_test".to_string(),
-            "test:stats".to_string(),
-        );
+        let subscriber = MockSubscriber::new("stats_test".to_string(), "test:stats".to_string());
 
         let stats = subscriber.get_statistics();
 
@@ -142,25 +138,27 @@ mod tests {
 
     #[test]
     fn test_concurrent_statistics_updates() {
-        use std::thread;
         use std::sync::Arc;
+        use std::thread;
 
         let stats = Arc::new(SubscriberStatistics::new());
         let num_threads = 10;
         let operations_per_thread = 100;
 
         // Test concurrent queue size operations
-        let handles: Vec<_> = (0..num_threads).map(|_| {
-            let stats_clone = Arc::clone(&stats);
-            thread::spawn(move || {
-                for _ in 0..operations_per_thread {
-                    stats_clone.increment_queue_size();
-                    stats_clone.decrement_queue_size();
-                    stats_clone.record_message_processed();
-                    stats_clone.record_error();
-                }
+        let handles: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let stats_clone = Arc::clone(&stats);
+                thread::spawn(move || {
+                    for _ in 0..operations_per_thread {
+                        stats_clone.increment_queue_size();
+                        stats_clone.decrement_queue_size();
+                        stats_clone.record_message_processed();
+                        stats_clone.record_error();
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         // Wait for all threads to complete
         for handle in handles {
@@ -171,7 +169,10 @@ mod tests {
         assert_eq!(stats.queue_size(), 0);
 
         // Messages processed should be num_threads * operations_per_thread
-        assert_eq!(stats.messages_processed(), num_threads * operations_per_thread);
+        assert_eq!(
+            stats.messages_processed(),
+            num_threads * operations_per_thread
+        );
 
         // Error count should be num_threads * operations_per_thread
         assert_eq!(stats.error_count(), num_threads * operations_per_thread);

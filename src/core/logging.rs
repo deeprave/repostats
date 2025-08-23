@@ -1,9 +1,9 @@
-use log::{Log, Metadata, Record, LevelFilter};
-use std::sync::{Arc, Mutex};
+use chrono;
+use log::{LevelFilter, Log, Metadata, Record};
+use serde_json::json;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use chrono;
-use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 struct LogConfig {
@@ -31,11 +31,12 @@ impl FernStyleLogger {
         }
     }
 
-    fn reconfigure(&self,
-                   log_level: Option<&str>,
-                   log_format: Option<&str>,
-                   log_file: Option<&str>,
-                   color_enabled: bool,
+    fn reconfigure(
+        &self,
+        log_level: Option<&str>,
+        log_format: Option<&str>,
+        log_file: Option<&str>,
+        color_enabled: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let level = match log_level {
             Some(level_str) => match level_str.to_lowercase().as_str() {
@@ -60,12 +61,9 @@ impl FernStyleLogger {
         match &file_path {
             Some(path) => {
                 // Open/reopen file
-                let file = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)?;
+                let file = OpenOptions::new().create(true).append(true).open(path)?;
                 *self.file_writer.lock().unwrap() = Some(file);
-            },
+            }
             None => {
                 // Close file if no path specified
                 *self.file_writer.lock().unwrap() = None;
@@ -95,7 +93,8 @@ impl FernStyleLogger {
                 "level": record.level().to_string(),
                 "target": record.target(),
                 "message": record.args().to_string()
-            }).to_string()
+            })
+            .to_string()
         } else if is_console {
             // Console-specific formatting with optional colors
             let timestamp = chrono::Local::now().format("%H:%M:%S");
@@ -153,18 +152,18 @@ impl Log for FernStyleLogger {
 
         // Console output
         let console_message = self.format_message(record, &config, true);
-        println!("{}", console_message);
+        println!("{console_message}");
 
         // File output (only if the file_path is set, and file_writer exists)
         if config.file_path.is_some() {
             if let Ok(mut file_opt) = self.file_writer.lock() {
                 if let Some(ref mut file) = file_opt.as_mut() {
                     let file_message = self.format_message(record, &config, false);
-                    if let Err(e) = writeln!(file, "{}", file_message) {
-                        eprintln!("Failed to write to log file: {}", e);
+                    if let Err(e) = writeln!(file, "{file_message}") {
+                        eprintln!("Failed to write to log file: {e}");
                     }
                     if let Err(e) = file.flush() {
-                        eprintln!("Failed to flush log file: {}", e);
+                        eprintln!("Failed to flush log file: {e}");
                     }
                 }
             }
@@ -180,10 +179,8 @@ impl Log for FernStyleLogger {
     }
 }
 
-
 // Global static logger
 static LOGGER: std::sync::OnceLock<FernStyleLogger> = std::sync::OnceLock::new();
-
 
 pub fn init_logging(
     log_level: Option<&str>,
@@ -191,8 +188,7 @@ pub fn init_logging(
     log_file: Option<&str>,
     color_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-
-    let logger = LOGGER.get_or_init(|| FernStyleLogger::new());
+    let logger = LOGGER.get_or_init(FernStyleLogger::new);
 
     // Set as the global logger (only works once)
     log::set_logger(logger)?;

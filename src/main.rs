@@ -1,5 +1,6 @@
 mod app;
-mod common;
+mod core;
+mod notifications;
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
 

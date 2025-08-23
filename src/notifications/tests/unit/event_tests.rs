@@ -1,8 +1,8 @@
 //! Unit tests for Event enum and EventFilter
 
 use crate::notifications::event::{
-    Event, ScanEvent, QueueEvent, PluginEvent, SystemEvent,
-    ScanEventType, QueueEventType, PluginEventType, SystemEventType
+    Event, PluginEvent, PluginEventType, QueueEvent, QueueEventType, ScanEvent, ScanEventType,
+    SystemEvent, SystemEventType,
 };
 
 #[cfg(test)]
@@ -17,11 +17,8 @@ mod tests {
             "scan started".to_string(),
         );
 
-        let queue_event = QueueEvent::with_size(
-            QueueEventType::MessageAdded,
-            "test_queue".to_string(),
-            100,
-        );
+        let queue_event =
+            QueueEvent::with_size(QueueEventType::MessageAdded, "test_queue".to_string(), 100);
 
         let plugin_event = PluginEvent::with_message(
             PluginEventType::Processing,
@@ -29,10 +26,8 @@ mod tests {
             "processing".to_string(),
         );
 
-        let system_event = SystemEvent::with_message(
-            SystemEventType::Startup,
-            "application started".to_string(),
-        );
+        let system_event =
+            SystemEvent::with_message(SystemEventType::Startup, "application started".to_string());
 
         // Test Event enum construction
         let _scan = Event::Scan(scan_event);
@@ -56,7 +51,7 @@ mod tests {
             (Event::Scan(original), Event::Scan(cloned)) => {
                 assert_eq!(original.scan_id, cloned.scan_id);
                 assert_eq!(original.message, cloned.message);
-            },
+            }
             _ => panic!("Event cloning failed"),
         }
     }
@@ -147,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_event_timestamp_auto_population() {
-        use std::time::{SystemTime, Duration};
+        use std::time::{Duration, SystemTime};
 
         let before = SystemTime::now();
         let scan_event = ScanEvent::with_message(
@@ -162,21 +157,13 @@ mod tests {
         assert!(scan_event.timestamp <= after);
 
         // Test different event types have timestamps
-        let queue_event = QueueEvent::with_size(
-            QueueEventType::MessageAdded,
-            "test_queue".to_string(),
-            42,
-        );
+        let queue_event =
+            QueueEvent::with_size(QueueEventType::MessageAdded, "test_queue".to_string(), 42);
 
-        let plugin_event = PluginEvent::new(
-            PluginEventType::Processing,
-            "test_plugin".to_string(),
-        );
+        let plugin_event = PluginEvent::new(PluginEventType::Processing, "test_plugin".to_string());
 
-        let system_event = SystemEvent::with_message(
-            SystemEventType::Startup,
-            "startup complete".to_string(),
-        );
+        let system_event =
+            SystemEvent::with_message(SystemEventType::Startup, "startup complete".to_string());
 
         // All should have recent timestamps
         let now = SystemTime::now();
@@ -212,11 +199,8 @@ mod tests {
         assert_eq!(scan_msg.message, Some("50% complete".to_string()));
 
         // Test QueueEvent special constructors
-        let queue_size = QueueEvent::with_size(
-            QueueEventType::MessageAdded,
-            "queue2".to_string(),
-            250,
-        );
+        let queue_size =
+            QueueEvent::with_size(QueueEventType::MessageAdded, "queue2".to_string(), 250);
         assert_eq!(queue_size.size, Some(250));
         assert_eq!(queue_size.message, None);
 
@@ -226,7 +210,10 @@ mod tests {
             "processed successfully".to_string(),
         );
         assert_eq!(queue_msg.size, None);
-        assert_eq!(queue_msg.message, Some("processed successfully".to_string()));
+        assert_eq!(
+            queue_msg.message,
+            Some("processed successfully".to_string())
+        );
 
         let queue_full = QueueEvent::with_size_and_message(
             QueueEventType::MessageAdded,

@@ -1,40 +1,121 @@
 //! AsyncNotificationManager implementation
 
+use crate::core::time::{SystemTimeProvider, TimeProvider};
+use crate::notifications::error::NotificationError;
 use crate::notifications::event::{Event, EventFilter};
 use crate::notifications::traits::SubscriberStatistics;
-use crate::notifications::error::NotificationError;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use std::sync::{
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    Arc,
+};
+use std::time::Duration;
+use tokio::sync::mpsc::{
+    channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
+};
 
 // Auto-management thresholds
-const HIGH_WATER_MARK: usize = 10000;  // Queue size threshold for concern
+const HIGH_WATER_MARK: usize = 10000; // Queue size threshold for concern
 const STALE_SUBSCRIBER_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes without consuming
 const MIN_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60); // Minimum time between error logs
 const ERROR_RATE_THRESHOLD: f64 = 0.1; // 10% error rate triggers log rate limiting
+const DEFAULT_CHANNEL_CAPACITY: usize = 1000; // Default bounded channel capacity
 
+#[allow(dead_code)]
+enum EventSender {
+    Bounded(Sender<Event>),
+    Unbounded(UnboundedSender<Event>),
+}
+
+#[allow(dead_code)]
+impl EventSender {
+    fn try_send(&self, event: Event) -> Result<(), NotificationError> {
+        match self {
+            EventSender::Bounded(sender) => sender.try_send(event).map_err(|e| match e {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                    NotificationError::ChannelFull("Subscriber channel is full".to_string())
+                }
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    NotificationError::ChannelClosed("Subscriber channel is closed".to_string())
+                }
+            }),
+            EventSender::Unbounded(sender) => sender.send(event).map_err(|_| {
+                NotificationError::ChannelClosed("Subscriber channel is closed".to_string())
+            }),
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub enum EventReceiver {
+    Bounded(Receiver<Event>),
+    Unbounded(UnboundedReceiver<Event>),
+}
+
+#[allow(dead_code)]
+impl EventReceiver {
+    pub async fn recv(&mut self) -> Option<Event> {
+        match self {
+            EventReceiver::Bounded(receiver) => receiver.recv().await,
+            EventReceiver::Unbounded(receiver) => receiver.recv().await,
+        }
+    }
+}
+
+#[allow(dead_code)]
 struct SubscriberInfo {
     filter: EventFilter,
     source: String,
-    sender: UnboundedSender<Event>,
+    sender: EventSender,
     statistics: SubscriberStatistics,
 }
 
+#[allow(dead_code)]
 pub struct HealthAssessment {
     pub high_water_mark_subscribers: Vec<String>,
     pub stale_subscribers: Vec<String>,
     pub error_prone_subscribers: Vec<String>,
 }
 
+#[allow(dead_code)]
 pub struct AsyncNotificationManager {
     subscribers: HashMap<String, SubscriberInfo>,
+    time_provider: Arc<dyn TimeProvider>,
+    // Configurable auto-management thresholds (atomically updatable)
+    high_water_mark: AtomicUsize,
+    stale_subscriber_timeout_secs: AtomicU64,
+    min_error_log_interval_secs: AtomicU64,
+    error_rate_threshold: Arc<std::sync::atomic::AtomicU64>, // f64 bits as u64
+    channel_capacity: AtomicUsize,                           // 0 = unbounded, >0 = bounded
 }
 
+#[allow(dead_code)]
 impl AsyncNotificationManager {
     pub fn new() -> Self {
+        Self::with_time_provider(Arc::new(SystemTimeProvider::default()))
+    }
+
+    pub fn with_time_provider(time_provider: Arc<dyn TimeProvider>) -> Self {
         Self {
             subscribers: HashMap::new(),
+            time_provider,
+            high_water_mark: AtomicUsize::new(HIGH_WATER_MARK),
+            stale_subscriber_timeout_secs: AtomicU64::new(STALE_SUBSCRIBER_TIMEOUT.as_secs()),
+            min_error_log_interval_secs: AtomicU64::new(MIN_ERROR_LOG_INTERVAL.as_secs()),
+            error_rate_threshold: Arc::new(AtomicU64::new(ERROR_RATE_THRESHOLD.to_bits())),
+            channel_capacity: AtomicUsize::new(DEFAULT_CHANNEL_CAPACITY),
         }
+    }
+
+    // Helper methods for atomic f64 handling
+    fn get_error_rate_threshold(&self) -> f64 {
+        f64::from_bits(self.error_rate_threshold.load(Ordering::Relaxed))
+    }
+
+    #[allow(dead_code)]
+    fn set_error_rate_threshold(&self, value: f64) {
+        self.error_rate_threshold
+            .store(value.to_bits(), Ordering::Relaxed);
     }
 
     pub fn subscribe(
@@ -42,8 +123,18 @@ impl AsyncNotificationManager {
         subscriber_id: String,
         filter: EventFilter,
         source: String,
-    ) -> Result<UnboundedReceiver<Event>, Box<dyn std::error::Error>> {
-        let (sender, receiver) = unbounded_channel();
+    ) -> Result<EventReceiver, Box<dyn std::error::Error>> {
+        let channel_capacity = self.channel_capacity.load(Ordering::Relaxed);
+
+        let (sender, receiver) = if channel_capacity == 0 {
+            // Unbounded channel
+            let (tx, rx) = unbounded_channel();
+            (EventSender::Unbounded(tx), EventReceiver::Unbounded(rx))
+        } else {
+            // Bounded channel
+            let (tx, rx) = channel(channel_capacity);
+            (EventSender::Bounded(tx), EventReceiver::Bounded(rx))
+        };
 
         let subscriber_info = SubscriberInfo {
             filter,
@@ -53,7 +144,10 @@ impl AsyncNotificationManager {
         };
 
         // Warn if overwriting existing subscriber
-        if let Some(existing) = self.subscribers.insert(subscriber_id.clone(), subscriber_info) {
+        if let Some(existing) = self
+            .subscribers
+            .insert(subscriber_id.clone(), subscriber_info)
+        {
             log::warn!(
                 "Subscriber '{}' replaced existing subscription (source: {} -> {})",
                 subscriber_id,
@@ -74,14 +168,17 @@ impl AsyncNotificationManager {
     }
 
     pub fn get_subscriber_statistics(&self, subscriber_id: &str) -> Option<&SubscriberStatistics> {
-        self.subscribers.get(subscriber_id).map(|info| &info.statistics)
+        self.subscribers
+            .get(subscriber_id)
+            .map(|info| &info.statistics)
     }
 
     pub fn check_high_water_marks(&self) -> Vec<String> {
+        let high_water_mark = self.high_water_mark.load(Ordering::Relaxed);
         self.subscribers
             .iter()
             .filter_map(|(id, info)| {
-                if info.statistics.queue_size() >= HIGH_WATER_MARK {
+                if info.statistics.queue_size() >= high_water_mark {
                     Some(id.clone())
                 } else {
                     None
@@ -91,13 +188,17 @@ impl AsyncNotificationManager {
     }
 
     pub fn check_stale_subscribers(&self) -> Vec<String> {
-        let now = Instant::now();
+        let now = self.time_provider.now();
+        let high_water_mark = self.high_water_mark.load(Ordering::Relaxed);
+        let stale_timeout =
+            Duration::from_secs(self.stale_subscriber_timeout_secs.load(Ordering::Relaxed));
+
         self.subscribers
             .iter()
             .filter_map(|(id, info)| {
-                let has_high_queue = info.statistics.queue_size() >= HIGH_WATER_MARK;
+                let has_high_queue = info.statistics.queue_size() >= high_water_mark;
                 let is_stale = if let Some(last_msg_time) = info.statistics.last_message_time() {
-                    now.duration_since(last_msg_time) > STALE_SUBSCRIBER_TIMEOUT
+                    now.duration_since(last_msg_time) > stale_timeout
                 } else {
                     // No messages processed yet, but has high queue, consider stale
                     has_high_queue
@@ -130,17 +231,22 @@ impl AsyncNotificationManager {
             let messages_processed = stats.messages_processed();
 
             // Check if we should log based on error rate and time since last log
+            let min_log_interval =
+                Duration::from_secs(self.min_error_log_interval_secs.load(Ordering::Relaxed));
             let should_log = if let Some(last_error_log_time) = stats.last_error_log_time() {
-                let time_since_last_log = Instant::now().duration_since(last_error_log_time);
-                time_since_last_log >= MIN_ERROR_LOG_INTERVAL
+                let time_since_last_log =
+                    self.time_provider.now().duration_since(last_error_log_time);
+                time_since_last_log >= min_log_interval
             } else {
                 true // First time logging
             };
 
             if should_log && messages_processed > 0 {
                 let error_rate = error_count as f64 / messages_processed as f64;
+                let high_water_mark = self.high_water_mark.load(Ordering::Relaxed);
+                let error_rate_threshold = self.get_error_rate_threshold();
 
-                if error_rate >= ERROR_RATE_THRESHOLD || queue_size >= HIGH_WATER_MARK {
+                if error_rate >= error_rate_threshold || queue_size >= high_water_mark {
                     log::warn!(
                         "Subscriber health concern - ID: '{}', Source: '{}', Queue: {}, Errors: {}/{} ({:.1}% rate), Messages: {}",
                         subscriber_id,
@@ -159,19 +265,20 @@ impl AsyncNotificationManager {
         }
     }
 
-
     pub fn assess_subscriber_health(&self) -> HealthAssessment {
         let high_water_mark_subscribers = self.check_high_water_marks();
         let stale_subscribers = self.check_stale_subscribers();
 
-        let error_prone_subscribers = self.subscribers
+        let error_prone_subscribers = self
+            .subscribers
             .iter()
             .filter_map(|(id, info)| {
                 let stats = &info.statistics;
                 let messages_processed = stats.messages_processed();
                 if messages_processed > 0 {
                     let error_rate = stats.error_count() as f64 / messages_processed as f64;
-                    if error_rate >= ERROR_RATE_THRESHOLD {
+                    let error_rate_threshold = self.get_error_rate_threshold();
+                    if error_rate >= error_rate_threshold {
                         Some(id.clone())
                     } else {
                         None
@@ -210,7 +317,8 @@ impl AsyncNotificationManager {
     }
 
     pub fn check_memory_exhaustion(&self) -> Result<(), NotificationError> {
-        let queue_sizes: Vec<(String, usize)> = self.subscribers
+        let queue_sizes: Vec<(String, usize)> = self
+            .subscribers
             .iter()
             .map(|(id, info)| (id.clone(), info.statistics.queue_size()))
             .collect();
@@ -238,14 +346,16 @@ impl AsyncNotificationManager {
         const MAX_ACTIVE_SUBSCRIBERS: usize = 1000;
         const MAX_PROBLEMATIC_RATIO: f64 = 0.5; // 50% of subscribers problematic
 
-        let problematic_count = assessment.high_water_mark_subscribers.len() + assessment.stale_subscribers.len();
+        let problematic_count =
+            assessment.high_water_mark_subscribers.len() + assessment.stale_subscribers.len();
         let problematic_ratio = if active_subscribers > 0 {
             problematic_count as f64 / active_subscribers as f64
         } else {
             0.0
         };
 
-        if active_subscribers > MAX_ACTIVE_SUBSCRIBERS || problematic_ratio > MAX_PROBLEMATIC_RATIO {
+        if active_subscribers > MAX_ACTIVE_SUBSCRIBERS || problematic_ratio > MAX_PROBLEMATIC_RATIO
+        {
             return Err(NotificationError::SystemOverload {
                 active_subscribers,
                 high_water_mark_count: assessment.high_water_mark_subscribers.len(),
@@ -258,12 +368,14 @@ impl AsyncNotificationManager {
 
     pub async fn publish(&mut self, event: Event) -> Result<(), NotificationError> {
         let mut failed_subscribers = Vec::new();
+        let mut full_channel_subscribers = Vec::new();
         let event_type = match &event {
             Event::Scan(_) => "Scan",
             Event::Queue(_) => "Queue",
             Event::Plugin(_) => "Plugin",
             Event::System(_) => "System",
-        }.to_string();
+        }
+        .to_string();
 
         for (subscriber_id, subscriber_info) in &self.subscribers {
             // Check if the event matches the subscriber's filter
@@ -272,9 +384,28 @@ impl AsyncNotificationManager {
                 subscriber_info.statistics.increment_queue_size();
 
                 // Try to send the event
-                if let Err(_) = subscriber_info.sender.send(event.clone()) {
-                    // Channel is closed, mark for removal
-                    failed_subscribers.push(subscriber_id.clone());
+                match subscriber_info.sender.try_send(event.clone()) {
+                    Ok(_) => {
+                        // Event sent successfully
+                    }
+                    Err(NotificationError::ChannelFull(_)) => {
+                        // Channel is full - this is backpressure
+                        full_channel_subscribers.push(subscriber_id.clone());
+                        // Decrement queue size since we didn't actually send
+                        subscriber_info.statistics.decrement_queue_size();
+                    }
+                    Err(NotificationError::ChannelClosed(_)) => {
+                        // Channel is closed, mark for removal
+                        failed_subscribers.push(subscriber_id.clone());
+                        // Decrement queue size since we didn't actually send
+                        subscriber_info.statistics.decrement_queue_size();
+                    }
+                    Err(_) => {
+                        // Other errors, mark for removal
+                        failed_subscribers.push(subscriber_id.clone());
+                        // Decrement queue size since we didn't actually send
+                        subscriber_info.statistics.decrement_queue_size();
+                    }
                 }
             }
         }
@@ -282,6 +413,14 @@ impl AsyncNotificationManager {
         // Remove subscribers with closed channels
         for subscriber_id in &failed_subscribers {
             self.subscribers.remove(subscriber_id);
+        }
+
+        // Handle backpressure by returning error for full channels
+        if !full_channel_subscribers.is_empty() {
+            return Err(NotificationError::ChannelFull(format!(
+                "Subscribers with full channels: {}",
+                full_channel_subscribers.join(", ")
+            )));
         }
 
         // Return error if any subscribers failed
@@ -314,7 +453,7 @@ mod tests {
         let receiver = manager.subscribe(
             "test_subscriber".to_string(),
             EventFilter::All,
-            "test:unit".to_string()
+            "test:unit".to_string(),
         );
 
         // Verify receiver is returned
@@ -326,17 +465,21 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe with different filters and sources
-        let _receiver1 = manager.subscribe(
-            "scanner".to_string(),
-            EventFilter::ScanOnly,
-            "scanner:file_processor".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver1 = manager
+            .subscribe(
+                "scanner".to_string(),
+                EventFilter::ScanOnly,
+                "scanner:file_processor".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let _receiver2 = manager.subscribe(
-            "exporter".to_string(),
-            EventFilter::All,
-            "plugin:export".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver2 = manager
+            .subscribe(
+                "exporter".to_string(),
+                EventFilter::All,
+                "plugin:export".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Verify subscribers are stored (we need a way to check this)
         assert_eq!(manager.subscriber_count(), 2);
@@ -347,25 +490,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_publish_method() {
-        use crate::notifications::event::{Event, ScanEvent, ScanEventType, SystemEvent, SystemEventType};
+        use crate::notifications::event::{
+            Event, ScanEvent, ScanEventType, SystemEvent, SystemEventType,
+        };
 
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe with different filters
-        let mut scan_receiver = manager.subscribe(
-            "scanner".to_string(),
-            EventFilter::ScanOnly,
-            "scanner:test".to_string()
-        ).expect("Should subscribe successfully");
+        let mut scan_receiver = manager
+            .subscribe(
+                "scanner".to_string(),
+                EventFilter::ScanOnly,
+                "scanner:test".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut all_receiver = manager.subscribe(
-            "logger".to_string(),
-            EventFilter::All,
-            "logger:test".to_string()
-        ).expect("Should subscribe successfully");
+        let mut all_receiver = manager
+            .subscribe(
+                "logger".to_string(),
+                EventFilter::All,
+                "logger:test".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Publish a scan event
-        let scan_event = Event::Scan(ScanEvent::new(ScanEventType::Started, "test_scan".to_string()));
+        let scan_event = Event::Scan(ScanEvent::new(
+            ScanEventType::Started,
+            "test_scan".to_string(),
+        ));
         let _ = manager.publish(scan_event.clone()).await; // May fail due to closed channels, that's ok
 
         // Publish a system event
@@ -373,12 +525,21 @@ mod tests {
         let _ = manager.publish(system_event.clone()).await; // May fail due to closed channels, that's ok
 
         // Scan subscriber should receive only scan event
-        let received_scan = scan_receiver.recv().await.expect("Should receive scan event");
+        let received_scan = scan_receiver
+            .recv()
+            .await
+            .expect("Should receive scan event");
         assert!(matches!(received_scan, Event::Scan(_)));
 
         // All subscriber should receive both events
-        let received_1 = all_receiver.recv().await.expect("Should receive first event");
-        let received_2 = all_receiver.recv().await.expect("Should receive second event");
+        let received_1 = all_receiver
+            .recv()
+            .await
+            .expect("Should receive first event");
+        let received_2 = all_receiver
+            .recv()
+            .await
+            .expect("Should receive second event");
 
         // Should have received both events (order may vary)
         let mut received_scan_count = 0;
@@ -403,17 +564,21 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe two subscribers
-        let _receiver1 = manager.subscribe(
-            "subscriber1".to_string(),
-            EventFilter::All,
-            "test:cleanup1".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver1 = manager
+            .subscribe(
+                "subscriber1".to_string(),
+                EventFilter::All,
+                "test:cleanup1".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let receiver2 = manager.subscribe(
-            "subscriber2".to_string(),
-            EventFilter::All,
-            "test:cleanup2".to_string()
-        ).expect("Should subscribe successfully");
+        let receiver2 = manager
+            .subscribe(
+                "subscriber2".to_string(),
+                EventFilter::All,
+                "test:cleanup2".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Verify both subscribers are registered
         assert_eq!(manager.subscriber_count(), 2);
@@ -443,42 +608,87 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_size_increment_on_publish() {
-        use crate::notifications::event::{Event, ScanEvent, ScanEventType, SystemEvent, SystemEventType};
+        use crate::notifications::event::{
+            Event, ScanEvent, ScanEventType, SystemEvent, SystemEventType,
+        };
 
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe two subscribers with different filters
-        let _scan_receiver = manager.subscribe(
-            "scanner".to_string(),
-            EventFilter::ScanOnly,
-            "scanner:test".to_string()
-        ).expect("Should subscribe successfully");
+        let _scan_receiver = manager
+            .subscribe(
+                "scanner".to_string(),
+                EventFilter::ScanOnly,
+                "scanner:test".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let _all_receiver = manager.subscribe(
-            "logger".to_string(),
-            EventFilter::All,
-            "logger:test".to_string()
-        ).expect("Should subscribe successfully");
+        let _all_receiver = manager
+            .subscribe(
+                "logger".to_string(),
+                EventFilter::All,
+                "logger:test".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Check initial queue sizes
-        assert_eq!(manager.get_subscriber_statistics("scanner").unwrap().queue_size(), 0);
-        assert_eq!(manager.get_subscriber_statistics("logger").unwrap().queue_size(), 0);
+        assert_eq!(
+            manager
+                .get_subscriber_statistics("scanner")
+                .unwrap()
+                .queue_size(),
+            0
+        );
+        assert_eq!(
+            manager
+                .get_subscriber_statistics("logger")
+                .unwrap()
+                .queue_size(),
+            0
+        );
 
         // Publish a scan event
-        let scan_event = Event::Scan(ScanEvent::new(ScanEventType::Started, "test_scan".to_string()));
+        let scan_event = Event::Scan(ScanEvent::new(
+            ScanEventType::Started,
+            "test_scan".to_string(),
+        ));
         let _ = manager.publish(scan_event).await;
 
         // Scanner should have queue size 1, logger should also have queue size 1
-        assert_eq!(manager.get_subscriber_statistics("scanner").unwrap().queue_size(), 1);
-        assert_eq!(manager.get_subscriber_statistics("logger").unwrap().queue_size(), 1);
+        assert_eq!(
+            manager
+                .get_subscriber_statistics("scanner")
+                .unwrap()
+                .queue_size(),
+            1
+        );
+        assert_eq!(
+            manager
+                .get_subscriber_statistics("logger")
+                .unwrap()
+                .queue_size(),
+            1
+        );
 
         // Publish a system event
         let system_event = Event::System(SystemEvent::new(SystemEventType::Startup));
         let _ = manager.publish(system_event).await;
 
         // Scanner queue size should still be 1 (filtered out), logger should be 2
-        assert_eq!(manager.get_subscriber_statistics("scanner").unwrap().queue_size(), 1);
-        assert_eq!(manager.get_subscriber_statistics("logger").unwrap().queue_size(), 2);
+        assert_eq!(
+            manager
+                .get_subscriber_statistics("scanner")
+                .unwrap()
+                .queue_size(),
+            1
+        );
+        assert_eq!(
+            manager
+                .get_subscriber_statistics("logger")
+                .unwrap()
+                .queue_size(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -486,18 +696,22 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe a subscriber that we'll overload
-        let _receiver = manager.subscribe(
-            "overloaded".to_string(),
-            EventFilter::All,
-            "test:overload".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver = manager
+            .subscribe(
+                "overloaded".to_string(),
+                EventFilter::All,
+                "test:overload".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Subscribe a normal subscriber
-        let mut normal_receiver = manager.subscribe(
-            "normal".to_string(),
-            EventFilter::All,
-            "test:normal".to_string()
-        ).expect("Should subscribe successfully");
+        let mut normal_receiver = manager
+            .subscribe(
+                "normal".to_string(),
+                EventFilter::All,
+                "test:normal".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Initially no high water marks
         assert!(manager.check_high_water_marks().is_empty());
@@ -520,7 +734,10 @@ mod tests {
 
         // Process the message for normal subscriber to keep its queue low
         let _ = normal_receiver.recv().await.expect("Should receive event");
-        manager.get_subscriber_statistics("normal").unwrap().decrement_queue_size();
+        manager
+            .get_subscriber_statistics("normal")
+            .unwrap()
+            .decrement_queue_size();
 
         // Check high water marks
         let high_water_subscribers = manager.check_high_water_marks();
@@ -534,18 +751,22 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe a stale subscriber (won't process messages)
-        let _stale_receiver = manager.subscribe(
-            "stale".to_string(),
-            EventFilter::All,
-            "test:stale".to_string()
-        ).expect("Should subscribe successfully");
+        let _stale_receiver = manager
+            .subscribe(
+                "stale".to_string(),
+                EventFilter::All,
+                "test:stale".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Subscribe an active subscriber
-        let _active_receiver = manager.subscribe(
-            "active".to_string(),
-            EventFilter::All,
-            "test:active".to_string()
-        ).expect("Should subscribe successfully");
+        let _active_receiver = manager
+            .subscribe(
+                "active".to_string(),
+                EventFilter::All,
+                "test:active".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Initially no stale subscribers
         assert!(manager.check_stale_subscribers().is_empty());
@@ -584,23 +805,29 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe multiple subscribers
-        let _stale1 = manager.subscribe(
-            "stale1".to_string(),
-            EventFilter::All,
-            "test:stale1".to_string()
-        ).expect("Should subscribe successfully");
+        let _stale1 = manager
+            .subscribe(
+                "stale1".to_string(),
+                EventFilter::All,
+                "test:stale1".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let _stale2 = manager.subscribe(
-            "stale2".to_string(),
-            EventFilter::All,
-            "test:stale2".to_string()
-        ).expect("Should subscribe successfully");
+        let _stale2 = manager
+            .subscribe(
+                "stale2".to_string(),
+                EventFilter::All,
+                "test:stale2".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let _active = manager.subscribe(
-            "active".to_string(),
-            EventFilter::All,
-            "test:active".to_string()
-        ).expect("Should subscribe successfully");
+        let _active = manager
+            .subscribe(
+                "active".to_string(),
+                EventFilter::All,
+                "test:active".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Initially 3 subscribers
         assert_eq!(manager.subscriber_count(), 3);
@@ -640,11 +867,13 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe a subscriber we'll simulate problems with
-        let _receiver = manager.subscribe(
-            "problematic".to_string(),
-            EventFilter::All,
-            "test:problematic".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver = manager
+            .subscribe(
+                "problematic".to_string(),
+                EventFilter::All,
+                "test:problematic".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         let stats = manager.get_subscriber_statistics("problematic").unwrap();
 
@@ -685,11 +914,13 @@ mod tests {
         assert_eq!(stats.last_error_log_time().unwrap(), first_log_time);
 
         // Test normal subscriber doesn't trigger logging
-        let _normal_receiver = manager.subscribe(
-            "normal".to_string(),
-            EventFilter::All,
-            "test:normal".to_string()
-        ).expect("Should subscribe successfully");
+        let _normal_receiver = manager
+            .subscribe(
+                "normal".to_string(),
+                EventFilter::All,
+                "test:normal".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         let normal_stats = manager.get_subscriber_statistics("normal").unwrap();
 
@@ -697,7 +928,8 @@ mod tests {
         for _ in 0..100 {
             normal_stats.record_message_processed();
         }
-        for _ in 0..2 {  // 2% error rate - below threshold
+        for _ in 0..2 {
+            // 2% error rate - below threshold
             normal_stats.record_error();
         }
 
@@ -715,32 +947,40 @@ mod tests {
         // Create different types of problematic subscribers
 
         // 1. High water mark subscriber
-        let _high_queue = manager.subscribe(
-            "high_queue".to_string(),
-            EventFilter::All,
-            "test:high_queue".to_string()
-        ).expect("Should subscribe successfully");
+        let _high_queue = manager
+            .subscribe(
+                "high_queue".to_string(),
+                EventFilter::All,
+                "test:high_queue".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // 2. Stale subscriber (high queue + no recent processing)
-        let _stale = manager.subscribe(
-            "stale".to_string(),
-            EventFilter::All,
-            "test:stale".to_string()
-        ).expect("Should subscribe successfully");
+        let _stale = manager
+            .subscribe(
+                "stale".to_string(),
+                EventFilter::All,
+                "test:stale".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // 3. Error-prone subscriber
-        let _error_prone = manager.subscribe(
-            "error_prone".to_string(),
-            EventFilter::All,
-            "test:error_prone".to_string()
-        ).expect("Should subscribe successfully");
+        let _error_prone = manager
+            .subscribe(
+                "error_prone".to_string(),
+                EventFilter::All,
+                "test:error_prone".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // 4. Healthy subscriber
-        let _healthy = manager.subscribe(
-            "healthy".to_string(),
-            EventFilter::All,
-            "test:healthy".to_string()
-        ).expect("Should subscribe successfully");
+        let _healthy = manager
+            .subscribe(
+                "healthy".to_string(),
+                EventFilter::All,
+                "test:healthy".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Configure high_queue subscriber
         let high_queue_stats = manager.get_subscriber_statistics("high_queue").unwrap();
@@ -761,7 +1001,8 @@ mod tests {
         for _ in 0..100 {
             error_prone_stats.record_message_processed();
         }
-        for _ in 0..15 { // 15% error rate - above threshold
+        for _ in 0..15 {
+            // 15% error rate - above threshold
             error_prone_stats.record_error();
         }
 
@@ -770,7 +1011,8 @@ mod tests {
         for _ in 0..100 {
             healthy_stats.record_message_processed();
         }
-        for _ in 0..2 { // 2% error rate - below threshold
+        for _ in 0..2 {
+            // 2% error rate - below threshold
             healthy_stats.record_error();
         }
 
@@ -779,8 +1021,12 @@ mod tests {
 
         // Check high water mark detection
         assert_eq!(assessment.high_water_mark_subscribers.len(), 2); // high_queue and stale
-        assert!(assessment.high_water_mark_subscribers.contains(&"high_queue".to_string()));
-        assert!(assessment.high_water_mark_subscribers.contains(&"stale".to_string()));
+        assert!(assessment
+            .high_water_mark_subscribers
+            .contains(&"high_queue".to_string()));
+        assert!(assessment
+            .high_water_mark_subscribers
+            .contains(&"stale".to_string()));
 
         // Check stale detection
         assert_eq!(assessment.stale_subscribers.len(), 1);
@@ -788,34 +1034,46 @@ mod tests {
 
         // Check error-prone detection
         assert_eq!(assessment.error_prone_subscribers.len(), 1);
-        assert!(assessment.error_prone_subscribers.contains(&"error_prone".to_string()));
+        assert!(assessment
+            .error_prone_subscribers
+            .contains(&"error_prone".to_string()));
 
         // Healthy subscriber should not appear in any problematic category
-        assert!(!assessment.high_water_mark_subscribers.contains(&"healthy".to_string()));
-        assert!(!assessment.stale_subscribers.contains(&"healthy".to_string()));
-        assert!(!assessment.error_prone_subscribers.contains(&"healthy".to_string()));
+        assert!(!assessment
+            .high_water_mark_subscribers
+            .contains(&"healthy".to_string()));
+        assert!(!assessment
+            .stale_subscribers
+            .contains(&"healthy".to_string()));
+        assert!(!assessment
+            .error_prone_subscribers
+            .contains(&"healthy".to_string()));
     }
 
     #[tokio::test]
     async fn test_error_handling_closed_channels() {
-        use crate::notifications::event::{Event, SystemEvent, SystemEventType};
         use crate::notifications::error::NotificationError;
+        use crate::notifications::event::{Event, SystemEvent, SystemEventType};
 
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe a subscriber and immediately drop the receiver
-        let receiver = manager.subscribe(
-            "will_drop".to_string(),
-            EventFilter::All,
-            "test:will_drop".to_string()
-        ).expect("Should subscribe successfully");
+        let receiver = manager
+            .subscribe(
+                "will_drop".to_string(),
+                EventFilter::All,
+                "test:will_drop".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Subscribe a normal subscriber that keeps its receiver
-        let mut normal_receiver = manager.subscribe(
-            "normal".to_string(),
-            EventFilter::All,
-            "test:normal".to_string()
-        ).expect("Should subscribe successfully");
+        let mut normal_receiver = manager
+            .subscribe(
+                "normal".to_string(),
+                EventFilter::All,
+                "test:normal".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Drop the first receiver to close the channel
         drop(receiver);
@@ -827,7 +1085,11 @@ mod tests {
         // Should return error indicating publish failure
         assert!(result.is_err());
 
-        if let Err(NotificationError::PublishFailed { event_type: _, failed_subscribers }) = result {
+        if let Err(NotificationError::PublishFailed {
+            event_type: _,
+            failed_subscribers,
+        }) = result
+        {
             assert_eq!(failed_subscribers.len(), 1);
             assert!(failed_subscribers.contains(&"will_drop".to_string()));
         } else {
@@ -858,11 +1120,13 @@ mod tests {
         // Create multiple subscribers with very large queues to simulate OOM
         for i in 0..5 {
             let subscriber_id = format!("overloaded_{}", i);
-            let _receiver = manager.subscribe(
-                subscriber_id.clone(),
-                EventFilter::All,
-                format!("test:overloaded_{}", i)
-            ).expect("Should subscribe successfully");
+            let _receiver = manager
+                .subscribe(
+                    subscriber_id.clone(),
+                    EventFilter::All,
+                    format!("test:overloaded_{}", i),
+                )
+                .expect("Should subscribe successfully");
 
             // Simulate massive queue sizes (200k+1 each = 1M+5 total)
             let stats = manager.get_subscriber_statistics(&subscriber_id).unwrap();
@@ -875,7 +1139,11 @@ mod tests {
         let result = manager.check_memory_exhaustion();
         assert!(result.is_err());
 
-        if let Err(NotificationError::OutOfMemory { queue_sizes, total_events }) = result {
+        if let Err(NotificationError::OutOfMemory {
+            queue_sizes,
+            total_events,
+        }) = result
+        {
             assert_eq!(queue_sizes.len(), 5);
             assert_eq!(total_events, 1_000_005);
         } else {
@@ -892,11 +1160,13 @@ mod tests {
         // Create many subscribers with problematic states
         for i in 0..10 {
             let subscriber_id = format!("problematic_{}", i);
-            let _receiver = manager.subscribe(
-                subscriber_id.clone(),
-                EventFilter::All,
-                format!("test:problematic_{}", i)
-            ).expect("Should subscribe successfully");
+            let _receiver = manager
+                .subscribe(
+                    subscriber_id.clone(),
+                    EventFilter::All,
+                    format!("test:problematic_{}", i),
+                )
+                .expect("Should subscribe successfully");
 
             // Make them all have high water marks (problematic)
             let stats = manager.get_subscriber_statistics(&subscriber_id).unwrap();
@@ -909,7 +1179,12 @@ mod tests {
         let result = manager.check_system_overload();
         assert!(result.is_err());
 
-        if let Err(NotificationError::SystemOverload { active_subscribers, high_water_mark_count, stale_count: _ }) = result {
+        if let Err(NotificationError::SystemOverload {
+            active_subscribers,
+            high_water_mark_count,
+            stale_count: _,
+        }) = result
+        {
             assert_eq!(active_subscribers, 10);
             assert_eq!(high_water_mark_count, 10); // All subscribers at high water mark
         } else {
@@ -919,26 +1194,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_graceful_degradation() {
-        use crate::notifications::event::{Event, SystemEvent, SystemEventType};
         use crate::notifications::error::NotificationError;
+        use crate::notifications::event::{Event, SystemEvent, SystemEventType};
 
         let mut manager = AsyncNotificationManager::new();
 
         // Create a mix of healthy and problematic subscribers
 
         // Healthy subscriber
-        let mut healthy_receiver = manager.subscribe(
-            "healthy".to_string(),
-            EventFilter::All,
-            "test:healthy".to_string()
-        ).expect("Should subscribe successfully");
+        let mut healthy_receiver = manager
+            .subscribe(
+                "healthy".to_string(),
+                EventFilter::All,
+                "test:healthy".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Problematic subscriber that will be dropped
-        let dropped_receiver = manager.subscribe(
-            "will_be_dropped".to_string(),
-            EventFilter::All,
-            "test:dropped".to_string()
-        ).expect("Should subscribe successfully");
+        let dropped_receiver = manager
+            .subscribe(
+                "will_be_dropped".to_string(),
+                EventFilter::All,
+                "test:dropped".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Verify both are registered
         assert_eq!(manager.subscriber_count(), 2);
@@ -952,7 +1231,10 @@ mod tests {
 
         // Should return error but system continues to operate
         assert!(result.is_err());
-        if let Err(NotificationError::PublishFailed { failed_subscribers, .. }) = result {
+        if let Err(NotificationError::PublishFailed {
+            failed_subscribers, ..
+        }) = result
+        {
             assert_eq!(failed_subscribers.len(), 1);
             assert!(failed_subscribers.contains(&"will_be_dropped".to_string()));
         }
@@ -976,41 +1258,55 @@ mod tests {
 
     #[tokio::test]
     async fn test_integration_multi_subscriber_scenario() {
-        use crate::notifications::event::{Event, ScanEvent, ScanEventType, QueueEvent, QueueEventType, SystemEvent, SystemEventType};
+        use crate::notifications::event::{
+            Event, QueueEvent, QueueEventType, ScanEvent, ScanEventType, SystemEvent,
+            SystemEventType,
+        };
 
         let mut manager = AsyncNotificationManager::new();
 
         // Create subscribers with different filters and sources
-        let mut scan_logger = manager.subscribe(
-            "scan_logger".to_string(),
-            EventFilter::ScanOnly,
-            "logger:scan_events".to_string()
-        ).expect("Should subscribe successfully");
+        let mut scan_logger = manager
+            .subscribe(
+                "scan_logger".to_string(),
+                EventFilter::ScanOnly,
+                "logger:scan_events".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut queue_monitor = manager.subscribe(
-            "queue_monitor".to_string(),
-            EventFilter::QueueOnly,
-            "monitor:queue_status".to_string()
-        ).expect("Should subscribe successfully");
+        let mut queue_monitor = manager
+            .subscribe(
+                "queue_monitor".to_string(),
+                EventFilter::QueueOnly,
+                "monitor:queue_status".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut system_admin = manager.subscribe(
-            "system_admin".to_string(),
-            EventFilter::SystemOnly,
-            "admin:system_events".to_string()
-        ).expect("Should subscribe successfully");
+        let mut system_admin = manager
+            .subscribe(
+                "system_admin".to_string(),
+                EventFilter::SystemOnly,
+                "admin:system_events".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut audit_logger = manager.subscribe(
-            "audit_logger".to_string(),
-            EventFilter::All,
-            "audit:all_events".to_string()
-        ).expect("Should subscribe successfully");
+        let mut audit_logger = manager
+            .subscribe(
+                "audit_logger".to_string(),
+                EventFilter::All,
+                "audit:all_events".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Verify all subscribers are registered
         assert_eq!(manager.subscriber_count(), 4);
 
         // Publish different types of events
         let scan_event = Event::Scan(ScanEvent::new(ScanEventType::Started, "repo_1".to_string()));
-        let queue_event = Event::Queue(QueueEvent::new(QueueEventType::MessageAdded, "task_1".to_string()));
+        let queue_event = Event::Queue(QueueEvent::new(
+            QueueEventType::MessageAdded,
+            "task_1".to_string(),
+        ));
         let system_event = Event::System(SystemEvent::new(SystemEventType::Startup));
 
         // Publish all events
@@ -1025,11 +1321,17 @@ mod tests {
         assert!(matches!(scan_received, Event::Scan(_)));
 
         // Queue monitor should only receive queue event
-        let queue_received = queue_monitor.recv().await.expect("Should receive queue event");
+        let queue_received = queue_monitor
+            .recv()
+            .await
+            .expect("Should receive queue event");
         assert!(matches!(queue_received, Event::Queue(_)));
 
         // System admin should only receive system event
-        let system_received = system_admin.recv().await.expect("Should receive system event");
+        let system_received = system_admin
+            .recv()
+            .await
+            .expect("Should receive system event");
         assert!(matches!(system_received, Event::System(_)));
 
         // Audit logger should receive all three events
@@ -1058,7 +1360,12 @@ mod tests {
         assert_eq!(system_count, 1);
 
         // Verify statistics tracking
-        for subscriber_id in ["scan_logger", "queue_monitor", "system_admin", "audit_logger"] {
+        for subscriber_id in [
+            "scan_logger",
+            "queue_monitor",
+            "system_admin",
+            "audit_logger",
+        ] {
             let stats = manager.get_subscriber_statistics(subscriber_id).unwrap();
             if subscriber_id == "audit_logger" {
                 assert_eq!(stats.queue_size(), 3); // Received all events
@@ -1075,11 +1382,13 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Phase 1: Subscribe
-        let mut receiver = manager.subscribe(
-            "lifecycle_test".to_string(),
-            EventFilter::SystemOnly,
-            "test:lifecycle".to_string()
-        ).expect("Should subscribe successfully");
+        let mut receiver = manager
+            .subscribe(
+                "lifecycle_test".to_string(),
+                EventFilter::SystemOnly,
+                "test:lifecycle".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         assert_eq!(manager.subscriber_count(), 1);
         assert!(manager.has_subscriber("lifecycle_test"));
@@ -1146,29 +1455,37 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Create a mix of subscriber types
-        let mut healthy_subscriber = manager.subscribe(
-            "healthy".to_string(),
-            EventFilter::All,
-            "test:healthy".to_string()
-        ).expect("Should subscribe successfully");
+        let mut healthy_subscriber = manager
+            .subscribe(
+                "healthy".to_string(),
+                EventFilter::All,
+                "test:healthy".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let overloaded_receiver = manager.subscribe(
-            "overloaded".to_string(),
-            EventFilter::All,
-            "test:overloaded".to_string()
-        ).expect("Should subscribe successfully");
+        let overloaded_receiver = manager
+            .subscribe(
+                "overloaded".to_string(),
+                EventFilter::All,
+                "test:overloaded".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let _stale_receiver = manager.subscribe(
-            "stale".to_string(),
-            EventFilter::All,
-            "test:stale".to_string()
-        ).expect("Should subscribe successfully");
+        let _stale_receiver = manager
+            .subscribe(
+                "stale".to_string(),
+                EventFilter::All,
+                "test:stale".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let error_prone_receiver = manager.subscribe(
-            "error_prone".to_string(),
-            EventFilter::All,
-            "test:error_prone".to_string()
-        ).expect("Should subscribe successfully");
+        let error_prone_receiver = manager
+            .subscribe(
+                "error_prone".to_string(),
+                EventFilter::All,
+                "test:error_prone".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Initial state - all healthy
         assert_eq!(manager.subscriber_count(), 4);
@@ -1194,7 +1511,8 @@ mod tests {
         for _ in 0..100 {
             error_prone_stats.record_message_processed();
         }
-        for _ in 0..20 { // 20% error rate - above threshold
+        for _ in 0..20 {
+            // 20% error rate - above threshold
             error_prone_stats.record_error();
         }
 
@@ -1203,7 +1521,8 @@ mod tests {
         for _ in 0..50 {
             healthy_stats.record_message_processed();
         }
-        for _ in 0..2 { // 4% error rate - below threshold
+        for _ in 0..2 {
+            // 4% error rate - below threshold
             healthy_stats.record_error();
         }
 
@@ -1216,15 +1535,27 @@ mod tests {
         assert!(!assessment.error_prone_subscribers.is_empty());
 
         // Check specific categorization
-        assert!(assessment.high_water_mark_subscribers.contains(&"overloaded".to_string()));
-        assert!(assessment.high_water_mark_subscribers.contains(&"stale".to_string()));
+        assert!(assessment
+            .high_water_mark_subscribers
+            .contains(&"overloaded".to_string()));
+        assert!(assessment
+            .high_water_mark_subscribers
+            .contains(&"stale".to_string()));
         assert!(assessment.stale_subscribers.contains(&"stale".to_string()));
-        assert!(assessment.error_prone_subscribers.contains(&"error_prone".to_string()));
+        assert!(assessment
+            .error_prone_subscribers
+            .contains(&"error_prone".to_string()));
 
         // Healthy subscriber should not appear in any problematic category
-        assert!(!assessment.high_water_mark_subscribers.contains(&"healthy".to_string()));
-        assert!(!assessment.stale_subscribers.contains(&"healthy".to_string()));
-        assert!(!assessment.error_prone_subscribers.contains(&"healthy".to_string()));
+        assert!(!assessment
+            .high_water_mark_subscribers
+            .contains(&"healthy".to_string()));
+        assert!(!assessment
+            .stale_subscribers
+            .contains(&"healthy".to_string()));
+        assert!(!assessment
+            .error_prone_subscribers
+            .contains(&"healthy".to_string()));
 
         // Stale subscriber should have been auto-unsubscribed
         assert_eq!(manager.subscriber_count(), 3); // One less due to stale cleanup
@@ -1238,7 +1569,10 @@ mod tests {
         assert!(result.is_ok());
 
         // Healthy subscriber should receive the event
-        let received = healthy_subscriber.recv().await.expect("Should receive event");
+        let received = healthy_subscriber
+            .recv()
+            .await
+            .expect("Should receive event");
         assert!(matches!(received, Event::System(_)));
 
         // Clean up receivers to avoid warnings
@@ -1251,20 +1585,24 @@ mod tests {
         let mut manager = AsyncNotificationManager::new();
 
         // Subscribe first time
-        let _receiver1 = manager.subscribe(
-            "duplicate_test".to_string(),
-            EventFilter::ScanOnly,
-            "test:original".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver1 = manager
+            .subscribe(
+                "duplicate_test".to_string(),
+                EventFilter::ScanOnly,
+                "test:original".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         assert_eq!(manager.subscriber_count(), 1);
 
         // Subscribe with same ID but different source - should warn and replace
-        let _receiver2 = manager.subscribe(
-            "duplicate_test".to_string(),
-            EventFilter::All,
-            "test:replacement".to_string()
-        ).expect("Should subscribe successfully");
+        let _receiver2 = manager
+            .subscribe(
+                "duplicate_test".to_string(),
+                EventFilter::All,
+                "test:replacement".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Should still have only 1 subscriber (replaced, not added)
         assert_eq!(manager.subscriber_count(), 1);
@@ -1276,51 +1614,82 @@ mod tests {
 
     #[tokio::test]
     async fn test_integration_complete_system_end_to_end() {
-        use crate::notifications::event::{Event, ScanEvent, ScanEventType, QueueEvent, QueueEventType, SystemEvent, SystemEventType, PluginEvent, PluginEventType};
         use crate::notifications::error::NotificationError;
+        use crate::notifications::event::{
+            Event, PluginEvent, PluginEventType, QueueEvent, QueueEventType, ScanEvent,
+            ScanEventType, SystemEvent, SystemEventType,
+        };
 
         let mut manager = AsyncNotificationManager::new();
 
         // Create realistic subscriber ecosystem
-        let mut scan_processor = manager.subscribe(
-            "scan_processor".to_string(),
-            EventFilter::ScanOnly,
-            "processor:scan_results".to_string()
-        ).expect("Should subscribe successfully");
+        let mut scan_processor = manager
+            .subscribe(
+                "scan_processor".to_string(),
+                EventFilter::ScanOnly,
+                "processor:scan_results".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut queue_manager = manager.subscribe(
-            "queue_manager".to_string(),
-            EventFilter::QueueOnly,
-            "manager:task_queue".to_string()
-        ).expect("Should subscribe successfully");
+        let mut queue_manager = manager
+            .subscribe(
+                "queue_manager".to_string(),
+                EventFilter::QueueOnly,
+                "manager:task_queue".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut plugin_monitor = manager.subscribe(
-            "plugin_monitor".to_string(),
-            EventFilter::PluginOnly,
-            "monitor:plugin_status".to_string()
-        ).expect("Should subscribe successfully");
+        let mut plugin_monitor = manager
+            .subscribe(
+                "plugin_monitor".to_string(),
+                EventFilter::PluginOnly,
+                "monitor:plugin_status".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut system_logger = manager.subscribe(
-            "system_logger".to_string(),
-            EventFilter::SystemOnly,
-            "logger:system_events".to_string()
-        ).expect("Should subscribe successfully");
+        let mut system_logger = manager
+            .subscribe(
+                "system_logger".to_string(),
+                EventFilter::SystemOnly,
+                "logger:system_events".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
-        let mut audit_trail = manager.subscribe(
-            "audit_trail".to_string(),
-            EventFilter::All,
-            "audit:complete_trail".to_string()
-        ).expect("Should subscribe successfully");
+        let mut audit_trail = manager
+            .subscribe(
+                "audit_trail".to_string(),
+                EventFilter::All,
+                "audit:complete_trail".to_string(),
+            )
+            .expect("Should subscribe successfully");
 
         // Simulate real-world event sequence
         let events = vec![
             Event::System(SystemEvent::new(SystemEventType::Startup)),
-            Event::Scan(ScanEvent::new(ScanEventType::Started, "project_a".to_string())),
-            Event::Queue(QueueEvent::new(QueueEventType::MessageAdded, "scan_task_1".to_string())),
-            Event::Plugin(PluginEvent::new(PluginEventType::Processing, "exporter_v1".to_string())),
-            Event::Scan(ScanEvent::new(ScanEventType::Completed, "project_a".to_string())),
-            Event::Queue(QueueEvent::new(QueueEventType::MessageProcessed, "scan_task_1".to_string())),
-            Event::Plugin(PluginEvent::new(PluginEventType::DataReady, "exporter_v1".to_string())),
+            Event::Scan(ScanEvent::new(
+                ScanEventType::Started,
+                "project_a".to_string(),
+            )),
+            Event::Queue(QueueEvent::new(
+                QueueEventType::MessageAdded,
+                "scan_task_1".to_string(),
+            )),
+            Event::Plugin(PluginEvent::new(
+                PluginEventType::Processing,
+                "exporter_v1".to_string(),
+            )),
+            Event::Scan(ScanEvent::new(
+                ScanEventType::Completed,
+                "project_a".to_string(),
+            )),
+            Event::Queue(QueueEvent::new(
+                QueueEventType::MessageProcessed,
+                "scan_task_1".to_string(),
+            )),
+            Event::Plugin(PluginEvent::new(
+                PluginEventType::DataReady,
+                "exporter_v1".to_string(),
+            )),
             Event::System(SystemEvent::new(SystemEventType::Shutdown)),
         ];
 
@@ -1333,32 +1702,61 @@ mod tests {
 
         // Verify all publishes succeeded
         for (i, result) in publish_results.iter().enumerate() {
-            assert!(result.is_ok(), "Event {} failed to publish: {:?}", i, result);
+            assert!(
+                result.is_ok(),
+                "Event {} failed to publish: {:?}",
+                i,
+                result
+            );
         }
 
         // Verify each subscriber received correct events
 
         // Scan processor should get 2 scan events
-        let scan_event1 = scan_processor.recv().await.expect("Should receive scan event");
-        let scan_event2 = scan_processor.recv().await.expect("Should receive scan event");
+        let scan_event1 = scan_processor
+            .recv()
+            .await
+            .expect("Should receive scan event");
+        let scan_event2 = scan_processor
+            .recv()
+            .await
+            .expect("Should receive scan event");
         assert!(matches!(scan_event1, Event::Scan(_)));
         assert!(matches!(scan_event2, Event::Scan(_)));
 
         // Queue manager should get 2 queue events
-        let queue_event1 = queue_manager.recv().await.expect("Should receive queue event");
-        let queue_event2 = queue_manager.recv().await.expect("Should receive queue event");
+        let queue_event1 = queue_manager
+            .recv()
+            .await
+            .expect("Should receive queue event");
+        let queue_event2 = queue_manager
+            .recv()
+            .await
+            .expect("Should receive queue event");
         assert!(matches!(queue_event1, Event::Queue(_)));
         assert!(matches!(queue_event2, Event::Queue(_)));
 
         // Plugin monitor should get 2 plugin events
-        let plugin_event1 = plugin_monitor.recv().await.expect("Should receive plugin event");
-        let plugin_event2 = plugin_monitor.recv().await.expect("Should receive plugin event");
+        let plugin_event1 = plugin_monitor
+            .recv()
+            .await
+            .expect("Should receive plugin event");
+        let plugin_event2 = plugin_monitor
+            .recv()
+            .await
+            .expect("Should receive plugin event");
         assert!(matches!(plugin_event1, Event::Plugin(_)));
         assert!(matches!(plugin_event2, Event::Plugin(_)));
 
         // System logger should get 2 system events
-        let system_event1 = system_logger.recv().await.expect("Should receive system event");
-        let system_event2 = system_logger.recv().await.expect("Should receive system event");
+        let system_event1 = system_logger
+            .recv()
+            .await
+            .expect("Should receive system event");
+        let system_event2 = system_logger
+            .recv()
+            .await
+            .expect("Should receive system event");
         assert!(matches!(system_event1, Event::System(_)));
         assert!(matches!(system_event2, Event::System(_)));
 
@@ -1388,7 +1786,13 @@ mod tests {
         assert_eq!(event_counts["Plugin"], 2);
 
         // Verify statistics tracking
-        for subscriber_id in ["scan_processor", "queue_manager", "plugin_monitor", "system_logger", "audit_trail"] {
+        for subscriber_id in [
+            "scan_processor",
+            "queue_manager",
+            "plugin_monitor",
+            "system_logger",
+            "audit_trail",
+        ] {
             let stats = manager.get_subscriber_statistics(subscriber_id).unwrap();
 
             match subscriber_id {
@@ -1417,8 +1821,14 @@ mod tests {
         drop(queue_manager);
 
         // Publish events that the dropped subscribers would have received
-        let scan_cleanup = Event::Scan(ScanEvent::new(ScanEventType::Started, "cleanup_test".to_string()));
-        let queue_cleanup = Event::Queue(QueueEvent::new(QueueEventType::MessageAdded, "cleanup_test".to_string()));
+        let scan_cleanup = Event::Scan(ScanEvent::new(
+            ScanEventType::Started,
+            "cleanup_test".to_string(),
+        ));
+        let queue_cleanup = Event::Queue(QueueEvent::new(
+            QueueEventType::MessageAdded,
+            "cleanup_test".to_string(),
+        ));
 
         let result1 = manager.publish(scan_cleanup).await;
         let result2 = manager.publish(queue_cleanup).await;
@@ -1427,12 +1837,18 @@ mod tests {
         assert!(result1.is_err());
         assert!(result2.is_err());
 
-        if let Err(NotificationError::PublishFailed { failed_subscribers, .. }) = result1 {
+        if let Err(NotificationError::PublishFailed {
+            failed_subscribers, ..
+        }) = result1
+        {
             assert_eq!(failed_subscribers.len(), 1);
             assert!(failed_subscribers.contains(&"scan_processor".to_string()));
         }
 
-        if let Err(NotificationError::PublishFailed { failed_subscribers, .. }) = result2 {
+        if let Err(NotificationError::PublishFailed {
+            failed_subscribers, ..
+        }) = result2
+        {
             assert_eq!(failed_subscribers.len(), 1);
             assert!(failed_subscribers.contains(&"queue_manager".to_string()));
         }

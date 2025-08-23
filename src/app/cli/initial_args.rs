@@ -5,7 +5,7 @@
 //! It uses clap's ability to ignore unknown arguments, ensuring we handle
 //! all CLI edge cases (short flags, equals syntax, etc.) correctly.
 
-use clap::{Parser, ArgAction};
+use clap::{ArgAction, Parser};
 use std::path::PathBuf;
 
 /// Minimal clap parser for configuration discovery only
@@ -15,9 +15,9 @@ use std::path::PathBuf;
 /// arguments are captured here.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "repostats")]
-#[command(disable_help_flag = true)]  // We'll handle help ourselves
-#[command(disable_version_flag = true)]  // We'll handle version ourselves
-#[command(ignore_errors = true)]  // Ignore unknown arguments/subcommands
+#[command(disable_help_flag = true)] // We'll handle help ourselves
+#[command(disable_version_flag = true)] // We'll handle version ourselves
+#[command(ignore_errors = true)] // Ignore unknown arguments/subcommands
 pub struct InitialArgs {
     /// Configuration file path
     #[arg(long = "config-file", value_name = "FILE")]
@@ -79,53 +79,73 @@ impl InitialArgs {
 
     /// Parse minimal arguments from a provided argument list using clap's try_parse_from
     pub fn parse_from_args(args: &[String]) -> Self {
-        let cmd = clap::Command::new("repostats")  // Use hardcoded name to avoid lifetime issues
-            .disable_help_flag(true)  // We'll handle help manually
-            .disable_version_flag(true)  // We'll handle version manually
-            .arg(clap::Arg::new("config-file")
-                .long("config-file")
-                .value_name("FILE")
-                .help("Configuration file path"))
-            .arg(clap::Arg::new("plugin-dir")
-                .long("plugin-dir")
-                .value_name("DIR")
-                .help("Plugin directory override"))
-            .arg(clap::Arg::new("plugin-exclude")
-                .long("plugin-exclude")
-                .value_name("LIST")
-                .help("Plugin exclusion list"))
-            .arg(clap::Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .action(clap::ArgAction::Count)
-                .help("Verbose output (can be used multiple times for more verbosity)"))
-            .arg(clap::Arg::new("quiet")
-                .short('q')
-                .long("quiet")
-                .action(clap::ArgAction::Count)
-                .help("Quiet mode (can be used multiple times for less verbosity)"))
-            .arg(clap::Arg::new("color")
-                .long("color")
-                .action(clap::ArgAction::SetTrue)
-                .help("Force colored output"))
-            .arg(clap::Arg::new("no-color")
-                .long("no-color")
-                .action(clap::ArgAction::SetTrue)
-                .help("Disable colored output"))
-            .arg(clap::Arg::new("log-format")
-                .long("log-format")
-                .value_name("FORMAT")
-                .value_parser(["text", "json"])
-                .help("Log output format (text, json)"))
-            .arg(clap::Arg::new("log-level")
-                .long("log-level")
-                .value_name("LEVEL")
-                .value_parser(["trace", "debug", "info", "warn", "error", "off"])
-                .help("Log level (trace, debug, info, warn, error, off)"))
-            .arg(clap::Arg::new("log-file")
-                .long("log-file")
-                .value_name("FILE")
-                .help("Log file path (use 'none' to disable file logging)"))
+        let cmd = clap::Command::new("repostats") // Use hardcoded name to avoid lifetime issues
+            .disable_help_flag(true) // We'll handle help manually
+            .disable_version_flag(true) // We'll handle version manually
+            .arg(
+                clap::Arg::new("config-file")
+                    .long("config-file")
+                    .value_name("FILE")
+                    .help("Configuration file path"),
+            )
+            .arg(
+                clap::Arg::new("plugin-dir")
+                    .long("plugin-dir")
+                    .value_name("DIR")
+                    .help("Plugin directory override"),
+            )
+            .arg(
+                clap::Arg::new("plugin-exclude")
+                    .long("plugin-exclude")
+                    .value_name("LIST")
+                    .help("Plugin exclusion list"),
+            )
+            .arg(
+                clap::Arg::new("verbose")
+                    .short('v')
+                    .long("verbose")
+                    .action(clap::ArgAction::Count)
+                    .help("Verbose output (can be used multiple times for more verbosity)"),
+            )
+            .arg(
+                clap::Arg::new("quiet")
+                    .short('q')
+                    .long("quiet")
+                    .action(clap::ArgAction::Count)
+                    .help("Quiet mode (can be used multiple times for less verbosity)"),
+            )
+            .arg(
+                clap::Arg::new("color")
+                    .long("color")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Force colored output"),
+            )
+            .arg(
+                clap::Arg::new("no-color")
+                    .long("no-color")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Disable colored output"),
+            )
+            .arg(
+                clap::Arg::new("log-format")
+                    .long("log-format")
+                    .value_name("FORMAT")
+                    .value_parser(["text", "json"])
+                    .help("Log output format (text, json)"),
+            )
+            .arg(
+                clap::Arg::new("log-level")
+                    .long("log-level")
+                    .value_name("LEVEL")
+                    .value_parser(["trace", "debug", "info", "warn", "error", "off"])
+                    .help("Log level (trace, debug, info, warn, error, off)"),
+            )
+            .arg(
+                clap::Arg::new("log-file")
+                    .long("log-file")
+                    .value_name("FILE")
+                    .help("Log file path (use 'none' to disable file logging)"),
+            )
             .allow_external_subcommands(true)
             .ignore_errors(true);
 
@@ -138,8 +158,9 @@ impl InitialArgs {
     /// Create InitialArgs from clap ArgMatches
     fn from_matches(matches: &clap::ArgMatches) -> Self {
         Self {
-            config_file: matches.get_one::<String>("config-file")
-                .map(|s| std::path::PathBuf::from(s)),
+            config_file: matches
+                .get_one::<String>("config-file")
+                .map(std::path::PathBuf::from),
             plugin_dir: matches.get_one::<String>("plugin-dir").cloned(),
             plugin_exclude: matches.get_one::<String>("plugin-exclude").cloned(),
             verbose: matches.get_count("verbose"),
@@ -148,9 +169,10 @@ impl InitialArgs {
             no_color: matches.get_flag("no-color"),
             log_format: matches.get_one::<String>("log-format").cloned(),
             log_level: matches.get_one::<String>("log-level").cloned(),
-            log_file: matches.get_one::<String>("log-file")
+            log_file: matches
+                .get_one::<String>("log-file")
                 .filter(|s| *s != "none")
-                .map(|s| PathBuf::from(s)),
+                .map(PathBuf::from),
         }
     }
 
@@ -169,7 +191,6 @@ impl InitialArgs {
             log_file: None,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -182,7 +203,7 @@ mod tests {
             "repostats".to_string(),
             "--config-file".to_string(),
             "custom.toml".to_string(),
-            "commits".to_string(),  // Unknown subcommand, but should be ignored
+            "commits".to_string(), // Unknown subcommand, but should be ignored
         ];
 
         let initial = InitialArgs::parse_from_args(&args);
@@ -197,7 +218,7 @@ mod tests {
             "/custom/plugins".to_string(),
             "--plugin-exclude".to_string(),
             "unwanted".to_string(),
-            "output".to_string(),  // Unknown subcommand, should be ignored
+            "output".to_string(), // Unknown subcommand, should be ignored
         ];
 
         let initial = InitialArgs::parse_from_args(&args);
@@ -211,16 +232,15 @@ mod tests {
             "repostats".to_string(),
             "--config-file".to_string(),
             "test.toml".to_string(),
-            "--verbose".to_string(),     // Unknown to initial parser
-            "commits".to_string(),       // Unknown subcommand
-            "--since".to_string(),       // Unknown to initial parser
-            "1 week".to_string(),        // Unknown argument
+            "--verbose".to_string(), // Unknown to initial parser
+            "commits".to_string(),   // Unknown subcommand
+            "--since".to_string(),   // Unknown to initial parser
+            "1 week".to_string(),    // Unknown argument
         ];
 
         let initial = InitialArgs::parse_from_args(&args);
         assert_eq!(initial.config_file, Some(PathBuf::from("test.toml")));
     }
-
 
     #[test]
     fn test_equals_syntax() {
@@ -251,23 +271,16 @@ mod tests {
 
     #[test]
     fn test_color_flags() {
-        let args = vec![
-            "repostats".to_string(),
-            "--color".to_string(),
-        ];
+        let args = vec!["repostats".to_string(), "--color".to_string()];
 
         let initial = InitialArgs::parse_from_args(&args);
         assert!(initial.color);
         assert!(!initial.no_color);
 
-        let args = vec![
-            "repostats".to_string(),
-            "--no-color".to_string(),
-        ];
+        let args = vec!["repostats".to_string(), "--no-color".to_string()];
 
         let initial = InitialArgs::parse_from_args(&args);
         assert!(!initial.color);
         assert!(initial.no_color);
     }
-
 }

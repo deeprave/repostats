@@ -52,13 +52,16 @@ pub struct Args {
     pub log_level: Option<String>,
 
     /// Log file path (use 'none' to disable file logging)
-    #[arg(long = "log-file", value_name = "FILE", help = "Log file path (use 'none' to disable file logging)")]
+    #[arg(
+        long = "log-file",
+        value_name = "FILE",
+        help = "Log file path (use 'none' to disable file logging)"
+    )]
     pub log_file: Option<PathBuf>,
 
     /// Log output format
     #[arg(long = "log-format", value_name = "FORMAT", value_parser = ["text", "json"])]
     pub log_format: Option<String>,
-
 }
 
 impl Default for Args {
@@ -87,7 +90,6 @@ impl Args {
     /// Parse global arguments from a provided argument list
     ///
     pub fn parse_from_args(margs: &mut Self, args: &[String], color: bool, no_color: bool) {
-
         // Build a full clap Command with all arguments
         let color_choice = if color {
             clap::ColorChoice::Always
@@ -101,60 +103,82 @@ impl Args {
             .about("Repository statistics and analysis tool")
             .version(env!("CARGO_PKG_VERSION"))
             .color(color_choice)
-            .arg(clap::Arg::new("repository")
-                .short('r')
-                .long("repo")
-                .value_name("PATH")
-                .help("Repository path to analyze (defaults to current directory)"))
-            .arg(clap::Arg::new("config-file")
-                .long("config-file")
-                .value_name("FILE")
-                .help("Configuration file path"))
-            .arg(clap::Arg::new("plugin-dir")
-                .long("plugin-dir")
-                .value_name("DIR")
-                .help("Plugin directory override"))
-            .arg(clap::Arg::new("plugin-exclude")
-                .long("plugin-exclude")
-                .value_name("LIST")
-                .help("Plugin exclusion list"))
-            .arg(clap::Arg::new("color")
-                .long("color")
-                .action(clap::ArgAction::SetTrue)
-                .help("Force colored output (overrides TTY detection and NO_COLOR)"))
-            .arg(clap::Arg::new("no-color")
-                .long("no-color")
-                .conflicts_with("color")
-                .action(clap::ArgAction::SetTrue)
-                .help("Disable colored output"))
-            .arg(clap::Arg::new("cache-dir")
-                .long("cache-dir")
-                .value_name("DIR")
-                .help("Cache directory"))
-            .arg(clap::Arg::new("no-cache")
-                .long("no-cache")
-                .action(clap::ArgAction::SetTrue)
-                .help("Disable caching"))
-            .arg(clap::Arg::new("log-level")
-                .long("log-level")
-                .value_name("LEVEL")
-                .value_parser(["trace", "debug", "info", "warn", "error", "off"])
-                .help("Log level (trace, debug, info, warn, error, off)"))
-            .arg(clap::Arg::new("log-file")
-                .long("log-file")
-                .value_name("FILE")
-                .help("Log file path (use 'none' to disable file logging)"))
-            .arg(clap::Arg::new("log-format")
-                .long("log-format")
-                .value_name("FORMAT")
-                .value_parser(["text", "json"])
-                .help("Log output format (text, json)"));
+            .arg(
+                clap::Arg::new("repository")
+                    .short('r')
+                    .long("repo")
+                    .value_name("PATH")
+                    .help("Repository path to analyze (defaults to current directory)"),
+            )
+            .arg(
+                clap::Arg::new("config-file")
+                    .long("config-file")
+                    .value_name("FILE")
+                    .help("Configuration file path"),
+            )
+            .arg(
+                clap::Arg::new("plugin-dir")
+                    .long("plugin-dir")
+                    .value_name("DIR")
+                    .help("Plugin directory override"),
+            )
+            .arg(
+                clap::Arg::new("plugin-exclude")
+                    .long("plugin-exclude")
+                    .value_name("LIST")
+                    .help("Plugin exclusion list"),
+            )
+            .arg(
+                clap::Arg::new("color")
+                    .long("color")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Force colored output (overrides TTY detection and NO_COLOR)"),
+            )
+            .arg(
+                clap::Arg::new("no-color")
+                    .long("no-color")
+                    .conflicts_with("color")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Disable colored output"),
+            )
+            .arg(
+                clap::Arg::new("cache-dir")
+                    .long("cache-dir")
+                    .value_name("DIR")
+                    .help("Cache directory"),
+            )
+            .arg(
+                clap::Arg::new("no-cache")
+                    .long("no-cache")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Disable caching"),
+            )
+            .arg(
+                clap::Arg::new("log-level")
+                    .long("log-level")
+                    .value_name("LEVEL")
+                    .value_parser(["trace", "debug", "info", "warn", "error", "off"])
+                    .help("Log level (trace, debug, info, warn, error, off)"),
+            )
+            .arg(
+                clap::Arg::new("log-file")
+                    .long("log-file")
+                    .value_name("FILE")
+                    .help("Log file path (use 'none' to disable file logging)"),
+            )
+            .arg(
+                clap::Arg::new("log-format")
+                    .long("log-format")
+                    .value_name("FORMAT")
+                    .value_parser(["text", "json"])
+                    .help("Log output format (text, json)"),
+            );
 
         match cmd.try_get_matches_from(args) {
             Ok(matches) => {
                 // Apply command line args (overrides the config file)
                 Self::apply_command_line(margs, &matches);
-            },
+            }
             Err(e) => {
                 // Display help/error and exit
                 e.print().expect("Error writing to stderr");
@@ -168,17 +192,19 @@ impl Args {
         let config_path = match config_file {
             Some(path) => {
                 // User specified a config file-it must exist
-                let path = PathBuf::from(path);
                 if !path.exists() {
-                    eprintln!("Error: The specified configuration file does not exist: {}", path.display());
+                    eprintln!(
+                        "Error: The specified configuration file does not exist: {}",
+                        path.display()
+                    );
                     std::process::exit(1);
                 }
                 Some(path)
-            },
+            }
             None => {
                 // Use default config path if it exists
-                let default_path = dirs::config_dir()
-                    .map(|d| d.join("Repostats").join("repostats.toml"));
+                let default_path =
+                    dirs::config_dir().map(|d| d.join("Repostats").join("repostats.toml"));
 
                 match default_path {
                     Some(path) if path.exists() => Some(path),
@@ -190,13 +216,11 @@ impl Args {
         // If we have a config path, load and parse it
         if let Some(path) = config_path {
             match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    match toml::from_str::<toml::Table>(&contents) {
-                        Ok(config) => Self::apply_toml_values(margs, &config),
-                        Err(e) => {
-                            eprintln!("Error parsing configuration file {}: {}", path.display(), e);
-                            std::process::exit(1);
-                        }
+                Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
+                    Ok(config) => Self::apply_toml_values(margs, &config),
+                    Err(e) => {
+                        eprintln!("Error parsing configuration file {}: {}", path.display(), e);
+                        std::process::exit(1);
                     }
                 },
                 Err(e) => {

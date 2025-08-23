@@ -1,5 +1,5 @@
 //! Public API exports for the CLI module
-//! 
+//!
 //! This module provides the public interface for CLI functionality,
 //! ensuring clean boundaries between modules as per project architecture.
 
