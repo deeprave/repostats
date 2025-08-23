@@ -1,4 +1,4 @@
 //! Application module
 
-pub mod startup;
 mod cli;
+pub mod startup;

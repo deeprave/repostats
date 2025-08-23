@@ -13,7 +13,10 @@ async fn test_service_registry_initialization() {
     // We need to test that we can access its functionality
     let count = notification_manager.subscriber_count();
     // Don't assert specific count since tests may run in parallel and share state
-    println!("Service registry initialization test: current subscriber count: {}", count);
+    println!(
+        "Service registry initialization test: current subscriber count: {}",
+        count
+    );
 }
 
 #[test]
@@ -29,7 +32,6 @@ fn test_lazy_lock_singleton_behavior() {
     let services3 = &*SERVICES;
     assert!(std::ptr::eq(services1, services3));
 }
-
 
 #[tokio::test]
 async fn test_async_notification_manager_access() {
@@ -53,16 +55,18 @@ async fn test_concurrent_service_access() {
     use tokio::task;
 
     // Test that multiple async tasks can access services concurrently
-    let tasks: Vec<_> = (0..10).map(|i| {
-        task::spawn(async move {
-            let services = get_services();
-            let _notification_manager = services.notification_manager().await;
+    let tasks: Vec<_> = (0..10)
+        .map(|i| {
+            task::spawn(async move {
+                let services = get_services();
+                let _notification_manager = services.notification_manager().await;
 
-            // Each task gets the notification manager
-            // Return the task ID to verify all completed
-            i
+                // Each task gets the notification manager
+                // Return the task ID to verify all completed
+                i
+            })
         })
-    }).collect();
+        .collect();
 
     // Wait for all tasks to complete
     let mut results = Vec::new();

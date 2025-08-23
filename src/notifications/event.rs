@@ -3,6 +3,7 @@
 use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum ScanEventType {
     Started,
     Progress,
@@ -13,6 +14,7 @@ pub enum ScanEventType {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum QueueEventType {
     MessageAdded,
     MessageProcessed,
@@ -20,6 +22,7 @@ pub enum QueueEventType {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum PluginEventType {
     Registered,
     Processing,
@@ -29,6 +32,7 @@ pub enum PluginEventType {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum SystemEventType {
     Startup,
     Shutdown,
@@ -36,6 +40,7 @@ pub enum SystemEventType {
 
 /// Individual event types that can be published
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ScanEvent {
     pub event_type: ScanEventType,
     pub timestamp: SystemTime,
@@ -43,6 +48,7 @@ pub struct ScanEvent {
     pub message: Option<String>,
 }
 
+#[allow(dead_code)]
 impl ScanEvent {
     pub fn new(event_type: ScanEventType, scan_id: String) -> Self {
         Self {
@@ -64,6 +70,7 @@ impl ScanEvent {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct QueueEvent {
     pub event_type: QueueEventType,
     pub timestamp: SystemTime,
@@ -72,6 +79,7 @@ pub struct QueueEvent {
     pub message: Option<String>,
 }
 
+#[allow(dead_code)]
 impl QueueEvent {
     pub fn new(event_type: QueueEventType, queue_id: String) -> Self {
         Self {
@@ -103,7 +111,12 @@ impl QueueEvent {
         }
     }
 
-    pub fn with_size_and_message(event_type: QueueEventType, queue_id: String, size: usize, message: String) -> Self {
+    pub fn with_size_and_message(
+        event_type: QueueEventType,
+        queue_id: String,
+        size: usize,
+        message: String,
+    ) -> Self {
         Self {
             event_type,
             timestamp: SystemTime::now(),
@@ -115,6 +128,7 @@ impl QueueEvent {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct PluginEvent {
     pub event_type: PluginEventType,
     pub timestamp: SystemTime,
@@ -122,6 +136,7 @@ pub struct PluginEvent {
     pub message: Option<String>,
 }
 
+#[allow(dead_code)]
 impl PluginEvent {
     pub fn new(event_type: PluginEventType, plugin_id: String) -> Self {
         Self {
@@ -143,12 +158,14 @@ impl PluginEvent {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct SystemEvent {
     pub event_type: SystemEventType,
     pub timestamp: SystemTime,
     pub message: Option<String>,
 }
 
+#[allow(dead_code)]
 impl SystemEvent {
     pub fn new(event_type: SystemEventType) -> Self {
         Self {
@@ -169,6 +186,7 @@ impl SystemEvent {
 
 /// Unified event enum that encompasses all event types
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum Event {
     Scan(ScanEvent),
     Queue(QueueEvent),
@@ -178,6 +196,7 @@ pub enum Event {
 
 /// Event filtering options for subscribers
 #[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum EventFilter {
     ScanOnly,
     QueueOnly,
@@ -188,6 +207,7 @@ pub enum EventFilter {
     All,
 }
 
+#[allow(dead_code)]
 impl EventFilter {
     /// Check if an event should be accepted by this filter
     pub fn accepts(&self, event: &Event) -> bool {

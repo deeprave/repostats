@@ -3,10 +3,11 @@
 use crate::notifications::event::Event;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 use std::sync::RwLock;
+use std::time::Instant;
 
 /// Statistics tracking for a subscriber
+#[allow(dead_code)]
 pub struct SubscriberStatistics {
     queue_size: AtomicUsize,
     messages_processed: AtomicUsize,
@@ -16,7 +17,12 @@ pub struct SubscriberStatistics {
     last_error_log_time: RwLock<Option<Instant>>,
 }
 
+#[allow(dead_code)]
 impl SubscriberStatistics {
+    #[allow(dead_code)]
+    fn default() -> Self {
+        Self::new()
+    }
     pub fn new() -> Self {
         Self {
             queue_size: AtomicUsize::new(0),
@@ -37,13 +43,15 @@ impl SubscriberStatistics {
     }
 
     pub fn decrement_queue_size(&self) {
-        self.queue_size.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            if current == 0 {
-                Some(0)
-            } else {
-                Some(current - 1)
-            }
-        }).ok();
+        self.queue_size
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                if current == 0 {
+                    Some(0)
+                } else {
+                    Some(current - 1)
+                }
+            })
+            .ok();
     }
 
     pub fn messages_processed(&self) -> usize {
@@ -75,20 +83,21 @@ impl SubscriberStatistics {
     }
 
     pub fn last_message_time(&self) -> Option<Instant> {
-        self.last_message_time.read().ok()?.clone()
+        *self.last_message_time.read().ok()?
     }
 
     pub fn last_error_time(&self) -> Option<Instant> {
-        self.last_error_time.read().ok()?.clone()
+        *self.last_error_time.read().ok()?
     }
 
     pub fn last_error_log_time(&self) -> Option<Instant> {
-        self.last_error_log_time.read().ok()?.clone()
+        *self.last_error_log_time.read().ok()?
     }
 }
 
 /// Trait for event subscribers
 #[async_trait]
+#[allow(dead_code)]
 pub trait Subscriber: Send + Sync {
     /// Handle an incoming event
     async fn handle_event(&self, event: Event) -> Result<(), Box<dyn std::error::Error>>;

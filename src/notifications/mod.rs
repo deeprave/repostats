@@ -1,7 +1,7 @@
-mod event;
-mod traits;
-mod manager;
 mod error;
+mod event;
+mod manager;
+mod traits;
 
 pub mod api;
 

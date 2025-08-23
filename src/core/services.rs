@@ -2,14 +2,16 @@
 //!
 //! See docs/service_registry.md for complete documentation.
 
+use crate::notifications::api::AsyncNotificationManager;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
-use crate::notifications::api::AsyncNotificationManager;
 
 /// Global service registry instance
-pub static SERVICES: LazyLock<ServiceRegistry> = LazyLock::new(|| ServiceRegistry::new());
+#[allow(dead_code)]
+pub static SERVICES: LazyLock<ServiceRegistry> = LazyLock::new(ServiceRegistry::new);
 
 /// Centralized registry for all core services
+#[allow(dead_code)]
 pub struct ServiceRegistry {
     notification_manager: Mutex<AsyncNotificationManager>,
 }
@@ -23,12 +25,16 @@ impl ServiceRegistry {
     }
 
     /// Access notification manager from async context
-    pub async fn notification_manager(&self) -> tokio::sync::MutexGuard<'_, AsyncNotificationManager> {
+    #[allow(dead_code)]
+    pub async fn notification_manager(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, AsyncNotificationManager> {
         self.notification_manager.lock().await
     }
 }
 
 /// Convenience function to access the global service registry
+#[allow(dead_code)]
 pub fn get_services() -> &'static ServiceRegistry {
     &SERVICES
 }
