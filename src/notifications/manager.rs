@@ -258,7 +258,12 @@ impl AsyncNotificationManager {
 
     pub async fn publish(&mut self, event: Event) -> Result<(), NotificationError> {
         let mut failed_subscribers = Vec::new();
-        let event_type = format!("{:?}", std::mem::discriminant(&event));
+        let event_type = match &event {
+            Event::Scan(_) => "Scan",
+            Event::Queue(_) => "Queue",
+            Event::Plugin(_) => "Plugin",
+            Event::System(_) => "System",
+        }.to_string();
 
         for (subscriber_id, subscriber_info) in &self.subscribers {
             // Check if the event matches the subscriber's filter

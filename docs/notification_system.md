@@ -21,8 +21,8 @@ The notification system is built around these core components:
 use repostats::core::services;
 use repostats::notifications::api::{EventFilter, Event, ScanEvent, ScanEventType};
 
-// Access the global notification manager
-let mut manager = services::get_services().notification_manager();
+// Access the global notification manager (async context)
+let mut manager = services::get_services().notification_manager().await;
 
 // Subscribe to scan events only
 let mut receiver = manager.subscribe(
@@ -95,12 +95,13 @@ use repostats::core::services;
 // Get the global service registry
 let services = services::get_services();
 
-// Access the notification manager (returns MutexGuard)
-let mut manager = services.notification_manager();
+// Access the notification manager (async context)
+let mut manager = services.notification_manager().await;
 
 // Use the manager
 let count = manager.subscriber_count();
 ```
+
 
 ## Auto-Management Features
 
@@ -185,7 +186,8 @@ pub struct MyPlugin {
 
 impl MyPlugin {
     pub async fn initialize(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut manager = services::get_services().notification_manager();
+        // Access from async context (preferred)
+        let mut manager = services::get_services().notification_manager().await;
 
         // Subscribe to relevant events
         let mut receiver = manager.subscribe(
