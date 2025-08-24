@@ -89,10 +89,16 @@ pub struct AsyncNotificationManager {
     channel_capacity: AtomicUsize,                           // 0 = unbounded, >0 = bounded
 }
 
+impl Default for AsyncNotificationManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(dead_code)]
 impl AsyncNotificationManager {
     pub fn new() -> Self {
-        Self::with_time_provider(Arc::new(SystemTimeProvider::default()))
+        Self::with_time_provider(Arc::new(SystemTimeProvider))
     }
 
     pub fn with_time_provider(time_provider: Arc<dyn TimeProvider>) -> Self {

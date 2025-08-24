@@ -14,7 +14,7 @@ pub fn init_logging_flexi(
     use flexi_logger::{FileSpec, Logger};
 
     let level_str = log_level.unwrap_or("info");
-    let format_type = log_format.map_or("text", |f| f.as_ref());
+    let format_type = log_format.map_or("text", |f| f);
 
     let mut logger = Logger::try_with_str(level_str)?;
 
@@ -259,9 +259,8 @@ fn json_format(
 // Helper function to format target as file path with line number
 fn format_target_as_path(target: &str, line: Option<u32>) -> String {
     // Convert repostats::app::startup -> app/startup.rs
-    let path_like = if target.starts_with("repostats::") {
+    let path_like = if let Some(without_prefix) = target.strip_prefix("repostats::") {
         // Remove the "repostats::" prefix and convert :: to /
-        let without_prefix = &target[11..]; // "repostats::".len() = 11
         without_prefix.replace("::", "/") + ".rs"
     } else {
         // Handle other targets (external crates, etc.)
