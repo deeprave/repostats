@@ -9,7 +9,7 @@ pub fn init_logging_flexi(
     log_level: Option<&str>,
     log_format: Option<&str>,
     log_file: Option<&str>,
-    _color_enabled: bool,
+    color_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use flexi_logger::{FileSpec, Logger};
 
@@ -18,9 +18,11 @@ pub fn init_logging_flexi(
 
     let mut logger = Logger::try_with_str(level_str)?;
 
-    // Set format based on JSON preference
+    // Set format based on JSON preference and color support
     if is_json {
         logger = logger.format(json_format);
+    } else if color_enabled {
+        logger = logger.format(fern_color_format);
     } else {
         logger = logger.format(fern_style_format);
     }
@@ -38,11 +40,21 @@ pub fn init_logging_flexi(
     Ok(())
 }
 
+/// Reconfigure logging at runtime with flexi_logger
+///
+/// # Limitations
+/// - **Format changes**: Log format (text/json) cannot be changed at runtime and is ignored
+/// - **File path changes**: Log file path cannot be changed at runtime and is ignored
+/// - **Color changes**: Color output format is set during initialization and cannot be changed at runtime
+/// - **Only log level**: Currently only log level changes are supported at runtime
+///
+/// This is a limitation of flexi_logger's design where format and output configuration
+/// must be set during logger initialization.
 pub fn reconfigure_logging_flexi(
     log_level: Option<&str>,
     _log_format: Option<&str>, // Format cannot be changed at runtime in flexi_logger
     _log_file: Option<&str>,   // File path cannot be changed at runtime easily
-    _color_enabled: bool,      // Color is handled by format function
+    _color_enabled: bool, // Color format is set during initialization, cannot be changed at runtime
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(handle_mutex) = LOGGER_HANDLE.get() {
         if let Ok(mut handle) = handle_mutex.lock() {
@@ -91,6 +103,33 @@ fn fern_style_format(
         now.format("%H:%M:%S"),
         record.target(),
         record.level(),
+        record.args()
+    )
+}
+
+// Color format function for enhanced console readability
+fn fern_color_format(
+    w: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> Result<(), std::io::Error> {
+    use colored::*;
+
+    let level_colored = match record.level() {
+        log::Level::Error => record.level().to_string().red().bold(),
+        log::Level::Warn => record.level().to_string().yellow(),
+        log::Level::Info => record.level().to_string().green(),
+        log::Level::Debug => record.level().to_string().blue(),
+        log::Level::Trace => record.level().to_string().magenta(),
+    };
+
+    // Format: "HH:MM:SS[target][LEVEL] message" with colored level
+    write!(
+        w,
+        "{}[{}][{}] {}",
+        now.format("%H:%M:%S"),
+        record.target().dimmed(),
+        level_colored,
         record.args()
     )
 }
