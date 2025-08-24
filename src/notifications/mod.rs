@@ -1,5 +1,5 @@
 mod error;
-mod event;
+pub mod event;
 mod manager;
 mod traits;
 

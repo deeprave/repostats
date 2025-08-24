@@ -5,6 +5,11 @@ use std::io::Write;
 use std::path::Path;
 
 fn main() {
+    // Re-run if the build script itself changes
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=.git/HEAD");
+
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("version.rs");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -64,8 +69,4 @@ pub const GIT_HASH: &str = "{}";"###,
         plugin_api_version, build_time, git_hash
     )
     .unwrap();
-
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=Cargo.toml");
-    println!("cargo:rerun-if-changed=.git/HEAD");
 }

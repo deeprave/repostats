@@ -1,15 +1,13 @@
 //! CLI module containing argument parsing and related functionality
 
-use crate::app::cli::initial_args::InitialArgs;
 use std::path::PathBuf;
 
 pub mod api;
+pub mod args;
 pub mod command_segmenter;
-pub mod global_args;
-pub mod initial_args;
 
-pub struct InitialArgsBundle {
-    pub command_name: String,
+pub struct RequiredArgs {
+    pub global_args: Vec<String>,
     pub config_file: Option<PathBuf>,
     pub plugin_dir: Option<String>,
     pub plugin_exclude: Option<String>,
@@ -20,17 +18,25 @@ pub struct InitialArgsBundle {
     pub log_file: Option<PathBuf>,
 }
 
-pub fn initial_args() -> InitialArgsBundle {
-    let args = InitialArgs::parse_from_env();
-    InitialArgsBundle {
-        command_name: InitialArgs::command_name(),
-        config_file: args.config_file,
-        plugin_dir: args.plugin_dir,
-        plugin_exclude: args.plugin_exclude,
-        color: args.color,
-        no_color: args.no_color,
-        log_format: args.log_format,
-        log_level: args.log_level,
-        log_file: args.log_file,
+pub fn initial_args(command_name: &str) -> RequiredArgs {
+    use args::Args;
+    use std::env;
+
+    // Get the command line arguments
+    let cli_args: Vec<String> = env::args().collect();
+
+    // Parse using Args in initial mode
+    let (parsed_args, global_args) = Args::parse_initial(command_name, &cli_args);
+
+    RequiredArgs {
+        global_args,
+        config_file: parsed_args.config_file,
+        plugin_dir: parsed_args.plugin_dir,
+        plugin_exclude: parsed_args.plugin_exclude,
+        color: parsed_args.color,
+        no_color: parsed_args.no_color,
+        log_format: parsed_args.log_format,
+        log_level: parsed_args.log_level,
+        log_file: parsed_args.log_file,
     }
 }
