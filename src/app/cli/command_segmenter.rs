@@ -37,10 +37,10 @@ impl CommandSegmenter {
     /// Example:
     /// - args: ["repostats", "--verbose", "--config", "file.toml", "scan", "--since", "1week", "status", "--format", "json"]
     /// - global_args: ["repostats", "--verbose", "--config", "file.toml"]
-    /// Output:
+    ///   Output:
     /// - command_segments: [
-    ///     { command: "scan", args: ["--since", "1week"] },
-    ///     { command: "status", args: ["--format", "json"] }
+    ///   { command: "scan", args: ["--since", "1week"] },
+    ///   { command: "status", args: ["--format", "json"] }
     ///   ]
     pub fn segment_commands_only(
         &self,

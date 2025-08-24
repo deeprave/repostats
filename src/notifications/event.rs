@@ -211,17 +211,17 @@ pub enum EventFilter {
 impl EventFilter {
     /// Check if an event should be accepted by this filter
     pub fn accepts(&self, event: &Event) -> bool {
-        match (self, event) {
-            (EventFilter::ScanOnly, Event::Scan(_)) => true,
-            (EventFilter::QueueOnly, Event::Queue(_)) => true,
-            (EventFilter::PluginOnly, Event::Plugin(_)) => true,
-            (EventFilter::SystemOnly, Event::System(_)) => true,
-            (EventFilter::ScanAndPlugin, Event::Scan(_)) => true,
-            (EventFilter::ScanAndPlugin, Event::Plugin(_)) => true,
-            (EventFilter::QueueAndSystem, Event::Queue(_)) => true,
-            (EventFilter::QueueAndSystem, Event::System(_)) => true,
-            (EventFilter::All, _) => true,
-            _ => false,
-        }
+        matches!(
+            (self, event),
+            (EventFilter::ScanOnly, Event::Scan(_))
+                | (EventFilter::QueueOnly, Event::Queue(_))
+                | (EventFilter::PluginOnly, Event::Plugin(_))
+                | (EventFilter::SystemOnly, Event::System(_))
+                | (EventFilter::ScanAndPlugin, Event::Scan(_))
+                | (EventFilter::ScanAndPlugin, Event::Plugin(_))
+                | (EventFilter::QueueAndSystem, Event::Queue(_))
+                | (EventFilter::QueueAndSystem, Event::System(_))
+                | (EventFilter::All, _)
+        )
     }
 }

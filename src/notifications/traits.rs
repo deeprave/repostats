@@ -17,12 +17,14 @@ pub struct SubscriberStatistics {
     last_error_log_time: RwLock<Option<Instant>>,
 }
 
-#[allow(dead_code)]
-impl SubscriberStatistics {
-    #[allow(dead_code)]
+impl Default for SubscriberStatistics {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[allow(dead_code)]
+impl SubscriberStatistics {
     pub fn new() -> Self {
         Self {
             queue_size: AtomicUsize::new(0),
