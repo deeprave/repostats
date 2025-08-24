@@ -6,10 +6,10 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// Global arguments structure with all command-line options
-///
-/// This is parsed AFTER segmentation, so we have clean global args
-/// without any command-specific arguments mixed in.
+// Global arguments structure with all command-line options
+//
+// Used for both initial parsing (before command discovery) and final parsing
+// (after command segmentation). Handles all global configuration flags.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "repostats")]
 #[command(about = "Repository statistics and analysis tool")]
@@ -39,14 +39,6 @@ pub struct Args {
     #[arg(long = "no-color", conflicts_with = "color")]
     pub no_color: bool,
 
-    /// Cache directory
-    #[arg(long = "cache-dir", value_name = "DIR")]
-    pub cache_dir: Option<PathBuf>,
-
-    /// Disable caching
-    #[arg(long = "no-cache")]
-    pub no_cache: bool,
-
     /// Log level
     #[arg(long = "log-level", value_name = "LEVEL", value_parser = ["trace", "debug", "info", "warn", "error", "off"])]
     pub log_level: Option<String>,
@@ -60,7 +52,7 @@ pub struct Args {
     pub log_file: Option<PathBuf>,
 
     /// Log output format
-    #[arg(long = "log-format", value_name = "FORMAT", value_parser = ["text", "json"])]
+    #[arg(long = "log-format", value_name = "FORMAT", value_parser = ["text", "ext", "json"])]
     pub log_format: Option<String>,
 }
 
@@ -73,8 +65,6 @@ impl Default for Args {
             plugin_exclude: None,
             color: false,
             no_color: false,
-            cache_dir: None,
-            no_cache: false,
             log_level: None,
             log_file: None,
             log_format: Some("text".to_string()), // Default format
@@ -87,22 +77,163 @@ impl Args {
         Self::default()
     }
 
-    /// Parse global arguments from a provided argument list
+    /// Parse initial global arguments using clap, stopping at first external subcommand
     ///
-    pub fn parse_from_args(margs: &mut Self, args: &[String], color: bool, no_color: bool) {
-        // Build a full clap Command with all arguments
-        let color_choice = if color {
+    /// Uses the same clap-based approach as parse_from_args but configured for initial parsing.
+    /// Stops at the first external subcommand (assumed to be a command) and returns both
+    /// the parsed arguments and the consumed argument list.
+    pub fn parse_initial(command_name: &str, args: &[String]) -> (Self, Vec<String>) {
+        use clap::FromArgMatches;
+        use std::path::PathBuf;
+
+        if args.is_empty() {
+            return (Self::default(), Vec::new());
+        }
+
+        // Use the exact same clap setup as parse_from_args
+        let cmd = clap::Command::new(command_name.to_string())
+            .about("Repository statistics and analysis tool")
+            .version(env!("CARGO_PKG_VERSION"))
+            .allow_external_subcommands(true) // Allow unknown commands (stops at first one)
+            .ignore_errors(false) // Handle errors properly
+            .arg(
+                clap::Arg::new("repository")
+                    .short('r')
+                    .long("repo")
+                    .value_name("PATH")
+                    .value_parser(clap::value_parser!(PathBuf))
+                    .help("Repository path to analyze (defaults to current directory)"),
+            )
+            .arg(
+                clap::Arg::new("config_file")
+                    .long("config-file")
+                    .value_name("FILE")
+                    .value_parser(clap::value_parser!(PathBuf))
+                    .help("Configuration file path"),
+            )
+            .arg(
+                clap::Arg::new("plugin_dir")
+                    .long("plugin-dir")
+                    .value_name("DIR")
+                    .help("Plugin directory override"),
+            )
+            .arg(
+                clap::Arg::new("plugin_exclude")
+                    .long("plugin-exclude")
+                    .value_name("LIST")
+                    .help("Plugin exclusion list"),
+            )
+            .arg(
+                clap::Arg::new("color")
+                    .long("color")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Force colored output (overrides TTY detection and NO_COLOR)"),
+            )
+            .arg(
+                clap::Arg::new("no_color")
+                    .long("no-color")
+                    .conflicts_with("color")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Disable colored output"),
+            )
+            .arg(
+                clap::Arg::new("log_level")
+                    .long("log-level")
+                    .value_name("LEVEL")
+                    .value_parser(["trace", "debug", "info", "warn", "error", "off"])
+                    .help("Log level"),
+            )
+            .arg(
+                clap::Arg::new("log_file")
+                    .long("log-file")
+                    .value_name("FILE")
+                    .value_parser(clap::value_parser!(PathBuf))
+                    .help("Log file path (use 'none' to disable file logging)"),
+            )
+            .arg(
+                clap::Arg::new("log_format")
+                    .long("log-format")
+                    .value_name("FORMAT")
+                    .value_parser(["text", "ext", "json"])
+                    .help("Log output format"),
+            );
+
+        match cmd.try_get_matches_from(args) {
+            Ok(matches) => {
+                // Parse using clap's standard mechanism
+                let mut parsed_args = Self::from_arg_matches(&matches).unwrap_or_default();
+
+                // Handle special "none" value for log_file (same as parse_from_args)
+                if let Some(ref path) = parsed_args.log_file {
+                    if path.to_string_lossy() == "none" {
+                        parsed_args.log_file = None;
+                    }
+                }
+
+                // Extract the consumed arguments
+                let global_args = Self::extract_consumed_args(args, &matches);
+                (parsed_args, global_args)
+            }
+            Err(e) => {
+                // Let clap handle help/version/errors properly
+                e.print().expect("Error writing to stderr");
+                std::process::exit(e.exit_code());
+            }
+        }
+    }
+
+    /// Extract the arguments that clap actually consumed during parsing
+    fn extract_consumed_args(original_args: &[String], matches: &clap::ArgMatches) -> Vec<String> {
+        let mut consumed_args = vec![original_args[0].clone()]; // Always include program name
+
+        // Find where clap stopped parsing (first external subcommand)
+        if let Some((external_subcommand, _)) = matches.subcommand() {
+            // Find the position of the external subcommand in original args
+            if let Some(pos) = original_args[1..]
+                .iter()
+                .position(|arg| arg == external_subcommand)
+            {
+                // Include arguments up to (but not including) the external subcommand
+                consumed_args.extend(original_args[1..pos + 1].iter().cloned());
+            } else {
+                // If we can't find the subcommand, include all arguments except the last one
+                // (this handles edge cases where clap's parsing differs from our expectation)
+                if original_args.len() > 1 {
+                    consumed_args.extend(original_args[1..original_args.len() - 1].iter().cloned());
+                }
+            }
+        } else {
+            // No subcommand found, clap consumed all arguments (help/version case)
+            consumed_args.extend(original_args[1..].iter().cloned());
+        }
+
+        consumed_args
+    }
+
+    fn color_choice(color: bool, no_color: bool) -> clap::ColorChoice {
+        if color {
             clap::ColorChoice::Always
         } else if no_color {
             clap::ColorChoice::Never
         } else {
             clap::ColorChoice::Auto
-        };
+        }
+    }
+    /// Parse global arguments from a provided argument list
+    ///
+    pub fn parse_from_args(
+        margs: &mut Self,
+        command_name: &str,
+        args: &[String],
+        color: bool,
+        no_color: bool,
+    ) {
+        // Build a full clap Command with all arguments
 
-        let cmd = clap::Command::new("repostats")
+        let cmd = clap::Command::new(command_name.to_string())
             .about("Repository statistics and analysis tool")
             .version(env!("CARGO_PKG_VERSION"))
-            .color(color_choice)
+            .color(Self::color_choice(color, no_color))
             .arg(
                 clap::Arg::new("repository")
                     .short('r')
@@ -142,18 +273,6 @@ impl Args {
                     .help("Disable colored output"),
             )
             .arg(
-                clap::Arg::new("cache-dir")
-                    .long("cache-dir")
-                    .value_name("DIR")
-                    .help("Cache directory"),
-            )
-            .arg(
-                clap::Arg::new("no-cache")
-                    .long("no-cache")
-                    .action(clap::ArgAction::SetTrue)
-                    .help("Disable caching"),
-            )
-            .arg(
                 clap::Arg::new("log-level")
                     .long("log-level")
                     .value_name("LEVEL")
@@ -170,8 +289,8 @@ impl Args {
                 clap::Arg::new("log-format")
                     .long("log-format")
                     .value_name("FORMAT")
-                    .value_parser(["text", "json"])
-                    .help("Log output format (text, json)"),
+                    .value_parser(["text", "ext", "json"])
+                    .help("Log output format (text, ext, json)"),
             );
 
         match cmd.try_get_matches_from(args) {
@@ -253,12 +372,6 @@ impl Args {
         if let Some(no_color) = config.get("no-color").and_then(|v| v.as_bool()) {
             args.no_color = no_color;
         }
-        if let Some(cache_dir) = config.get("cache-dir").and_then(|v| v.as_str()) {
-            args.cache_dir = Some(PathBuf::from(cache_dir));
-        }
-        if let Some(no_cache) = config.get("no-cache").and_then(|v| v.as_bool()) {
-            args.no_cache = no_cache;
-        }
         if let Some(log_level) = config.get("log-level").and_then(|v| v.as_str()) {
             args.log_level = Some(log_level.to_string());
         }
@@ -294,12 +407,6 @@ impl Args {
         if matches.get_flag("no-color") {
             args.no_color = true;
         }
-        if let Some(cache_dir) = matches.get_one::<String>("cache-dir") {
-            args.cache_dir = Some(PathBuf::from(cache_dir));
-        }
-        if matches.get_flag("no-cache") {
-            args.no_cache = true;
-        }
         if let Some(log_level) = matches.get_one::<String>("log-level") {
             args.log_level = Some(log_level.clone());
         }
@@ -319,6 +426,104 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static COMMAND_NAME: &str = "repostats";
+
+    #[test]
+    fn test_parse_initial_stops_at_command() {
+        let args = vec![
+            "repostats".to_string(),
+            "--log-level".to_string(),
+            "debug".to_string(),
+            "--color".to_string(),
+            "metrics".to_string(), // This is a command - stop here
+            "--help".to_string(),
+        ];
+
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+
+        assert_eq!(parsed.log_level, Some("debug".to_string()));
+        assert!(parsed.color);
+        assert_eq!(
+            global_args,
+            vec![
+                "repostats".to_string(),
+                "--log-level".to_string(),
+                "debug".to_string(),
+                "--color".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_initial_stops_at_first_non_flag() {
+        let args = vec![
+            "repostats".to_string(),
+            "--log-file".to_string(),
+            "path".to_string(),
+            "metrics".to_string(), // Command - should stop here
+            "--help".to_string(),  // This belongs to the command
+        ];
+
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+
+        assert_eq!(parsed.log_file, Some(PathBuf::from("path")));
+        assert_eq!(
+            global_args,
+            vec![
+                "repostats".to_string(),
+                "--log-file".to_string(),
+                "path".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_initial_handles_equals_format() {
+        let args = vec![
+            "repostats".to_string(),
+            "--log-level=info".to_string(),
+            "--color".to_string(),
+            "scan".to_string(),
+            "--since".to_string(),
+            "1week".to_string(),
+        ];
+
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+
+        assert_eq!(parsed.log_level, Some("info".to_string()));
+        assert!(parsed.color);
+        assert_eq!(
+            global_args,
+            vec![
+                "repostats".to_string(),
+                "--log-level=info".to_string(),
+                "--color".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_initial_handles_log_file_none() {
+        let args = vec![
+            "repostats".to_string(),
+            "--log-file".to_string(),
+            "none".to_string(),
+            "debug".to_string(), // Command
+        ];
+
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+
+        assert_eq!(parsed.log_file, None); // "none" becomes None
+        assert_eq!(
+            global_args,
+            vec![
+                "repostats".to_string(),
+                "--log-file".to_string(),
+                "none".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn test_parse_with_repository() {
@@ -358,8 +563,6 @@ mod tests {
             "bad-plugin".to_string(),
             "--repo".to_string(),
             "/path/to/repo".to_string(),
-            "--cache-dir".to_string(),
-            "/cache".to_string(),
             "--log-level".to_string(),
             "debug".to_string(),
             "--color".to_string(),
@@ -371,9 +574,69 @@ mod tests {
         assert_eq!(result.plugin_dir, Some("/plugins".to_string()));
         assert_eq!(result.plugin_exclude, Some("bad-plugin".to_string()));
         assert_eq!(result.repository, Some(PathBuf::from("/path/to/repo")));
-        assert_eq!(result.cache_dir, Some(PathBuf::from("/cache")));
         assert_eq!(result.log_level, Some("debug".to_string()));
         assert!(result.color);
         assert!(!result.no_color);
+    }
+
+    #[test]
+    fn test_parse_initial_handles_equals_syntax() {
+        let args = vec![
+            "repostats".to_string(),
+            "--log-level=debug".to_string(),
+            "--config-file=/path/to/config.toml".to_string(),
+            "--color".to_string(),
+            "commits".to_string(), // Command
+            "--since".to_string(),
+            "1week".to_string(),
+        ];
+
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+
+        assert_eq!(parsed.log_level, Some("debug".to_string()));
+        assert_eq!(
+            parsed.config_file,
+            Some(PathBuf::from("/path/to/config.toml"))
+        );
+        assert_eq!(parsed.color, true);
+        assert_eq!(
+            global_args,
+            vec![
+                "repostats",
+                "--log-level=debug",
+                "--config-file=/path/to/config.toml",
+                "--color"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_initial_with_mixed_args() {
+        // Test parsing with both --flag=value and --flag value formats
+        let args = vec![
+            "repostats".to_string(),
+            "--log-level=debug".to_string(),
+            "--config-file".to_string(),
+            "/path/config.toml".to_string(),
+            "--color".to_string(),
+            "metrics".to_string(),
+            "--stats".to_string(),
+        ];
+
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+
+        assert_eq!(parsed.log_level, Some("debug".to_string()));
+        assert_eq!(parsed.config_file, Some(PathBuf::from("/path/config.toml")));
+        assert_eq!(parsed.color, true);
+        assert_eq!(
+            global_args,
+            vec![
+                "repostats",
+                "--log-level=debug",
+                "--config-file",
+                "/path/config.toml",
+                "--color"
+            ]
+        );
     }
 }

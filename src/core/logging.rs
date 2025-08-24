@@ -14,17 +14,31 @@ pub fn init_logging_flexi(
     use flexi_logger::{FileSpec, Logger};
 
     let level_str = log_level.unwrap_or("info");
-    let is_json = log_format.map_or(false, |f| f.to_lowercase() == "json");
+    let format_type = log_format.map_or("text", |f| f.as_ref());
 
     let mut logger = Logger::try_with_str(level_str)?;
 
-    // Set format based on JSON preference and color support
-    if is_json {
-        logger = logger.format(json_format);
-    } else if color_enabled {
-        logger = logger.format(fern_color_format);
-    } else {
-        logger = logger.format(fern_style_format);
+    // Set format based on format type and color support
+    match format_type {
+        "json" => {
+            logger = logger.format(json_format);
+        }
+        "ext" => {
+            // Extended format with target info
+            if color_enabled {
+                logger = logger.format(extended_color_format);
+            } else {
+                logger = logger.format(extended_format);
+            }
+        }
+        _ => {
+            // Default "text" format without target info
+            if color_enabled {
+                logger = logger.format(simple_color_format);
+            } else {
+                logger = logger.format(simple_format);
+            }
+        }
     }
 
     // Configure file output if requested
@@ -90,25 +104,36 @@ pub fn reconfigure_logging(
     reconfigure_logging_flexi(log_level, log_format, log_file, color_enabled)
 }
 
-// Custom format function that matches our current fern-style output
-fn fern_style_format(
+// Simple text format without target info
+fn simple_format(
     w: &mut dyn std::io::Write,
     now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
 ) -> Result<(), std::io::Error> {
-    // Current format: "HH:MM:SS[target][LEVEL] message"
+    let level_abbr = match record.level() {
+        log::Level::Error => "ERR",
+        log::Level::Warn => "WRN",
+        log::Level::Info => "INF",
+        log::Level::Debug => "DBG",
+        log::Level::Trace => "TRC",
+    };
+
+    // Format target as path-like: module::submodule -> module/submodule.rs
+    let target_formatted = format_target_as_path(record.target(), record.line());
+
+    // Format: "YYYY-MM-DD HH:mm:ss.ffff INF message (app/startup.rs:42)"
     write!(
         w,
-        "{}[{}][{}] {}",
-        now.format("%H:%M:%S"),
-        record.target(),
-        record.level(),
-        record.args()
+        "{} {} {} ({})",
+        now.format("%Y-%m-%d %H:%M:%S%.3f"),
+        level_abbr,
+        record.args(),
+        target_formatted
     )
 }
 
-// Color format function for enhanced console readability
-fn fern_color_format(
+// Simple color format without target info
+fn simple_color_format(
     w: &mut dyn std::io::Write,
     now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
@@ -116,40 +141,139 @@ fn fern_color_format(
     use colored::*;
 
     let level_colored = match record.level() {
-        log::Level::Error => record.level().to_string().red().bold(),
-        log::Level::Warn => record.level().to_string().yellow(),
-        log::Level::Info => record.level().to_string().green(),
-        log::Level::Debug => record.level().to_string().blue(),
-        log::Level::Trace => record.level().to_string().magenta(),
+        log::Level::Error => "ERR".red().bold(),
+        log::Level::Warn => "WRN".yellow(),
+        log::Level::Info => "INF".green(),
+        log::Level::Debug => "DBG".blue(),
+        log::Level::Trace => "TRC".magenta(),
     };
 
-    // Format: "HH:MM:SS[target][LEVEL] message" with colored level
+    // Format: "YYYY-MM-DD HH:mm:ss.ffff INF message" with colors
     write!(
         w,
-        "{}[{}][{}] {}",
-        now.format("%H:%M:%S"),
-        record.target().dimmed(),
+        "{} {} {}",
+        now.format("%Y-%m-%d %H:%M:%S%.3f").to_string().dimmed(),
         level_colored,
         record.args()
     )
 }
 
-// JSON format function to match current JSON functionality
+// Extended format with target info, no colors
+fn extended_format(
+    w: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> Result<(), std::io::Error> {
+    let level_abbr = match record.level() {
+        log::Level::Error => "ERR",
+        log::Level::Warn => "WRN",
+        log::Level::Info => "INF",
+        log::Level::Debug => "DBG",
+        log::Level::Trace => "TRC",
+    };
+
+    // Format target as path-like: module::submodule -> module/submodule.rs
+    let target_formatted = format_target_as_path(record.target(), record.line());
+
+    // Format: "YYYY-MM-DD HH:mm:ss.ffff INF message (app/startup.rs:42)"
+    write!(
+        w,
+        "{} {} {} ({})",
+        now.format("%Y-%m-%d %H:%M:%S%.3f"),
+        level_abbr,
+        record.args(),
+        target_formatted
+    )
+}
+
+// Extended color format with target info and colors
+fn extended_color_format(
+    w: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> Result<(), std::io::Error> {
+    use colored::*;
+
+    let level_colored = match record.level() {
+        log::Level::Error => "ERR".red().bold(),
+        log::Level::Warn => "WRN".yellow(),
+        log::Level::Info => "INF".green(),
+        log::Level::Debug => "DBG".blue(),
+        log::Level::Trace => "TRC".magenta(),
+    };
+
+    // Format target as path-like: module::submodule -> module/submodule.rs
+    let target_formatted = format_target_as_path(record.target(), record.line());
+
+    // Format: "YYYY-MM-DD HH:mm:ss.ffff INF message (app/startup.rs:42)" with colors
+    write!(
+        w,
+        "{} {} {} ({})",
+        now.format("%Y-%m-%d %H:%M:%S%.3f").to_string().dimmed(),
+        level_colored,
+        record.args(),
+        target_formatted.dimmed()
+    )
+}
+
+// JSON format function with improved field ordering and target formatting
 fn json_format(
     w: &mut dyn std::io::Write,
     now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
 ) -> Result<(), std::io::Error> {
-    use serde_json::json;
+    use serde_json::{json, to_string};
 
-    let json_output = json!({
+    let level_abbr = match record.level() {
+        log::Level::Error => "ERR",
+        log::Level::Warn => "WRN",
+        log::Level::Info => "INF",
+        log::Level::Debug => "DBG",
+        log::Level::Trace => "TRC",
+    };
+
+    let target_formatted = format_target_as_path(record.target(), record.line());
+
+    // Ordered: timestamp, level, message, metadata
+    let json_obj = json!({
         "timestamp": now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
-        "level": record.level().to_string(),
-        "target": record.target(),
-        "message": record.args().to_string()
+        "level": level_abbr,
+        "message": record.args().to_string(),
+        "target": target_formatted
     });
 
-    writeln!(w, "{}", json_output)
+    // Use to_string to ensure compact JSON output - NO newlines added by us
+    match to_string(&json_obj) {
+        Ok(json_string) => {
+            // Write only the JSON with no newlines to see what flexi_logger does
+            w.write_all(json_string.as_bytes())?;
+            Ok(())
+        }
+        Err(_) => {
+            w.write_all(b"{\"error\":\"Failed to serialize log message\"}")?;
+            Ok(())
+        }
+    }
+}
+
+// Helper function to format target as file path with line number
+fn format_target_as_path(target: &str, line: Option<u32>) -> String {
+    // Convert repostats::app::startup -> app/startup.rs
+    let path_like = if target.starts_with("repostats::") {
+        // Remove the "repostats::" prefix and convert :: to /
+        let without_prefix = &target[11..]; // "repostats::".len() = 11
+        without_prefix.replace("::", "/") + ".rs"
+    } else {
+        // Handle other targets (external crates, etc.)
+        target.replace("::", "/")
+    };
+
+    // Add line number if available
+    if let Some(line_num) = line {
+        format!("{}:{}", path_like, line_num)
+    } else {
+        path_like
+    }
 }
 
 #[cfg(test)]
@@ -215,17 +339,17 @@ mod tests {
         use flexi_logger::Logger;
 
         // Test that we can create a logger with custom format
-        // Our current format: "HH:MM:SS[target][LEVEL] message"
+        // Our current format: "YYYY-MM-DD HH:mm:ss.ffff INF message (target)"
 
         let logger_result =
-            Logger::try_with_str("debug").map(|logger| logger.format(fern_style_format));
+            Logger::try_with_str("debug").map(|logger| logger.format(extended_format));
 
         assert!(
             logger_result.is_ok(),
             "Should be able to create logger with custom format"
         );
 
-        // For now, just test the API works. We need to implement fern_style_format function.
+        // For now, just test the API works. We now have extended_format function.
     }
 
     #[test]
@@ -244,22 +368,24 @@ mod tests {
             .build();
 
         // Test our format function
-        let result = fern_style_format(&mut buffer, &mut now, &record);
+        let result = extended_format(&mut buffer, &mut now, &record);
         assert!(result.is_ok(), "Format function should succeed");
 
         let output = String::from_utf8(buffer).expect("Output should be valid UTF-8");
 
-        // Check format: "HH:MM:SS[target][LEVEL] message"
-        assert!(output.contains("[test_target]"), "Should contain target");
-        assert!(output.contains("[INFO]"), "Should contain level");
+        // Check format: "YYYY-MM-DD HH:mm:ss.ffff INF message (target)"
+        assert!(
+            output.contains("(test_target"),
+            "Should contain target in parens"
+        );
+        assert!(output.contains("INF"), "Should contain level abbreviation");
         assert!(output.contains("Test message"), "Should contain message");
         assert!(output.contains(":"), "Should contain time separator");
 
-        // Check the overall structure with regex-like pattern matching
-        let parts: Vec<&str> = output.trim().split("[").collect();
+        // Check the overall structure
         assert!(
-            parts.len() >= 3,
-            "Should have time[target][level] structure, got: {}",
+            output.contains("INF Test message"),
+            "Should have 'INF Test message' structure, got: {}",
             output
         );
     }
@@ -285,7 +411,7 @@ mod tests {
                         .directory(&temp_dir)
                         .basename(log_basename),
                 )
-                .format(fern_style_format)
+                .format(extended_format)
         });
 
         assert!(
@@ -318,7 +444,7 @@ mod tests {
                     .directory(&temp_dir)
                     .basename(log_basename),
             )
-            .format(fern_style_format)
+            .format(extended_format)
             .start();
 
         // This might fail if another logger is already initialized, but that's ok for this test

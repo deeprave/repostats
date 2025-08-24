@@ -1,22 +1,16 @@
 use log;
 
-/// Initialize application startup (async version)
-pub async fn startup_async() {
-    startup_impl().await;
-}
-
-/// Core startup implementation - now async
-async fn startup_impl() {
+/// Core startup implementation
+pub async fn startup(command_name: &str) {
+    use super::cli::args::Args;
     use super::cli::command_segmenter::CommandSegmenter;
-    use super::cli::global_args::Args;
-    use super::cli::initial_args;
-    use super::cli::InitialArgsBundle;
+    use super::cli::{initial_args, RequiredArgs};
     use crate::core::logging::{init_logging, reconfigure_logging};
     use crate::core::strings::title_case;
 
     // Stage 1: Initial parsing for configuration discovery
-    let InitialArgsBundle {
-        command_name,
+    let RequiredArgs {
+        global_args,
         config_file,
         plugin_dir,
         plugin_exclude,
@@ -25,8 +19,8 @@ async fn startup_impl() {
         log_format,
         log_level,
         log_file,
-    } = initial_args();
-    let command_title = title_case(command_name.as_str());
+    } = initial_args(command_name);
+    let command_title = title_case(command_name);
     let use_color = (color || atty::is(atty::Stream::Stdout)) && !no_color;
 
     // Initialize logging
@@ -56,9 +50,8 @@ async fn startup_impl() {
     let no_color = no_color || final_args.no_color;
     let use_color = (color || atty::is(atty::Stream::Stdout)) && !no_color;
 
-    // Stage 2: Command segmentation
-    log::trace!("Starting processing functions");
-    let commands = discover_commands(plugin_dir.as_deref(), plugin_exclude.as_deref());
+    // Stage 2: Reconfigure logging with final values
+    log::trace!("Reconfiguring logging with final values");
     let log_level = log_level.clone().or(final_args.log_level.clone());
     let log_format = log_format.clone().or(final_args.log_format.clone());
     let log_file = log_file_str.clone().or(final_args
@@ -74,31 +67,32 @@ async fn startup_impl() {
         eprintln!("Failed to reconfigure logging: {e}");
     }
 
+    // Stage 3: Final global args parsing with collected arguments
+    Args::parse_from_args(&mut final_args, command_name, &global_args, color, no_color);
+    log::trace!(
+        "Successfully parsed global args from collected arguments: {:?}",
+        global_args
+    );
+
+    // Stage 4: Command discovery and segmentation
+    let _plugin_dir = plugin_dir.as_deref().or(final_args.plugin_dir.as_deref());
+    let _plugin_exclude = plugin_exclude
+        .as_deref()
+        .or(final_args.plugin_exclude.as_deref());
+    let commands = discover_commands(_plugin_dir, _plugin_exclude);
+    log::trace!("Discovered commands: {:?}", commands);
+
     let segmenter = CommandSegmenter::with_commands(commands);
-    let args: Vec<String> = std::env::args().collect();
-
-    match segmenter.segment_arguments(&args) {
-        Ok(segmented) => {
-            log::trace!(
-                "Segmentation success - Global: {:?}, Commands: {:?}",
-                segmented.global_args,
-                segmented.command_segments
-            );
-
-            // Stage 3: Final global args parsing with clean arguments
-            Args::parse_from_args(&mut final_args, &segmented.global_args, color, no_color);
-            log::trace!("Successfully parsed global args");
-
-            // TODO: Continue with main application logic
-            log::info!("{command_name}: Repository Statistics Tool starting");
-            println!("=== Final Parsed Arguments ===");
-            println!("{final_args:#?}");
-        }
-        Err(e) => {
-            log::error!("Error segmenting arguments: {e}");
+    let all_args: Vec<String> = std::env::args().collect();
+    let command_segments = segmenter
+        .segment_commands_only(&all_args, &global_args)
+        .unwrap_or_else(|e| {
+            log::error!("Failed to segment commands: {e}");
             std::process::exit(1);
-        }
-    }
+        });
+
+    // Stage 5: Plugin configuration
+    configure_plugins(&command_segments);
 }
 
 /// Discover plugins and return list of available commands
@@ -106,9 +100,20 @@ fn discover_commands(plugin_dir: Option<&str>, plugin_exclude: Option<&str>) -> 
     log::trace!("Plugin discovery - dir: {plugin_dir:?}, exclude: {plugin_exclude:?}");
 
     vec![
-        "debug".to_string(),
+        "dump".to_string(),
         "commits".to_string(),
         "metrics".to_string(),
         "export".to_string(),
     ]
+}
+
+/// Configure plugins based on command segments
+fn configure_plugins(_command_segments: &[super::cli::command_segmenter::CommandSegment]) {
+    log::trace!(
+        "Configuring plugins for {} command segments",
+        _command_segments.len()
+    );
+
+    // TODO: Implement plugin configuration once plugin manager is available
+    // This will process each command segment and configure the appropriate plugins
 }
