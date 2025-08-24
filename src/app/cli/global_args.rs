@@ -187,8 +187,13 @@ impl Args {
         }
     }
 
-    /// Apply configuration file values to Args
-    pub fn parse_config_file(margs: &mut Self, config_file: Option<PathBuf>) {
+    /// Apply configuration file values to Args (async version)
+    pub async fn parse_config_file_async(margs: &mut Self, config_file: Option<PathBuf>) {
+        Self::parse_config_file_impl(margs, config_file).await;
+    }
+
+    /// Core implementation for config file parsing - now async
+    async fn parse_config_file_impl(margs: &mut Self, config_file: Option<PathBuf>) {
         let config_path = match config_file {
             Some(path) => {
                 // User specified a config file-it must exist
@@ -215,7 +220,7 @@ impl Args {
 
         // If we have a config path, load and parse it
         if let Some(path) = config_path {
-            match std::fs::read_to_string(&path) {
+            match tokio::fs::read_to_string(&path).await {
                 Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
                     Ok(config) => Self::apply_toml_values(margs, &config),
                     Err(e) => {
