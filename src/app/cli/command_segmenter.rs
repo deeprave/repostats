@@ -39,7 +39,7 @@ impl CommandSegmenter {
     }
 
     /// Segment command line arguments by command boundaries
-    /// ```
+    ///
     /// Example input: ["--verbose", "--config", "file.toml", "scan", "--since", "1week", "status", "--format", "json"]
     /// Output:
     /// - global_args: ["--verbose", "--config", "file.toml"]
@@ -47,7 +47,7 @@ impl CommandSegmenter {
     ///     { command: "scan", args: ["--since", "1week"] },
     ///     { command: "status", args: ["--format", "json"] }
     ///   ]
-    /// ```
+    ///
     pub fn segment_arguments(&self, args: &[String]) -> Result<SegmentedArgs> {
         let mut global_args = Vec::new();
         let mut command_segments = Vec::new();

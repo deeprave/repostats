@@ -1,7 +1,12 @@
 use log;
 
-/// Initialize application startup
-pub fn startup() {
+/// Initialize application startup (async version)
+pub async fn startup_async() {
+    startup_impl().await;
+}
+
+/// Core startup implementation - now async
+async fn startup_impl() {
     use super::cli::command_segmenter::CommandSegmenter;
     use super::cli::global_args::Args;
     use super::cli::initial_args;
@@ -39,7 +44,7 @@ pub fn startup() {
 
     // Stage 1: Command segmentation
     let mut final_args = Args::new();
-    Args::parse_config_file(&mut final_args, config_file);
+    Args::parse_config_file_async(&mut final_args, config_file).await;
     log::trace!("Configuration file parsed");
 
     let plugin_dir = plugin_dir
