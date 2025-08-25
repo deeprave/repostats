@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(queue_size.message, None);
 
         let queue_msg = QueueEvent::with_message(
-            QueueEventType::MessageProcessed,
+            QueueEventType::MessageAdded,
             "queue3".to_string(),
             "processed successfully".to_string(),
         );
