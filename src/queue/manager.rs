@@ -81,6 +81,7 @@ impl QueueManager {
     /// # Example
     ///
     /// ```rust,no_run
+    /// use repostats::queue::QueueManager;
     /// # async fn example() {
     /// let manager = QueueManager::create().await;
     /// // Queue system is now ready for use
