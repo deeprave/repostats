@@ -5,9 +5,9 @@
 
 use crate::core::services::get_services;
 use crate::notifications::api::{
-    Event, EventFilter, EventReceiver, QueueEvent, QueueEventType, ScanEvent, ScanEventType,
-    SystemEvent, SystemEventType,
+    Event, EventReceiver, SystemEvent, SystemEventType,
 };
+use crate::notifications::event::{EventFilter, ScanEvent, ScanEventType, QueueEventType};
 use crate::queue::{Message, QueuePublisher};
 use crate::scanner::error::{ScanError, ScanResult};
 use serde::{Deserialize, Serialize};
