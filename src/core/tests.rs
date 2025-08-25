@@ -78,3 +78,28 @@ async fn test_concurrent_service_access() {
     results.sort();
     assert_eq!(results, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 }
+
+#[tokio::test]
+async fn test_queue_manager_access_via_service_registry() {
+    let services = get_services();
+
+    // Test that queue manager is accessible via ServiceRegistry
+    let queue_manager = services.queue_manager();
+
+    // Test that we can create publishers and consumers through the global service
+    let publisher = queue_manager
+        .create_publisher("test-producer".to_string())
+        .unwrap();
+    let consumer = queue_manager
+        .create_consumer("test-plugin".to_string())
+        .unwrap();
+
+    assert_eq!(publisher.producer_id(), "test-producer");
+    assert_eq!(consumer.plugin_name(), "test-plugin");
+
+    // Test multiple producer support
+    let publisher2 = queue_manager
+        .create_publisher("another-producer".to_string())
+        .unwrap();
+    assert_eq!(publisher2.producer_id(), "another-producer");
+}

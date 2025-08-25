@@ -1683,7 +1683,7 @@ mod tests {
                 "project_a".to_string(),
             )),
             Event::Queue(QueueEvent::new(
-                QueueEventType::MessageProcessed,
+                QueueEventType::MessageAdded,
                 "scan_task_1".to_string(),
             )),
             Event::Plugin(PluginEvent::new(

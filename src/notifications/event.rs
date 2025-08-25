@@ -13,12 +13,15 @@ pub enum ScanEventType {
     Completed,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 pub enum QueueEventType {
+    Started,
+    Shutdown,
     MessageAdded,
-    MessageProcessed,
     QueueEmpty,
+    MemoryLow,
+    MemoryNormal,
 }
 
 #[derive(Clone, Debug)]
