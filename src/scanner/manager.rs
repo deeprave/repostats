@@ -1250,16 +1250,27 @@ mod tests {
             Err(_) => panic!("Should be able to resolve short commit SHA"),
         }
 
-        // Test resolving branch name (main branch)
-        match scanner_task.resolve_start_point("main").await {
-            Ok(commit_id) => {
-                // Should resolve to same commit as HEAD in this test repo
-                assert!(
-                    commit_id.len() >= 40,
-                    "Branch resolution should return full SHA"
-                );
+        // Test resolving current branch name 
+        let current_branch = repo.head().unwrap().referent_name().map(|name| name.as_bstr().to_string());
+        match current_branch {
+            Some(full_ref_name) => {
+                let branch_name = full_ref_name.strip_prefix("refs/heads/").unwrap_or(&full_ref_name);
+                match scanner_task.resolve_start_point(branch_name).await {
+                    Ok(commit_id) => {
+                        // Should resolve to same commit as HEAD in this test repo
+                        assert!(
+                            commit_id.len() >= 40,
+                            "Branch resolution should return full SHA"
+                        );
+                        assert_eq!(commit_id, full_sha, "Branch should resolve to same commit as HEAD");
+                    }
+                    Err(e) => panic!("Should be able to resolve current branch '{}': {:?}", branch_name, e),
+                }
             }
-            Err(_) => panic!("Should be able to resolve main branch"),
+            None => {
+                // If no symbolic ref, just test with HEAD which we know works
+                println!("No symbolic ref found, skipping branch name test");
+            }
         }
 
         // Test resolving invalid reference
