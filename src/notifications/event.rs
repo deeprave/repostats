@@ -34,7 +34,7 @@ pub enum PluginEventType {
     Unregistered,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 pub enum SystemEventType {
     Startup,

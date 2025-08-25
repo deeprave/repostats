@@ -2,5 +2,8 @@
 //!
 //! See docs/notification_system.md for complete documentation.
 
-pub use crate::notifications::event::{Event, SystemEvent, SystemEventType};
-pub use crate::notifications::manager::AsyncNotificationManager;
+pub use crate::notifications::event::{
+    Event, EventFilter, QueueEvent, QueueEventType, ScanEvent, ScanEventType, SystemEvent,
+    SystemEventType,
+};
+pub use crate::notifications::manager::{AsyncNotificationManager, EventReceiver};
