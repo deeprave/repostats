@@ -1,4 +1,7 @@
 name: Pull Request Validation
+permissions:
+  contents: read
+  pull-requests: write
 
 # Step 1.1: Basic PR workflow skeleton (TDD Red Phase)
 # This workflow validates PRs and can be manually triggered on any branch
