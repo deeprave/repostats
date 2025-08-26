@@ -272,7 +272,7 @@ mod tests {
         ];
 
         // Publish all test cases
-        for (i, test_data) in test_cases.iter().enumerate() {
+        for (_i, test_data) in test_cases.iter().enumerate() {
             let msg = Message::new(
                 format!("unicode-producer-🚀"),
                 "unicode_test".to_string(),

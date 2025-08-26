@@ -27,10 +27,6 @@ pub struct Args {
     #[arg(long = "plugin-dir", value_name = "DIR")]
     pub plugin_dir: Option<String>,
 
-    /// Plugin exclusion list
-    #[arg(long = "plugin-exclude", value_name = "LIST")]
-    pub plugin_exclude: Option<String>,
-
     /// Force colored output (overrides TTY detection and NO_COLOR)
     #[arg(long = "color")]
     pub color: bool,
@@ -62,7 +58,6 @@ impl Default for Args {
             repository: None,
             config_file: None,
             plugin_dir: None,
-            plugin_exclude: None,
             color: false,
             no_color: false,
             log_level: None,
@@ -116,12 +111,6 @@ impl Args {
                     .long("plugin-dir")
                     .value_name("DIR")
                     .help("Plugin directory override"),
-            )
-            .arg(
-                clap::Arg::new("plugin_exclude")
-                    .long("plugin-exclude")
-                    .value_name("LIST")
-                    .help("Plugin exclusion list"),
             )
             .arg(
                 clap::Arg::new("color")
@@ -254,12 +243,6 @@ impl Args {
                     .help("Plugin directory override"),
             )
             .arg(
-                clap::Arg::new("plugin-exclude")
-                    .long("plugin-exclude")
-                    .value_name("LIST")
-                    .help("Plugin exclusion list"),
-            )
-            .arg(
                 clap::Arg::new("color")
                     .long("color")
                     .action(clap::ArgAction::SetTrue)
@@ -363,9 +346,6 @@ impl Args {
         if let Some(plugin_dir) = config.get("plugin-dir").and_then(|v| v.as_str()) {
             args.plugin_dir = Some(plugin_dir.to_string());
         }
-        if let Some(plugin_exclude) = config.get("plugin-exclude").and_then(|v| v.as_str()) {
-            args.plugin_exclude = Some(plugin_exclude.to_string());
-        }
         if let Some(color) = config.get("color").and_then(|v| v.as_bool()) {
             args.color = color;
         }
@@ -397,9 +377,6 @@ impl Args {
         }
         if let Some(plugin_dir) = matches.get_one::<String>("plugin-dir") {
             args.plugin_dir = Some(plugin_dir.clone());
-        }
-        if let Some(plugin_exclude) = matches.get_one::<String>("plugin-exclude") {
-            args.plugin_exclude = Some(plugin_exclude.clone());
         }
         if matches.get_flag("color") {
             args.color = true;
@@ -559,8 +536,6 @@ mod tests {
             "custom.toml".to_string(),
             "--plugin-dir".to_string(),
             "/plugins".to_string(),
-            "--plugin-exclude".to_string(),
-            "bad-plugin".to_string(),
             "--repo".to_string(),
             "/path/to/repo".to_string(),
             "--log-level".to_string(),
@@ -572,7 +547,6 @@ mod tests {
 
         assert_eq!(result.config_file, Some(PathBuf::from("custom.toml")));
         assert_eq!(result.plugin_dir, Some("/plugins".to_string()));
-        assert_eq!(result.plugin_exclude, Some("bad-plugin".to_string()));
         assert_eq!(result.repository, Some(PathBuf::from("/path/to/repo")));
         assert_eq!(result.log_level, Some("debug".to_string()));
         assert!(result.color);

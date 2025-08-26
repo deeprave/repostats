@@ -103,3 +103,24 @@ async fn test_queue_manager_access_via_service_registry() {
         .unwrap();
     assert_eq!(publisher2.producer_id(), "another-producer");
 }
+
+#[tokio::test]
+async fn test_plugin_manager_access_via_service_registry() {
+    let services = get_services();
+
+    // Test that plugin manager is accessible via ServiceRegistry
+    let plugin_manager = services.plugin_manager().await;
+
+    // Test that plugin manager has the correct API version
+    assert_eq!(
+        plugin_manager.api_version(),
+        crate::get_plugin_api_version()
+    );
+
+    // Test that we can access the plugin registry through the manager
+    let registry = plugin_manager.registry();
+    let plugin_count = registry.plugin_count().await;
+
+    // Initially should be empty
+    assert_eq!(plugin_count, 0);
+}

@@ -21,7 +21,6 @@ struct QueueEntry {
 /// Consumer position tracking
 #[derive(Debug, Clone)]
 struct ConsumerPosition {
-    consumer_id: u64,
     current_sequence: u64,
     last_read_timestamp: std::time::SystemTime,
 }
@@ -89,7 +88,6 @@ impl MultiConsumerQueue {
         positions.insert(
             consumer_id,
             ConsumerPosition {
-                consumer_id,
                 current_sequence,
                 last_read_timestamp: std::time::SystemTime::now(),
             },
