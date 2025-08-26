@@ -13,7 +13,6 @@ pub async fn startup(command_name: &str) {
         global_args,
         config_file,
         plugin_dir,
-        plugin_exclude,
         color,
         no_color,
         log_format,
@@ -45,7 +44,6 @@ pub async fn startup(command_name: &str) {
         .clone()
         .or(final_args.plugin_dir.clone())
         .or(dirs::config_dir().map(|d| d.join(command_title).to_string_lossy().to_string()));
-    let plugin_exclude = plugin_exclude.clone().or(final_args.plugin_exclude.clone());
     let color = color || final_args.color;
     let no_color = no_color || final_args.no_color;
     let use_color = (color || atty::is(atty::Stream::Stdout)) && !no_color;
@@ -76,10 +74,7 @@ pub async fn startup(command_name: &str) {
 
     // Stage 4: Command discovery and segmentation
     let _plugin_dir = plugin_dir.as_deref().or(final_args.plugin_dir.as_deref());
-    let _plugin_exclude = plugin_exclude
-        .as_deref()
-        .or(final_args.plugin_exclude.as_deref());
-    let commands = discover_commands(_plugin_dir, _plugin_exclude);
+    let commands = discover_commands(_plugin_dir);
     log::trace!("Discovered commands: {:?}", commands);
 
     let segmenter = CommandSegmenter::with_commands(commands);
@@ -96,8 +91,8 @@ pub async fn startup(command_name: &str) {
 }
 
 /// Discover plugins and return list of available commands
-fn discover_commands(plugin_dir: Option<&str>, plugin_exclude: Option<&str>) -> Vec<String> {
-    log::trace!("Plugin discovery - dir: {plugin_dir:?}, exclude: {plugin_exclude:?}");
+fn discover_commands(plugin_dir: Option<&str>) -> Vec<String> {
+    log::trace!("Plugin discovery - dir: {plugin_dir:?}");
 
     vec![
         "dump".to_string(),

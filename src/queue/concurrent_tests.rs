@@ -538,7 +538,7 @@ mod tests {
         let consumer1 = manager
             .create_consumer("cleanup-consumer-1".to_string())
             .unwrap();
-        let consumer2 = manager
+        let _consumer2 = manager
             .create_consumer("cleanup-consumer-2".to_string())
             .unwrap();
         let publisher = manager

@@ -3,6 +3,7 @@
 //! See docs/service_registry.md for complete documentation.
 
 use crate::notifications::api::AsyncNotificationManager;
+use crate::plugin::PluginManager;
 use crate::queue::QueueManager;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
@@ -16,6 +17,7 @@ pub static SERVICES: LazyLock<ServiceRegistry> = LazyLock::new(ServiceRegistry::
 pub struct ServiceRegistry {
     notification_manager: Mutex<AsyncNotificationManager>,
     queue_manager: Arc<QueueManager>,
+    plugin_manager: Mutex<PluginManager>,
 }
 
 impl ServiceRegistry {
@@ -24,6 +26,7 @@ impl ServiceRegistry {
         Self {
             notification_manager: Mutex::new(AsyncNotificationManager::new()),
             queue_manager: Arc::new(QueueManager::new()),
+            plugin_manager: Mutex::new(PluginManager::new(crate::get_plugin_api_version())),
         }
     }
 
@@ -39,6 +42,12 @@ impl ServiceRegistry {
     #[allow(dead_code)]
     pub fn queue_manager(&self) -> Arc<QueueManager> {
         Arc::clone(&self.queue_manager)
+    }
+
+    /// Access plugin manager from async context
+    #[allow(dead_code)]
+    pub async fn plugin_manager(&self) -> tokio::sync::MutexGuard<'_, PluginManager> {
+        self.plugin_manager.lock().await
     }
 }
 

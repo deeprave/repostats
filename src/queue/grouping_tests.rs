@@ -7,7 +7,7 @@ mod tests {
     /// Test message type that implements grouping for testing
     #[derive(Debug, Clone)]
     struct TestGroupedMessage {
-        message: Message,
+        _message: Message,
         group_id: Option<String>,
         starts_group_with_count: Option<(String, usize)>,
         completes_group: Option<String>,
@@ -16,7 +16,7 @@ mod tests {
     impl TestGroupedMessage {
         fn new(producer_id: String, message_type: String, data: String) -> Self {
             Self {
-                message: Message::new(producer_id, message_type, data),
+                _message: Message::new(producer_id, message_type, data),
                 group_id: None,
                 starts_group_with_count: None,
                 completes_group: None,

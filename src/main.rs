@@ -1,9 +1,15 @@
 mod app;
 mod core;
 mod notifications;
+mod plugin;
 mod queue;
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
+
+/// Parse the API version string from build script into u32
+pub fn get_plugin_api_version() -> u32 {
+    PLUGIN_API_VERSION.parse().unwrap_or(20250727)
+}
 
 static COMMAND_NAME: &str = "repostats";
 

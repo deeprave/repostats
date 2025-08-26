@@ -4,10 +4,8 @@
 //! each with unique SHA256-based identification to prevent duplicate scanning.
 
 use crate::core::services::get_services;
-use crate::notifications::api::{
-    Event, EventReceiver, SystemEvent, SystemEventType,
-};
-use crate::notifications::event::{EventFilter, ScanEvent, ScanEventType, QueueEventType};
+use crate::notifications::api::{Event, EventReceiver, SystemEvent, SystemEventType};
+use crate::notifications::event::{EventFilter, QueueEventType, ScanEvent, ScanEventType};
 use crate::queue::{Message, QueuePublisher};
 use crate::scanner::error::{ScanError, ScanResult};
 use serde::{Deserialize, Serialize};
@@ -582,14 +580,14 @@ pub struct QueryParams {
 /// Central scanner manager for coordinating multiple repository scanner tasks
 pub struct ScannerManager {
     /// Active scanner tasks by repository hash
-    scanner_tasks: HashMap<String, String>, // hash -> repository path
+    _scanner_tasks: HashMap<String, String>, // hash -> repository path
 }
 
 impl ScannerManager {
     /// Create a new ScannerManager instance
     pub fn new() -> Self {
         Self {
-            scanner_tasks: HashMap::new(),
+            _scanner_tasks: HashMap::new(),
         }
     }
 
@@ -636,8 +634,8 @@ impl ScannerManager {
             };
 
             // Remove .git extension if present
-            let normalised = if host_path.ends_with(".git") {
-                &host_path[..host_path.len() - 4]
+            let normalised = if let Some(stripped) = host_path.strip_suffix(".git") {
+                stripped
             } else {
                 host_path
             };
@@ -693,7 +691,7 @@ mod tests {
         let manager = ScannerManager::create().await;
 
         // Should successfully create a ScannerManager with empty scanner tasks
-        assert_eq!(manager.scanner_tasks.len(), 0);
+        assert_eq!(manager._scanner_tasks.len(), 0);
     }
 
     #[tokio::test]
@@ -784,7 +782,7 @@ mod tests {
             ),
         ];
 
-        for (input, expected_normalised) in test_cases {
+        for (input, _expected_normalised) in test_cases {
             let result = manager.generate_scanner_id(input);
 
             // Should succeed now
@@ -1250,11 +1248,17 @@ mod tests {
             Err(_) => panic!("Should be able to resolve short commit SHA"),
         }
 
-        // Test resolving current branch name 
-        let current_branch = repo.head().unwrap().referent_name().map(|name| name.as_bstr().to_string());
+        // Test resolving current branch name
+        let current_branch = repo
+            .head()
+            .unwrap()
+            .referent_name()
+            .map(|name| name.as_bstr().to_string());
         match current_branch {
             Some(full_ref_name) => {
-                let branch_name = full_ref_name.strip_prefix("refs/heads/").unwrap_or(&full_ref_name);
+                let branch_name = full_ref_name
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(&full_ref_name);
                 match scanner_task.resolve_start_point(branch_name).await {
                     Ok(commit_id) => {
                         // Should resolve to same commit as HEAD in this test repo
@@ -1262,9 +1266,15 @@ mod tests {
                             commit_id.len() >= 40,
                             "Branch resolution should return full SHA"
                         );
-                        assert_eq!(commit_id, full_sha, "Branch should resolve to same commit as HEAD");
+                        assert_eq!(
+                            commit_id, full_sha,
+                            "Branch should resolve to same commit as HEAD"
+                        );
                     }
-                    Err(e) => panic!("Should be able to resolve current branch '{}': {:?}", branch_name, e),
+                    Err(e) => panic!(
+                        "Should be able to resolve current branch '{}': {:?}",
+                        branch_name, e
+                    ),
                 }
             }
             None => {
