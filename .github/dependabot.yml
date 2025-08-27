@@ -9,7 +9,24 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+      security-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "security"
+     dev-dependencies:
+        dependency-type: "development"
+    assignees:
+      - "deeprave"
+    reviewers:
+      - "deeprave"
   - package-ecosystem: "github-actions" # GitHub Actions ecosystem
     directory: "/" # Location of workflow files
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 10
