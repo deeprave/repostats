@@ -15,9 +15,8 @@ use crate::plugin::{PluginInfo, PluginResult};
 use std::path::{Path, PathBuf};
 
 /// Plugin discovery that handles all plugin types
-pub struct PluginDiscovery {
-    external_discovery: ExternalPluginDiscovery,
-    builtin_discovery: BuiltinPluginDiscovery,
+pub(crate) struct PluginDiscovery {
+    config: DiscoveryConfig,
 }
 
 /// Discovery result with plugin metadata and loading mechanism
@@ -45,21 +44,21 @@ pub enum PluginSource {
 
 /// Configuration for plugin discovery
 #[derive(Debug, Clone)]
-pub struct DiscoveryConfig {
-    /// Plugin directories to search (defaults to platform-specific paths)
-    pub search_paths: Vec<PathBuf>,
+pub(crate) struct DiscoveryConfig {
+    /// Plugin directory to search (defaults to platform-specific path)
+    pub search_path: Option<PathBuf>,
     /// Plugins to exclude from discovery
     pub excluded_plugins: Vec<String>,
-    /// Whether to include built-in plugins
+    /// Whether to include built-in plugins (internal use)
     pub include_builtins: bool,
-    /// Whether to include external plugins
+    /// Whether to include external plugins (internal use)
     pub include_externals: bool,
 }
 
 impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
-            search_paths: get_default_plugin_paths(),
+            search_path: get_default_plugin_path(),
             excluded_plugins: Vec::new(),
             include_builtins: true,
             include_externals: true,
@@ -68,68 +67,109 @@ impl Default for DiscoveryConfig {
 }
 
 /// External plugin discovery for cdylib binaries with YAML manifests
-pub struct ExternalPluginDiscovery;
+pub(crate) struct ExternalPluginDiscovery;
 
 /// Built-in plugin discovery (minimal component)
-pub struct BuiltinPluginDiscovery;
+pub(crate) struct BuiltinPluginDiscovery;
 
 impl PluginDiscovery {
-    /// Create new plugin discovery
-    pub fn new() -> Self {
+    /// Create plugin discovery with specified search path
+    pub(crate) fn with_path(search_path: Option<&str>) -> Self {
+        let mut config = DiscoveryConfig::default();
+        if let Some(path) = search_path {
+            config.search_path = Some(PathBuf::from(path));
+        }
+        
         Self {
-            external_discovery: ExternalPluginDiscovery::new(),
-            builtin_discovery: BuiltinPluginDiscovery::new(),
+            config,
         }
     }
 
-    /// Discover all available plugins
-    pub async fn discover_plugins(
-        &self,
-        config: &DiscoveryConfig,
-    ) -> PluginResult<Vec<DiscoveredPlugin>> {
+    /// Create plugin discovery with exclusions
+    pub(crate) fn with_excludes(excludes: Vec<&str>) -> Self {
+        let mut config = DiscoveryConfig::default();
+        config.excluded_plugins = excludes.iter().map(|s| s.to_string()).collect();
+        
+        Self {
+            config,
+        }
+    }
+
+    /// Create plugin discovery with path and exclusions
+    pub(crate) fn with_path_and_excludes(search_path: Option<&str>, excludes: Vec<&str>) -> Self {
+        let mut config = DiscoveryConfig::default();
+        if let Some(path) = search_path {
+            config.search_path = Some(PathBuf::from(path));
+        }
+        config.excluded_plugins = excludes.iter().map(|s| s.to_string()).collect();
+        
+        Self {
+            config,
+        }
+    }
+
+    /// Internal method to control plugin type inclusion
+    pub(crate) fn with_inclusion_config(
+        search_path: Option<&str>,
+        excludes: Vec<&str>,
+        include_builtins: bool,
+        include_externals: bool,
+    ) -> Self {
+        let mut config = DiscoveryConfig::default();
+        if let Some(path) = search_path {
+            config.search_path = Some(PathBuf::from(path));
+        }
+        config.excluded_plugins = excludes.iter().map(|s| s.to_string()).collect();
+        config.include_builtins = include_builtins;
+        config.include_externals = include_externals;
+        
+        Self {
+            config,
+        }
+    }
+
+    /// Discover all available plugins using internal configuration
+    pub(crate) async fn discover_plugins(&self) -> PluginResult<Vec<DiscoveredPlugin>> {
         let mut plugins = Vec::new();
 
-        // 1. Discover external plugins (main focus)
-        if config.include_externals {
-            let external_plugins = self
-                .external_discovery
-                .discover_external_plugins(config)
-                .await?;
+        // 1. Discover external plugins (main focus) - create on demand
+        if self.config.include_externals {
+            let external_discovery = ExternalPluginDiscovery::new();
+            let external_plugins = external_discovery.discover_external_plugins(&self.config).await?;
             plugins.extend(external_plugins);
         }
 
-        // 2. Discover builtin plugins (small part)
-        if config.include_builtins {
-            let builtin_plugins = self.builtin_discovery.discover_builtin_plugins().await?;
+        // 2. Discover builtin plugins (small part) - create on demand
+        if self.config.include_builtins {
+            let builtin_discovery = BuiltinPluginDiscovery::new();
+            let builtin_plugins = builtin_discovery.discover_builtin_plugins().await?;
             plugins.extend(builtin_plugins);
         }
 
         // 3. Apply exclusions
-        plugins.retain(|plugin| !config.excluded_plugins.contains(&plugin.info.name));
+        plugins.retain(|plugin| !self.config.excluded_plugins.contains(&plugin.info.name));
 
         Ok(plugins)
     }
 }
 
 impl ExternalPluginDiscovery {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 
     /// Discover external plugin libraries with YAML manifests
-    pub async fn discover_external_plugins(
+    pub(crate) async fn discover_external_plugins(
         &self,
         config: &DiscoveryConfig,
     ) -> PluginResult<Vec<DiscoveredPlugin>> {
         let mut plugins = Vec::new();
 
-        for search_path in &config.search_paths {
-            if !search_path.exists() {
-                continue;
+        if let Some(search_path) = &config.search_path {
+            if search_path.exists() {
+                let path_plugins = self.scan_plugin_directory(search_path).await?;
+                plugins.extend(path_plugins);
             }
-
-            let path_plugins = self.scan_plugin_directory(search_path).await?;
-            plugins.extend(path_plugins);
         }
 
         Ok(plugins)
@@ -152,12 +192,12 @@ impl ExternalPluginDiscovery {
 }
 
 impl BuiltinPluginDiscovery {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 
     /// Discover built-in plugins (minimal set)
-    pub async fn discover_builtin_plugins(&self) -> PluginResult<Vec<DiscoveredPlugin>> {
+    pub(crate) async fn discover_builtin_plugins(&self) -> PluginResult<Vec<DiscoveredPlugin>> {
         use crate::plugin::builtin::dump::DumpPlugin;
 
         let plugins = vec![DiscoveredPlugin {
@@ -168,7 +208,7 @@ impl BuiltinPluginDiscovery {
                 author: "RepoStats".to_string(),
                 api_version: crate::get_plugin_api_version(),
             },
-            source: PluginSource::BuiltinConsumer {
+            source: PluginSource::Builtin {
                 factory: || Box::new(DumpPlugin::new()),
             },
             manifest_path: None,
@@ -178,29 +218,20 @@ impl BuiltinPluginDiscovery {
     }
 }
 
-/// Get platform-specific default plugin search paths using dirs library
-fn get_default_plugin_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
-    // User-specific plugin directory
+/// Get platform-specific default plugin search path using dirs library
+pub(crate) fn get_default_plugin_path() -> Option<PathBuf> {
+    // User-specific plugin directory (preferred)
     if let Some(config_dir) = dirs::config_dir() {
-        paths.push(config_dir.join("repostats").join("plugins"));
+        return Some(config_dir.join("Repostats"));
     }
 
-    // System-wide plugin directory
-    if let Some(data_dir) = dirs::data_dir() {
-        paths.push(data_dir.join("repostats").join("plugins"));
-    }
-
-    // Local plugins directory
-    paths.push(PathBuf::from("./plugins"));
-
-    paths
+    // Fallback to local plugins directory
+    Some(PathBuf::from("./plugins"))
 }
 
 impl Default for PluginDiscovery {
     fn default() -> Self {
-        Self::new()
+        Self::with_path(None)
     }
 }
 
@@ -222,7 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_discovery_creation() {
-        let _discovery = PluginDiscovery::new();
+        let _discovery = PluginDiscovery::with_path(None);
         assert!(true); // Basic creation test
     }
 
@@ -238,14 +269,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_discovery_includes_builtins() {
-        let discovery = PluginDiscovery::new();
-        let config = DiscoveryConfig {
-            include_builtins: true,
-            include_externals: false,
-            ..Default::default()
-        };
+        let mut discovery = PluginDiscovery::with_inclusion_config(
+            None,
+            vec![],
+            true,  // include_builtins
+            false, // include_externals
+        );
 
-        let plugins = discovery.discover_plugins(&config).await.unwrap();
+        let plugins = discovery.discover_plugins().await.unwrap();
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].info.name, "dump");
     }
@@ -255,16 +286,17 @@ mod tests {
         let config = DiscoveryConfig::default();
         assert!(config.include_builtins);
         assert!(config.include_externals);
-        assert!(config.search_paths.len() >= 2); // Should have at least user and local paths
+        assert!(config.search_path.is_some()); // Should have a default path
     }
 
     #[test]
-    fn test_default_plugin_paths() {
-        let paths = get_default_plugin_paths();
-        assert!(!paths.is_empty());
+    fn test_default_plugin_path() {
+        let path = get_default_plugin_path();
+        assert!(path.is_some());
 
-        // Should include local plugins directory
-        assert!(paths.iter().any(|p| p.ends_with("plugins")));
+        let path = path.unwrap();
+        // Should be either config dir with "Repostats" or local plugins
+        assert!(path.ends_with("Repostats") || path.ends_with("plugins"));
     }
 
     #[tokio::test]
@@ -279,13 +311,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_exclusions_filter_plugins() {
-        let discovery = PluginDiscovery::new();
-        let config = DiscoveryConfig {
-            excluded_plugins: vec!["dump".to_string()],
-            ..Default::default()
-        };
+        let mut discovery = PluginDiscovery::with_excludes(vec!["dump"]);
 
-        let plugins = discovery.discover_plugins(&config).await.unwrap();
+        let plugins = discovery.discover_plugins().await.unwrap();
         assert!(plugins.is_empty()); // dump should be filtered out
     }
 }
