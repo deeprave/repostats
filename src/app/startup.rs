@@ -20,7 +20,7 @@ pub async fn startup(command_name: &str) {
         log_file,
     } = initial_args(command_name);
     let command_title = title_case(command_name);
-    let use_color = (color || atty::is(atty::Stream::Stdout)) && !no_color;
+    let use_color = (color || std::io::IsTerminal::is_terminal(&std::io::stdout())) && !no_color;
 
     // Initialize logging
     let log_file_str = log_file.as_ref().map(|p| p.to_string_lossy().to_string());
@@ -46,7 +46,7 @@ pub async fn startup(command_name: &str) {
         .or(dirs::config_dir().map(|d| d.join(command_title).to_string_lossy().to_string()));
     let color = color || final_args.color;
     let no_color = no_color || final_args.no_color;
-    let use_color = (color || atty::is(atty::Stream::Stdout)) && !no_color;
+    let use_color = (color || std::io::IsTerminal::is_terminal(&std::io::stdout())) && !no_color;
 
     // Stage 2: Reconfigure logging with final values
     log::trace!("Reconfiguring logging with final values");
