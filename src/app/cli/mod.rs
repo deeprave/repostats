@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub mod api;
 pub mod args;
 pub mod command_segmenter;
+pub mod date_parser;
 
 pub struct RequiredArgs {
     pub global_args: Vec<String>,
