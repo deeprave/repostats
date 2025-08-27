@@ -3,7 +3,8 @@
 //! Central coordinator for plugin lifecycle, compatibility checking, and plugin proxy management.
 //! Owns the plugin registry and provides high-level plugin management operations.
 
-use crate::plugin::{DiscoveryConfig, PluginDiscovery, SharedPluginRegistry};
+use crate::plugin::SharedPluginRegistry;
+use crate::plugin::unified_discovery::PluginDiscovery;
 use crate::plugin::{PluginError, PluginFunction, PluginInfo, PluginResult};
 use crate::queue::QueueManager;
 use log::debug;
@@ -171,17 +172,28 @@ impl PluginManager {
         self.create_proxy(command)
     }
 
-    /// Discover and initialize plugins with injected configuration
-    pub async fn discover_plugins(&mut self, config: DiscoveryConfig) -> PluginResult<()> {
+    /// Discover and initialize plugins with simplified interface
+    pub async fn discover_plugins(
+        &mut self,
+        plugin_dir: Option<&str>,
+        exclusions: &[String],
+    ) -> PluginResult<()> {
         debug!(
-            "PluginManager: Starting plugin discovery with exclusions: {:?}",
-            config.excluded_plugins
+            "PluginManager: Starting plugin discovery with dir: {:?}, exclusions: {:?}",
+            plugin_dir, exclusions
+        );
+        
+
+        // Create discovery implementation with our configuration  
+        let exclusion_strs: Vec<&str> = exclusions.iter().map(|s| s.as_str()).collect();
+        let discovery = PluginDiscovery::with_inclusion_config(
+            plugin_dir,
+            exclusion_strs,
+            true,  // Always include builtins internally
+            true,  // Always include externals internally
         );
 
-        // Create discovery implementation
-        let discovery = PluginDiscovery::new();
-
-        let discovered_plugins = discovery.discover_plugins(&config).await?;
+        let discovered_plugins = discovery.discover_plugins().await?;
 
         // Register discovered plugins
         let mut registry = self.registry.inner().write().await;
@@ -579,22 +591,18 @@ mod tests {
     #[tokio::test]
     async fn test_plugin_discovery_finds_dump_plugin() {
         let mut manager = PluginManager::new(crate::get_plugin_api_version());
-        let config = DiscoveryConfig::default();
 
         // Should discover the dump plugin
-        manager.discover_plugins(config).await.unwrap();
+        manager.discover_plugins(None, &[]).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_plugin_discovery_with_exclusions() {
         let mut manager = PluginManager::new(crate::get_plugin_api_version());
-        let config = DiscoveryConfig {
-            excluded_plugins: vec!["excluded-plugin".to_string()],
-            ..Default::default()
-        };
-
+        
+        let exclusions = vec!["excluded-plugin".to_string()];
         // Should succeed (no plugins to exclude currently)
-        manager.discover_plugins(config).await.unwrap();
+        manager.discover_plugins(None, &exclusions).await.unwrap();
     }
 
     #[tokio::test]

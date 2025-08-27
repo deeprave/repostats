@@ -120,9 +120,9 @@ impl Plugin for DumpPlugin {
 
     fn advertised_functions(&self) -> Vec<PluginFunction> {
         vec![PluginFunction {
-            name: "start".to_string(),
+            name: "dump".to_string(),
             description: "Start dumping messages to stdout".to_string(),
-            aliases: vec!["run".to_string()],
+            aliases: vec!["start".to_string(), "run".to_string()],
         }]
     }
 
@@ -399,7 +399,8 @@ mod tests {
         let functions = plugin.advertised_functions();
 
         assert_eq!(functions.len(), 1);
-        assert_eq!(functions[0].name, "start");
+        assert_eq!(functions[0].name, "dump");
+        assert!(functions[0].aliases.contains(&"start".to_string()));
         assert!(functions[0].aliases.contains(&"run".to_string()));
     }
 

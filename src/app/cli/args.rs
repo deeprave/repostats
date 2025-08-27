@@ -29,6 +29,10 @@ pub struct Args {
     #[arg(short = 'p', long = "plugin-dir", value_name = "DIR")]
     pub plugin_dir: Option<String>,
 
+    /// Plugins to exclude from discovery*
+    #[arg(long = "exclude-plugin", value_name = "NAMES", action = ArgAction::Append)]
+    pub plugin_exclusions: Vec<String>,
+
     /// Force colored output (overrides TTY detection and NO_COLOR)
     #[arg(short = 'g', long = "color")]
     pub color: bool,
@@ -135,6 +139,7 @@ impl Default for Args {
             repository: Vec::new(),
             config_file: None,
             plugin_dir: None,
+            plugin_exclusions: Vec::new(),
             color: false,
             no_color: false,
             log_level: None,
@@ -176,6 +181,7 @@ impl Args {
     /// Apply enhanced parsing to handle comma-separated values, deduplication, and path validation
     pub fn apply_enhanced_parsing(&mut self) -> Result<(), String> {
         self.repository = Self::parse_comma_separated_paths(&self.repository);
+        self.plugin_exclusions = Self::parse_comma_separated_strings(&self.plugin_exclusions);
         self.author = Self::parse_comma_separated_strings(&self.author);
         self.exclude_author = Self::parse_comma_separated_strings(&self.exclude_author);
         self.files = Self::parse_comma_separated_path_patterns(&self.files)?;
@@ -369,6 +375,13 @@ impl Args {
                     .long("plugin-dir")
                     .value_name("DIR")
                     .help("Plugin directory override"),
+            )
+            .arg(
+                clap::Arg::new("plugin_exclusions")
+                    .long("exclude-plugin")
+                    .value_name("NAMES")
+                    .action(ArgAction::Append)
+                    .help(&format!("{} Plugins to exclude from discovery", star)),
             )
             // Output and display options
             .arg(
@@ -807,6 +820,24 @@ impl Args {
         if let Some(plugin_dir) = config.get("plugin-dir").and_then(|v| v.as_str()) {
             args.plugin_dir = Some(plugin_dir.to_string());
         }
+        
+        // Handle plugin exclusions (support both single string and array formats)
+        if let Some(exclusions_value) = config.get("exclude-plugin") {
+            let mut exclusion_strings = Vec::new();
+
+            if let Some(exclusion_str) = exclusions_value.as_str() {
+                exclusion_strings.push(exclusion_str.to_string());
+            } else if let Some(exclusion_array) = exclusions_value.as_array() {
+                for item in exclusion_array {
+                    if let Some(exclusion_str) = item.as_str() {
+                        exclusion_strings.push(exclusion_str.to_string());
+                    }
+                }
+            }
+
+            let deduplicated = Self::parse_comma_separated_strings(&exclusion_strings);
+            args.plugin_exclusions.extend(deduplicated);
+        }
         if let Some(color) = config.get("color").and_then(|v| v.as_bool()) {
             args.color = color;
         }
@@ -957,6 +988,9 @@ impl Args {
         }
         if let Some(plugin_dir) = matches.get_one::<String>("plugin_dir") {
             args.plugin_dir = Some(plugin_dir.clone());
+        }
+        if let Some(plugin_exclusions) = matches.get_many::<String>("plugin_exclusions") {
+            args.plugin_exclusions.extend(plugin_exclusions.cloned());
         }
         if matches.get_flag("color") {
             args.color = true;
@@ -1716,6 +1750,51 @@ mod tests {
             args2.extensions,
             vec!["rs".to_string(), "toml".to_string(), "md".to_string()]
         );
+    }
+
+    #[test]
+    fn test_plugin_exclusions_parsing() {
+        let args = vec![
+            "repostats".to_string(),
+            "--exclude-plugin".to_string(),
+            "dump".to_string(),
+        ];
+
+        let result = Args::try_parse_from(&args).unwrap();
+
+        assert_eq!(result.plugin_exclusions, vec!["dump".to_string()]);
+    }
+
+    #[test]
+    fn test_comma_separated_plugin_exclusions_parsing() {
+        let args = vec![
+            "repostats".to_string(),
+            "--exclude-plugin".to_string(),
+            "dump,plugin2,plugin3".to_string(),
+        ];
+
+        let mut result = Args::try_parse_from(&args).unwrap();
+        result.apply_enhanced_parsing().unwrap();
+
+        assert_eq!(
+            result.plugin_exclusions,
+            vec!["dump".to_string(), "plugin2".to_string(), "plugin3".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_multiple_plugin_exclusion_flags() {
+        let args = vec![
+            "repostats".to_string(),
+            "--exclude-plugin".to_string(),
+            "dump".to_string(),
+            "--exclude-plugin".to_string(),
+            "plugin2".to_string(),
+        ];
+
+        let result = Args::try_parse_from(&args).unwrap();
+
+        assert_eq!(result.plugin_exclusions, vec!["dump".to_string(), "plugin2".to_string()]);
     }
 
     #[test]
