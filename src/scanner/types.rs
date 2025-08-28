@@ -224,15 +224,10 @@ impl RepositoryDataBuilder {
 
 /// Helper function to format SystemTime for human readability
 fn format_system_time(time: &std::time::SystemTime) -> String {
-    use std::time::UNIX_EPOCH;
+    use chrono::{DateTime, Utc};
 
-    match time.duration_since(UNIX_EPOCH) {
-        Ok(duration) => {
-            // Simple timestamp formatting - could be enhanced with chrono if needed
-            let secs = duration.as_secs();
-            // This is a basic implementation - in a real app you'd want proper date formatting
-            format!("timestamp-{}", secs)
-        }
+    match DateTime::<Utc>::try_from(*time) {
+        Ok(datetime) => datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         Err(_) => "invalid-time".to_string(),
     }
 }
