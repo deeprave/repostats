@@ -157,23 +157,22 @@ impl ScannerManager {
         // Get the unique repository ID
         let repo_id = self.get_unique_repo_id(&repo)?;
 
-        // Check if this repository is already being scanned (lock the mutex)
-        {
-            let repo_ids = self.repo_ids.lock().unwrap();
-            if repo_ids.contains(&repo_id) {
-                return Err(ScanError::Configuration {
-                    message: format!(
-                        "Repository '{}' is already being scanned (duplicate detected via {})",
-                        repository_path,
-                        if repo_id.contains("://") {
-                            "remote URL"
-                        } else {
-                            "git directory"
-                        }
-                    ),
-                });
-            }
-        } // Lock is dropped here
+        // Use entry API for atomic check-and-insert to prevent race condition
+        let mut repo_ids = self.repo_ids.lock().unwrap();
+        if !repo_ids.insert(repo_id.clone()) {
+            return Err(ScanError::Configuration {
+                message: format!(
+                    "Repository '{}' is already being scanned (duplicate detected via {})",
+                    repository_path,
+                    if repo_id.contains("://") {
+                        "remote URL"
+                    } else {
+                        "git directory"
+                    }
+                ),
+            });
+        }
+        // Hold the lock until after scanner creation to prevent duplicates
 
         // Generate scanner ID from the unique repo ID
         let scanner_id = self.generate_scanner_id(&repo_id)?;
@@ -205,11 +204,7 @@ impl ScannerManager {
                 ),
             })?;
 
-        // All operations succeeded - now it's safe to add to the set of known repositories
-        {
-            let mut repo_ids = self.repo_ids.lock().unwrap();
-            repo_ids.insert(repo_id.clone());
-        }
+        // Lock is held until here - scanner successfully created
 
         log::debug!(
             "Scanner created successfully for repository: {} (ID: {}, Scanner: {})",
