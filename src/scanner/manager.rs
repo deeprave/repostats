@@ -3,584 +3,19 @@
 //! Central coordination component for managing multiple repository scanner tasks,
 //! each with unique SHA256-based identification to prevent duplicate scanning.
 
-use crate::core::services::get_services;
-use crate::notifications::api::{Event, EventReceiver, SystemEvent, SystemEventType};
-use crate::notifications::event::{EventFilter, QueueEventType, ScanEvent, ScanEventType};
-use crate::queue::{Message, QueuePublisher};
 use crate::scanner::error::{ScanError, ScanResult};
-use serde::{Deserialize, Serialize};
+use crate::scanner::task::ScannerTask;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::SystemTime;
-
-/// Scanner message types for queue integration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ScanMessage {
-    /// Repository scanning started
-    ScanStarted {
-        scanner_id: String,
-        repository_path: String,
-        timestamp: SystemTime,
-    },
-    /// Commit discovered during scanning
-    CommitData {
-        scanner_id: String,
-        commit_info: CommitInfo,
-        timestamp: SystemTime,
-    },
-    /// File change detected
-    FileChange {
-        scanner_id: String,
-        file_path: String,
-        change_data: FileChangeData,
-        commit_context: CommitInfo,
-        timestamp: SystemTime,
-    },
-    /// Repository scanning completed
-    ScanCompleted {
-        scanner_id: String,
-        repository_path: String,
-        stats: ScanStats,
-        timestamp: SystemTime,
-    },
-    /// Scanner error occurred
-    ScanError {
-        scanner_id: String,
-        error: String,
-        context: String,
-        timestamp: SystemTime,
-    },
-}
-
-/// Commit information extracted from git repository
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommitInfo {
-    pub hash: String,
-    pub short_hash: String,
-    pub author_name: String,
-    pub author_email: String,
-    pub committer_name: String,
-    pub committer_email: String,
-    pub timestamp: SystemTime,
-    pub message: String,
-    pub parent_hashes: Vec<String>,
-    pub insertions: usize,
-    pub deletions: usize,
-}
-
-/// File change information within a commit
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileChangeData {
-    pub change_type: ChangeType,
-    pub old_path: Option<String>,
-    pub new_path: String,
-    pub insertions: usize,
-    pub deletions: usize,
-    pub is_binary: bool,
-}
-
-/// Type of file change
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ChangeType {
-    Added,
-    Modified,
-    Deleted,
-    Renamed,
-    Copied,
-}
-
-/// Repository scanning statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScanStats {
-    pub total_commits: usize,
-    pub total_files_changed: usize,
-    pub total_insertions: usize,
-    pub total_deletions: usize,
-    pub scan_duration: std::time::Duration,
-}
-
-/// Individual scanner task for a specific repository
-#[derive(Clone)]
-pub struct ScannerTask {
-    /// Unique scanner ID (scan-<sha256>)
-    scanner_id: String,
-    /// Repository path (local or remote URL)
-    repository_path: String,
-}
-
-impl ScannerTask {
-    /// Create a new ScannerTask for a repository
-    pub async fn new(manager: &ScannerManager, repository_path: &str) -> ScanResult<Self> {
-        // Validate the repository first
-        if let Ok(path) = std::path::Path::new(repository_path).canonicalize() {
-            manager.validate_repository(&path)?;
-        }
-
-        // Generate unique scanner ID using the manager
-        let scanner_id = manager.generate_scanner_id(repository_path)?;
-
-        // Create the scanner task
-        Ok(Self {
-            scanner_id,
-            repository_path: repository_path.to_string(),
-        })
-    }
-
-    /// Get the scanner ID
-    pub fn scanner_id(&self) -> &str {
-        &self.scanner_id
-    }
-
-    /// Get the repository path
-    pub fn repository_path(&self) -> &str {
-        &self.repository_path
-    }
-
-    /// Create a queue publisher for this scanner task
-    pub async fn create_queue_publisher(&self) -> ScanResult<QueuePublisher> {
-        // Get the queue manager from services
-        let services = get_services();
-        let queue_manager = services.queue_manager();
-
-        // Create a publisher using the scanner ID as the producer ID
-        let publisher = queue_manager
-            .create_publisher(self.scanner_id.clone())
-            .map_err(|e| ScanError::Configuration {
-                message: format!("Failed to create queue publisher: {}", e),
-            })?;
-
-        Ok(publisher)
-    }
-
-    /// Create a notification subscriber for this scanner task
-    pub async fn create_notification_subscriber(&self) -> ScanResult<EventReceiver> {
-        // Get the notification manager from services
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
-
-        // Create a subscriber using the scanner ID with queue event filter
-        let subscriber_id = format!("{}-notifications", self.scanner_id);
-        let filter = EventFilter::QueueOnly; // Scanner is interested in queue events
-        let source = format!("Scanner-{}", self.scanner_id);
-
-        let receiver = notification_manager
-            .subscribe(subscriber_id, filter, source)
-            .map_err(|e| ScanError::Configuration {
-                message: format!("Failed to create notification subscriber: {}", e),
-            })?;
-
-        Ok(receiver)
-    }
-
-    /// Open the git repository using gix
-    pub async fn open_repository(&self) -> ScanResult<gix::Repository> {
-        // For local repositories, try to open directly
-        if !self.repository_path.contains("://") {
-            // It's a local path
-            let path = Path::new(&self.repository_path);
-
-            // Use spawn_blocking for potentially blocking gix operations
-            let repo_path = path.to_path_buf();
-            let repo = tokio::task::spawn_blocking(move || gix::discover(&repo_path))
-                .await
-                .map_err(|e| ScanError::Io {
-                    message: format!("Task execution failed: {}", e),
-                })?
-                .map_err(|e| ScanError::Repository {
-                    message: format!("Failed to open repository '{}': {}", path.display(), e),
-                })?;
-
-            Ok(repo)
-        } else {
-            // Remote repository - not yet supported
-            Err(ScanError::Configuration {
-                message: "Remote repository support not yet implemented".to_string(),
-            })
-        }
-    }
-
-    /// Scan commits in the repository and generate scan messages
-    pub async fn scan_commits(&self) -> ScanResult<Vec<ScanMessage>> {
-        // Publish scanner started event
-        self.publish_scanner_event(
-            ScanEventType::Started,
-            Some("Starting repository scan".to_string()),
-        )
-        .await?;
-
-        // Open the repository - if this fails, publish error event
-        let repo = match self.open_repository().await {
-            Ok(repo) => repo,
-            Err(e) => {
-                let error_msg = format!("Failed to open repository: {}", e);
-                self.publish_scanner_event(ScanEventType::Error, Some(error_msg.clone()))
-                    .await
-                    .ok(); // Don't fail on event error
-                return Err(e);
-            }
-        };
-        let mut messages = Vec::new();
-
-        // Add scan started message
-        messages.push(ScanMessage::ScanStarted {
-            scanner_id: self.scanner_id.clone(),
-            repository_path: self.repository_path.clone(),
-            timestamp: SystemTime::now(),
-        });
-
-        // Use spawn_blocking for potentially blocking git operations
-        let scanner_id = self.scanner_id.clone();
-
-        let commit_messages = tokio::task::spawn_blocking(move || {
-            let mut result_messages = Vec::new();
-
-            // Get HEAD reference and traverse commits
-            let mut head = repo.head()?;
-            let commit = head.peel_to_commit_in_place()?;
-
-            // Basic commit traversal - just get the HEAD commit for now
-            let author = commit.author()?;
-            let committer = commit.committer()?;
-            let time = commit.time()?;
-            let message = commit.message()?;
-
-            let commit_info = CommitInfo {
-                hash: commit.id().to_string(),
-                short_hash: commit.id().to_string()[..8].to_string(),
-                author_name: author.name.to_string(),
-                author_email: author.email.to_string(),
-                committer_name: committer.name.to_string(),
-                committer_email: committer.email.to_string(),
-                timestamp: SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(time.seconds as u64),
-                message: message
-                    .body()
-                    .map(|b| b.to_string())
-                    .unwrap_or_else(|| message.summary().to_string()),
-                parent_hashes: commit.parent_ids().map(|id| id.to_string()).collect(),
-                insertions: 0, // Will be implemented with diff parsing
-                deletions: 0,  // Will be implemented with diff parsing
-            };
-
-            result_messages.push(ScanMessage::CommitData {
-                scanner_id: scanner_id.clone(),
-                commit_info,
-                timestamp: SystemTime::now(),
-            });
-
-            Ok::<Vec<ScanMessage>, Box<dyn std::error::Error + Send + Sync>>(result_messages)
-        })
-        .await
-        .map_err(|e| ScanError::Io {
-            message: format!("Task execution failed: {}", e),
-        })?
-        .map_err(|e| ScanError::Repository {
-            message: format!("Failed to scan commits: {}", e),
-        })?;
-
-        messages.extend(commit_messages);
-
-        // Add scan completed message
-        messages.push(ScanMessage::ScanCompleted {
-            scanner_id: self.scanner_id.clone(),
-            repository_path: self.repository_path.clone(),
-            stats: ScanStats {
-                total_commits: 1, // Basic implementation with just HEAD
-                total_files_changed: 0,
-                total_insertions: 0,
-                total_deletions: 0,
-                scan_duration: std::time::Duration::from_millis(0),
-            },
-            timestamp: SystemTime::now(),
-        });
-
-        // Publish scanner completed event
-        self.publish_scanner_event(
-            ScanEventType::Completed,
-            Some("Repository scan completed successfully".to_string()),
-        )
-        .await?;
-
-        Ok(messages)
-    }
-
-    /// Publish scan messages to the queue
-    pub async fn publish_messages(&self, messages: Vec<ScanMessage>) -> ScanResult<()> {
-        // Create a queue publisher
-        let publisher = self.create_queue_publisher().await?;
-
-        // Publish each message to the queue
-        for scan_message in messages {
-            // Serialize the scan message to JSON
-            let json_data = serde_json::to_string(&scan_message).map_err(|e| ScanError::Io {
-                message: format!("Failed to serialize message: {}", e),
-            })?;
-
-            // Determine message type based on scan message variant
-            let message_type = match &scan_message {
-                ScanMessage::ScanStarted { .. } => "scan_started",
-                ScanMessage::CommitData { .. } => "commit_data",
-                ScanMessage::FileChange { .. } => "file_change",
-                ScanMessage::ScanCompleted { .. } => "scan_completed",
-                ScanMessage::ScanError { .. } => "scan_error",
-            };
-
-            // Create a queue message
-            let queue_message =
-                Message::new(self.scanner_id.clone(), message_type.to_string(), json_data);
-
-            // Publish to the queue (not async)
-            publisher
-                .publish(queue_message)
-                .map_err(|e| ScanError::Io {
-                    message: format!("Failed to publish message to queue: {}", e),
-                })?;
-        }
-
-        Ok(())
-    }
-
-    /// Publish scanner lifecycle events via notification system
-    pub async fn publish_scanner_event(
-        &self,
-        event_type: ScanEventType,
-        message: Option<String>,
-    ) -> ScanResult<()> {
-        // Get the notification manager from services
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
-
-        // Create scanner event
-        let scan_event = ScanEvent {
-            event_type,
-            timestamp: SystemTime::now(),
-            scan_id: self.scanner_id.clone(),
-            message,
-        };
-
-        // Wrap in main Event enum
-        let event = Event::Scan(scan_event);
-
-        // Publish the event
-        notification_manager
-            .publish(event)
-            .await
-            .map_err(|e| ScanError::Io {
-                message: format!("Failed to publish scanner event: {}", e),
-            })?;
-
-        Ok(())
-    }
-
-    /// Subscribe to queue events to trigger scanning operations
-    pub async fn subscribe_to_queue_events(&self) -> ScanResult<EventReceiver> {
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
-
-        // Subscribe to queue events only
-        let receiver = notification_manager
-            .subscribe(
-                format!("scanner-{}", self.scanner_id),
-                EventFilter::QueueOnly,
-                "scanner-queue-subscription".to_string(),
-            )
-            .map_err(|e| ScanError::Io {
-                message: format!("Failed to subscribe to queue events: {}", e),
-            })?;
-
-        Ok(receiver)
-    }
-
-    /// Handle queue started events and trigger scanning operations
-    pub async fn handle_queue_started_event(
-        &self,
-        mut receiver: EventReceiver,
-    ) -> ScanResult<bool> {
-        // Wait for a queue started event
-        tokio::select! {
-            event_result = receiver.recv() => {
-                match event_result {
-                    Some(Event::Queue(queue_event)) => {
-                        if queue_event.event_type == QueueEventType::Started {
-                            // Queue started - trigger scanning operation
-                            let _scan_messages = self.scan_commits().await?;
-                            return Ok(true);
-                        }
-                        Ok(false)
-                    },
-                    Some(_) => Ok(false), // Not a queue event
-                    None => Ok(false), // Channel closed
-                }
-            },
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                // Timeout for test purposes
-                Ok(false)
-            }
-        }
-    }
-
-    /// Handle scanner shutdown via system events
-    pub async fn handle_shutdown_event(&self) -> ScanResult<bool> {
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
-
-        // For testing: immediately publish a shutdown event
-        let shutdown_event = Event::System(SystemEvent::new(SystemEventType::Shutdown));
-        let _ = notification_manager.publish(shutdown_event).await;
-
-        // Subscribe to system events to listen for shutdown
-        let mut receiver = notification_manager
-            .subscribe(
-                format!("scanner-shutdown-{}", self.scanner_id),
-                EventFilter::SystemOnly,
-                "scanner-shutdown-subscription".to_string(),
-            )
-            .map_err(|e| ScanError::Io {
-                message: format!("Failed to subscribe to system events: {}", e),
-            })?;
-
-        // Wait for shutdown event with timeout
-        tokio::select! {
-            event_result = receiver.recv() => {
-                match event_result {
-                    Some(Event::System(system_event)) => {
-                        if system_event.event_type == SystemEventType::Shutdown {
-                            // Publish final scanner event before shutdown
-                            let _ = self.publish_scanner_event(
-                                ScanEventType::Completed,
-                                Some("Scanner shutting down gracefully".to_string())
-                            ).await;
-                            return Ok(true);
-                        }
-                        Ok(false)
-                    },
-                    Some(_) => Ok(false), // Not a system event
-                    None => Ok(false), // Channel closed
-                }
-            },
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                // Timeout - assume shutdown handled for test purposes
-                Ok(true)
-            }
-        }
-    }
-
-    /// Resolve start point (commit SHA, branch name, tag name) to full commit SHA
-    pub async fn resolve_start_point(&self, start_point: &str) -> ScanResult<String> {
-        let repository_path = self.repository_path.clone();
-        let start_point = start_point.to_string();
-
-        // Use spawn_blocking for potentially blocking git operations
-        tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repository_path).map_err(|e| ScanError::Git {
-                message: format!("Failed to open repository: {}", e),
-            })?;
-
-            // Try to resolve the reference
-            let resolved =
-                repo.rev_parse_single(start_point.as_str())
-                    .map_err(|e| ScanError::Git {
-                        message: format!("Failed to resolve reference '{}': {}", start_point, e),
-                    })?;
-
-            // Get the commit SHA
-            let commit_id = resolved.to_hex_with_len(40).to_string();
-            Ok(commit_id)
-        })
-        .await
-        .map_err(|e| ScanError::Io {
-            message: format!("Failed to execute git operation: {}", e),
-        })?
-    }
-
-    /// Reconstruct file content at a specific commit using git operations
-    pub async fn reconstruct_file_content(
-        &self,
-        file_path: &str,
-        commit_sha: &str,
-    ) -> ScanResult<String> {
-        let repository_path = self.repository_path.clone();
-        let file_path = file_path.to_string();
-        let commit_sha = commit_sha.to_string();
-
-        // Use spawn_blocking for potentially blocking git operations
-        tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repository_path).map_err(|e| ScanError::Git {
-                message: format!("Failed to open repository: {}", e),
-            })?;
-
-            // Validate that the commit exists
-            repo.rev_parse_single(commit_sha.as_str())
-                .map_err(|e| ScanError::Git {
-                    message: format!("Failed to resolve commit '{}': {}", commit_sha, e),
-                })?;
-
-            // For Phase 6 initial implementation: read file from working directory
-            // This demonstrates the API and basic functionality
-            // Full historical reconstruction will be implemented in later phases
-            let file_full_path = std::path::Path::new(&repository_path).join(&file_path);
-
-            if !file_full_path.exists() {
-                return Err(ScanError::Git {
-                    message: format!("File '{}' not found in commit '{}'", file_path, commit_sha),
-                });
-            }
-
-            let content = std::fs::read_to_string(&file_full_path).map_err(|e| ScanError::Git {
-                message: format!("Failed to read file '{}': {}", file_path, e),
-            })?;
-
-            Ok(content)
-        })
-        .await
-        .map_err(|e| ScanError::Io {
-            message: format!("Failed to execute git operation: {}", e),
-        })?
-    }
-
-    // Phase 7: Scanner Filters and Query Parameters
-    /// Apply scanning filters based on query parameters
-    pub async fn apply_scan_filters(&self, _query_params: QueryParams) -> ScanResult<()> {
-        // Phase 7 placeholder - will implement filtering logic
-        Ok(())
-    }
-
-    // Phase 8: Advanced Git Operations
-    /// Perform advanced git operations for comprehensive scanning
-    pub async fn perform_advanced_git_operations(&self) -> ScanResult<Vec<String>> {
-        // Phase 8 placeholder - will implement advanced git operations
-        Ok(vec!["advanced-operation-1".to_string()])
-    }
-
-    // Phase 9: Integration Testing and Polish
-    /// Run integration tests for scanner functionality
-    pub async fn run_integration_tests(&self) -> ScanResult<bool> {
-        // Phase 9 placeholder - will implement integration testing
-        Ok(true)
-    }
-}
-
-/// Query parameters for filtering scan operations (Phase 7)
-#[derive(Debug, Clone)]
-pub struct QueryParams {
-    /// Start date for filtering commits
-    pub start_date: Option<chrono::DateTime<chrono::Utc>>,
-    /// End date for filtering commits
-    pub end_date: Option<chrono::DateTime<chrono::Utc>>,
-    /// File patterns to include
-    pub include_patterns: Vec<String>,
-    /// File patterns to exclude
-    pub exclude_patterns: Vec<String>,
-    /// Author filter
-    pub author_filter: Option<String>,
-}
+use std::sync::{Arc, Mutex};
 
 /// Central scanner manager for coordinating multiple repository scanner tasks
 pub struct ScannerManager {
     /// Active scanner tasks by repository hash
     _scanner_tasks: HashMap<String, String>, // hash -> repository path
+    /// Repository IDs to prevent duplicate scanners (wrapped in Mutex for thread safety)
+    repo_ids: Mutex<HashSet<String>>,
 }
 
 impl ScannerManager {
@@ -588,6 +23,7 @@ impl ScannerManager {
     pub fn new() -> Self {
         Self {
             _scanner_tasks: HashMap::new(),
+            repo_ids: Mutex::new(HashSet::new()),
         }
     }
 
@@ -596,13 +32,29 @@ impl ScannerManager {
         Arc::new(Self::new())
     }
 
-    /// Validate a repository path using gix
-    pub fn validate_repository(&self, repository_path: &Path) -> ScanResult<()> {
+    /// Validate a repository path using gix and return the Repository and normalized path
+    pub fn validate_repository(
+        &self,
+        repository_path: &Path,
+    ) -> ScanResult<(gix::Repository, PathBuf)> {
+        // For now, reject remote URLs
+        let path_str = repository_path.to_string_lossy();
+        if path_str.contains("://") {
+            return Err(ScanError::Configuration {
+                message: "Remote repository URLs are not yet supported".to_string(),
+            });
+        }
+
         // Attempt to discover and open the repository using gix
         match gix::discover(repository_path) {
-            Ok(_repo) => {
-                // Repository is valid
-                Ok(())
+            Ok(repo) => {
+                // Get the normalized path (the actual git directory)
+                let git_dir = repo.git_dir().to_path_buf();
+
+                // Try to canonicalize to resolve symlinks and normalize
+                let normalized_path = git_dir.canonicalize().unwrap_or_else(|_| git_dir.clone());
+
+                Ok((repo, normalized_path))
             }
             Err(e) => {
                 // Repository validation failed
@@ -665,25 +117,124 @@ impl ScannerManager {
         }
     }
 
-    /// Generate SHA256-based scanner ID for a repository
-    pub fn generate_scanner_id(&self, repository_path: &str) -> ScanResult<String> {
-        // Normalise the repository path first
-        let normalised_path = self.normalise_repository_path(repository_path)?;
+    /// Get a unique repository ID for deduplication
+    pub fn get_unique_repo_id(&self, repo: &gix::Repository) -> ScanResult<String> {
+        // Try to get the origin remote URL first (most unique for clones)
+        let config = repo.config_snapshot();
+        if let Some(remote_url) = config.string("remote.origin.url") {
+            return Ok(remote_url.to_string());
+        }
 
-        // Generate SHA256 hash of the normalised path
+        // Fallback to canonical git directory path
+        let git_dir = repo.git_dir();
+        git_dir
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .or_else(|_| Ok(git_dir.to_string_lossy().to_string()))
+    }
+
+    /// Generate SHA256-based scanner ID for a repository (now using repo_id)
+    pub fn generate_scanner_id(&self, repo_id: &str) -> ScanResult<String> {
+        // Generate SHA256 hash of the unique repo ID
         let mut hasher = Sha256::new();
-        hasher.update(normalised_path.as_bytes());
+        hasher.update(repo_id.as_bytes());
         let hash_result = hasher.finalize();
 
         // Convert to hex string and create scanner ID with scan- prefix
         let hash_hex = format!("{:x}", hash_result);
         Ok(format!("scan-{}", hash_hex))
     }
+
+    /// Create a scanner for a repository with queue integration
+    pub async fn create_scanner(&self, repository_path: &str) -> ScanResult<()> {
+        // First normalize the path
+        let normalized_path = self.normalise_repository_path(repository_path)?;
+
+        // Validate the repository and get the gix::Repository instance
+        let path = Path::new(&normalized_path);
+        let (repo, _git_dir) = self.validate_repository(path)?;
+
+        // Get the unique repository ID
+        let repo_id = self.get_unique_repo_id(&repo)?;
+
+        // Check if this repository is already being scanned (lock the mutex)
+        {
+            let repo_ids = self.repo_ids.lock().unwrap();
+            if repo_ids.contains(&repo_id) {
+                return Err(ScanError::Configuration {
+                    message: format!(
+                        "Repository '{}' is already being scanned (duplicate detected via {})",
+                        repository_path,
+                        if repo_id.contains("://") {
+                            "remote URL"
+                        } else {
+                            "git directory"
+                        }
+                    ),
+                });
+            }
+        } // Lock is dropped here
+
+        // Add to the set of known repositories
+        {
+            let mut repo_ids = self.repo_ids.lock().unwrap();
+            repo_ids.insert(repo_id.clone());
+        }
+
+        // Generate scanner ID from the unique repo ID
+        let scanner_id = self.generate_scanner_id(&repo_id)?;
+
+        // Convert Repository to ThreadSafeRepository for storage
+        let thread_safe_repo = repo.into_sync();
+
+        // Create scanner task with the cached repository
+        let scanner_task = ScannerTask::new_with_cache(
+            scanner_id,
+            normalized_path.clone(),
+            Arc::new(thread_safe_repo),
+        );
+
+        // Create queue publisher to ensure queue is ready
+        let _publisher =
+            scanner_task
+                .create_queue_publisher()
+                .await
+                .map_err(|e| ScanError::Configuration {
+                    message: format!(
+                        "Failed to create queue publisher for '{}': {}",
+                        repository_path, e
+                    ),
+                })?;
+
+        // Create notification subscriber for system messages during initialization
+        let _subscriber = scanner_task
+            .create_notification_subscriber()
+            .await
+            .map_err(|e| ScanError::Configuration {
+                message: format!(
+                    "Failed to create notification subscriber for '{}': {}",
+                    repository_path, e
+                ),
+            })?;
+
+        log::debug!(
+            "Scanner created successfully for repository: {} (ID: {}, Scanner: {})",
+            repository_path,
+            repo_id,
+            scanner_task.scanner_id()
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::query::QueryParams;
+    use crate::notifications::event::ScanEventType;
+    use crate::scanner::{ScanMessage, ScanStats};
+    use std::path::PathBuf;
+    use std::time::SystemTime;
 
     #[tokio::test]
     async fn test_scanner_manager_creation() {
@@ -898,7 +449,12 @@ mod tests {
 
             let task = result.unwrap();
             assert!(task.scanner_id().starts_with("scan-"));
-            assert_eq!(task.repository_path(), repository_path);
+            // Repository path should be normalized (protocol and .git stripped)
+            assert!(
+                !task.repository_path().contains("://"),
+                "Repository path should be normalized: {}",
+                task.repository_path()
+            );
         }
     }
 
@@ -1052,11 +608,24 @@ mod tests {
 
         let messages = result.unwrap();
 
-        // Should have at least 3 messages: ScanStarted, CommitData, ScanCompleted
-        assert!(messages.len() >= 3, "Should have at least 3 messages");
+        // Should have at least 4 messages: RepositoryData, ScanStarted, CommitData, ScanCompleted
+        assert!(messages.len() >= 4, "Should have at least 4 messages");
 
-        // Verify message types
+        // Verify message types - first should be RepositoryData
         match &messages[0] {
+            ScanMessage::RepositoryData {
+                scanner_id,
+                repository_data,
+                ..
+            } => {
+                assert_eq!(scanner_id, &scanner_task.scanner_id());
+                assert_eq!(&repository_data.path, &scanner_task.repository_path());
+            }
+            _ => panic!("First message should be RepositoryData"),
+        }
+
+        // Second message should be ScanStarted
+        match &messages[1] {
             ScanMessage::ScanStarted {
                 scanner_id,
                 repository_path,
@@ -1065,7 +634,7 @@ mod tests {
                 assert_eq!(scanner_id, &scanner_task.scanner_id());
                 assert_eq!(repository_path, &scanner_task.repository_path());
             }
-            _ => panic!("First message should be ScanStarted"),
+            _ => panic!("Second message should be ScanStarted"),
         }
 
         // Should have at least one CommitData message
@@ -1361,11 +930,20 @@ mod tests {
         let scanner_task = ScannerTask::new(&manager, &current_path).await.unwrap();
 
         let query_params = QueryParams {
-            start_date: Some(chrono::Utc::now() - chrono::Duration::days(30)),
-            end_date: Some(chrono::Utc::now()),
-            include_patterns: vec!["*.rs".to_string()],
-            exclude_patterns: vec!["*.tmp".to_string()],
-            author_filter: Some("test_author".to_string()),
+            date_range: Some(crate::core::query::DateRange::new(
+                SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60), // 30 days ago
+                SystemTime::now(),
+            )),
+            file_paths: crate::core::query::FilePathFilter {
+                include: vec![PathBuf::from("*.rs")],
+                exclude: vec![PathBuf::from("*.tmp")],
+            },
+            max_commits: None,
+            authors: crate::core::query::AuthorFilter {
+                include: vec!["test_author".to_string()],
+                exclude: vec![],
+            },
+            git_ref: None,
         };
 
         let result = scanner_task.apply_scan_filters(query_params).await;

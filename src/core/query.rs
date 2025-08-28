@@ -108,6 +108,106 @@ impl QueryParams {
         Self::default()
     }
 
+    /// Builder method to set date range from optional start and end times
+    pub fn with_date_range(mut self, since: Option<SystemTime>, until: Option<SystemTime>) -> Self {
+        self.date_range = match (since, until) {
+            (Some(start), Some(end)) => Some(DateRange::new(start, end)),
+            (Some(start), None) => Some(DateRange::from(start)),
+            (None, Some(end)) => Some(DateRange::until(end)),
+            (None, None) => None,
+        };
+        self
+    }
+
+    /// Builder method to set file patterns (include)
+    pub fn with_files(mut self, files: Vec<String>) -> Self {
+        self.file_paths.include = files
+            .into_iter()
+            .filter(|f| !f.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        self
+    }
+
+    /// Builder method to set exclude file patterns
+    pub fn with_exclude_files(mut self, exclude_files: Vec<String>) -> Self {
+        self.file_paths.exclude = exclude_files
+            .into_iter()
+            .filter(|f| !f.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        self
+    }
+
+    /// Builder method to set path patterns (include)
+    pub fn with_paths(mut self, paths: Vec<String>) -> Self {
+        for path in paths.into_iter().filter(|p| !p.is_empty()) {
+            self.file_paths.include.push(PathBuf::from(path));
+        }
+        self
+    }
+
+    /// Builder method to set exclude path patterns
+    pub fn with_exclude_paths(mut self, exclude_paths: Vec<String>) -> Self {
+        for path in exclude_paths.into_iter().filter(|p| !p.is_empty()) {
+            self.file_paths.exclude.push(PathBuf::from(path));
+        }
+        self
+    }
+
+    /// Builder method to set extension patterns (converted to file patterns)
+    pub fn with_extensions(mut self, extensions: Vec<String>) -> Self {
+        for ext in extensions.into_iter().filter(|e| !e.is_empty()) {
+            let pattern = if ext.starts_with('.') {
+                format!("*{}", ext)
+            } else {
+                format!("*.{}", ext)
+            };
+            self.file_paths.include.push(PathBuf::from(pattern));
+        }
+        self
+    }
+
+    /// Builder method to set exclude extension patterns
+    pub fn with_exclude_extensions(mut self, exclude_extensions: Vec<String>) -> Self {
+        for ext in exclude_extensions.into_iter().filter(|e| !e.is_empty()) {
+            let pattern = if ext.starts_with('.') {
+                format!("*{}", ext)
+            } else {
+                format!("*.{}", ext)
+            };
+            self.file_paths.exclude.push(PathBuf::from(pattern));
+        }
+        self
+    }
+
+    /// Builder method to set author filters (include)
+    pub fn with_authors(mut self, authors: Vec<String>) -> Self {
+        self.authors.include = authors.into_iter().filter(|a| !a.is_empty()).collect();
+        self
+    }
+
+    /// Builder method to set author filters (exclude)
+    pub fn with_exclude_authors(mut self, exclude_authors: Vec<String>) -> Self {
+        self.authors.exclude = exclude_authors
+            .into_iter()
+            .filter(|a| !a.is_empty())
+            .collect();
+        self
+    }
+
+    /// Builder method to set max commits
+    pub fn with_max_commits(mut self, max_commits: Option<usize>) -> Self {
+        self.max_commits = max_commits;
+        self
+    }
+
+    /// Builder method to set git reference
+    pub fn with_git_ref(mut self, git_ref: Option<String>) -> Self {
+        self.git_ref = git_ref.filter(|r| !r.is_empty());
+        self
+    }
+
     /// Check if this query has any date constraints
     pub fn has_date_filter(&self) -> bool {
         self.date_range.is_some()

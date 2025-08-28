@@ -16,8 +16,13 @@
 
 pub mod error;
 pub mod manager;
+pub mod task;
+pub mod types;
 
 pub use error::{ScanError, ScanResult};
-pub use manager::{
-    ChangeType, CommitInfo, FileChangeData, ScanMessage, ScanStats, ScannerManager, ScannerTask,
+pub use manager::ScannerManager;
+pub use task::ScannerTask;
+pub use types::{
+    ChangeType, CommitInfo, FileChangeData, RepositoryData, RepositoryDataBuilder, ScanMessage,
+    ScanStats,
 };
