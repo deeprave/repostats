@@ -109,14 +109,23 @@ impl ScannerTask {
             message: format!("Failed to get message: {}", e),
         })?;
 
+        let hash_string = commit.id().to_string();
+        let short_hash = hash_string.get(..8).unwrap_or(&hash_string).to_string();
+
         let commit_info = CommitInfo {
-            hash: commit.id().to_string(),
-            short_hash: commit.id().to_string()[..8].to_string(),
+            hash: hash_string,
+            short_hash,
             author_name: author.name.to_string(),
             author_email: author.email.to_string(),
             committer_name: committer.name.to_string(),
             committer_email: committer.email.to_string(),
-            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds as u64),
+            timestamp: if time.seconds >= 0 {
+                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds as u64)
+            } else {
+                // Handle negative timestamps (dates before Unix epoch)
+                let abs_seconds = (-time.seconds) as u64;
+                SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(abs_seconds)
+            },
             message: message
                 .body()
                 .map(|b| b.to_string())
