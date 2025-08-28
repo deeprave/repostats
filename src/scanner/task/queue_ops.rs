@@ -27,37 +27,48 @@ impl ScannerTask {
         Ok(publisher)
     }
 
-    /// Publish scan messages to the queue
+    /// Publish scan messages to the queue with optimized batching while preserving order
     pub async fn publish_messages(&self, messages: Vec<ScanMessage>) -> ScanResult<()> {
-        // Create a queue publisher
+        if messages.is_empty() {
+            return Ok(());
+        }
+
         let publisher = self.create_queue_publisher().await?;
         let scanner_id = self.scanner_id().to_string();
 
         // Use spawn_blocking to prevent blocking the async executor
         tokio::task::spawn_blocking(move || {
-            // Publish each message to the queue
-            for scan_message in messages {
-                // Serialize the scan message to JSON
-                let json_data =
-                    serde_json::to_string(&scan_message).map_err(|e| ScanError::Io {
-                        message: format!("Failed to serialize message: {}", e),
-                    })?;
+            // Pre-serialize all messages in batches for better CPU utilization
+            let batch_size = 100;
+            let mut queue_messages = Vec::with_capacity(messages.len());
 
-                // Determine message type based on scan message variant
-                let message_type = match &scan_message {
-                    ScanMessage::RepositoryData { .. } => "repository_data",
-                    ScanMessage::ScanStarted { .. } => "scan_started",
-                    ScanMessage::CommitData { .. } => "commit_data",
-                    ScanMessage::FileChange { .. } => "file_change",
-                    ScanMessage::ScanCompleted { .. } => "scan_completed",
-                    ScanMessage::ScanError { .. } => "scan_error",
-                };
+            for chunk in messages.chunks(batch_size) {
+                // Batch serialize messages (CPU intensive operation)
+                for scan_message in chunk {
+                    let json_data =
+                        serde_json::to_string(&scan_message).map_err(|e| ScanError::Io {
+                            message: format!("Failed to serialize message: {}", e),
+                        })?;
 
-                // Create a queue message
-                let queue_message =
-                    Message::new(scanner_id.clone(), message_type.to_string(), json_data);
+                    let message_type = match &scan_message {
+                        ScanMessage::RepositoryData { .. } => "repository_data",
+                        ScanMessage::ScanStarted { .. } => "scan_started",
+                        ScanMessage::CommitData { .. } => "commit_data",
+                        ScanMessage::FileChange { .. } => "file_change",
+                        ScanMessage::ScanCompleted { .. } => "scan_completed",
+                        ScanMessage::ScanError { .. } => "scan_error",
+                    };
 
-                // Publish to the queue (synchronous operation in blocking thread)
+                    queue_messages.push(Message::new(
+                        scanner_id.clone(),
+                        message_type.to_string(),
+                        json_data,
+                    ));
+                }
+            }
+
+            // Publish all messages in order (I/O intensive operation)
+            for queue_message in queue_messages {
                 publisher
                     .publish(queue_message)
                     .map_err(|e| ScanError::Io {
