@@ -30,9 +30,9 @@ impl ScannerTask {
             builder = builder.with_query(query);
         }
 
-        builder.build().map_err(|e| ScanError::Repository {
-            message: format!("Failed to extract repository data: {}", e),
-        })
+        builder
+            .build()
+            .map_err(|e| ScanError::Repository { message: e })
     }
 
     /// Scan commits in the repository and generate scan messages
