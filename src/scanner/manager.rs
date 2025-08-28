@@ -228,7 +228,14 @@ impl ScannerManager {
         }
 
         // Generate scanner ID from the unique repo ID
-        let scanner_id = self.generate_scanner_id(&repo_id)?;
+        let scanner_id = match self.generate_scanner_id(&repo_id) {
+            Ok(id) => id,
+            Err(e) => {
+                // Cancel reservation on failure
+                self.cancel_reservation(&repo_id);
+                return Err(e);
+            }
+        };
 
         // Create scanner task with the repository directly
         let scanner_task =
