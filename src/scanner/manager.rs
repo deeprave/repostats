@@ -24,7 +24,7 @@ enum RepoState {
 /// Central scanner manager for coordinating multiple repository scanner tasks
 pub struct ScannerManager {
     /// Active scanner tasks by repository hash
-    _scanner_tasks: HashMap<String, String>, // hash -> repository path
+    _scanner_tasks: Mutex<HashMap<String, Arc<ScannerTask>>>, // hash -> scanner task
     /// Repository states to prevent duplicate scanners with reservation system
     repo_states: Mutex<HashMap<String, RepoState>>,
 }
@@ -33,7 +33,7 @@ impl ScannerManager {
     /// Create a new ScannerManager instance
     pub fn new() -> Self {
         Self {
-            _scanner_tasks: HashMap::new(),
+            _scanner_tasks: Mutex::new(HashMap::new()),
             repo_states: Mutex::new(HashMap::new()),
         }
     }
@@ -288,7 +288,7 @@ impl ScannerManager {
     }
 
     /// Create a scanner for a repository with queue integration
-    pub async fn create_scanner(&self, repository_path: &str) -> ScanResult<ScannerTask> {
+    pub async fn create_scanner(&self, repository_path: &str) -> ScanResult<Arc<ScannerTask>> {
         // First normalize the path
         let normalized_path = self.normalise_repository_path(repository_path)?;
 
@@ -326,7 +326,14 @@ impl ScannerManager {
 
         // Create scanner task with the repository directly
         let scanner_task =
-            ScannerTask::new_with_repository(scanner_id, normalized_path.clone(), repo);
+            ScannerTask::new_with_repository(scanner_id.clone(), normalized_path.clone(), repo);
+        let scanner_task = Arc::new(scanner_task);
+
+        // Store the scanner task in the manager for later use
+        self._scanner_tasks
+            .lock()
+            .unwrap()
+            .insert(scanner_id, scanner_task.clone());
 
         // Create queue publisher to ensure queue is ready, with retries for transient errors
         let mut last_publisher_err = None;
@@ -426,7 +433,86 @@ impl ScannerManager {
             self.redact_repo_path(repository_path),
             scanner_task.scanner_id()
         );
-        Ok(scanner_task)
+        Ok(scanner_task.clone())
+    }
+
+    /// Start scanning all configured repositories
+    /// This triggers scan_commits() on all scanner tasks and waits for completion
+    pub async fn start_scanning(&self) -> Result<(), ScanError> {
+        use log::{debug, info, warn};
+
+        // Collect all scanner tasks first, then drop the lock
+        let scanner_tasks_vec = {
+            let scanner_tasks = self._scanner_tasks.lock().unwrap();
+
+            if scanner_tasks.is_empty() {
+                warn!("No scanner tasks configured - nothing to scan");
+                return Ok(());
+            }
+
+            info!(
+                "Starting repository scanning for {} repositories",
+                scanner_tasks.len()
+            );
+
+            // Collect all scanner tasks into a vector
+            scanner_tasks
+                .iter()
+                .map(|(id, task)| (id.clone(), task.clone()))
+                .collect::<Vec<_>>()
+        }; // Lock is dropped here
+
+        // Process all repositories sequentially (due to thread safety constraints of gix::Repository)
+        let mut success_count = 0;
+        let mut failure_count = 0;
+
+        for (scanner_id, scanner_task) in scanner_tasks_vec {
+            debug!("Starting scan for scanner: {}", scanner_id);
+
+            match scanner_task.scan_commits().await {
+                Ok(messages) => {
+                    debug!(
+                        "Scan completed for repository, {} messages generated",
+                        messages.len()
+                    );
+                    // Publish the scan messages to the queue
+                    match scanner_task.publish_messages(messages).await {
+                        Ok(()) => {
+                            success_count += 1;
+                            debug!(
+                                "Repository scan completed successfully for scanner: {}",
+                                scanner_id
+                            );
+                        }
+                        Err(e) => {
+                            failure_count += 1;
+                            log::error!(
+                                "Failed to publish scan results for scanner '{}': {}",
+                                scanner_id,
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    failure_count += 1;
+                    log::error!("Repository scan failed for scanner '{}': {}", scanner_id, e);
+                }
+            }
+        }
+
+        info!(
+            "Repository scanning completed: {} successful, {} failed",
+            success_count, failure_count
+        );
+
+        if success_count == 0 {
+            return Err(ScanError::Configuration {
+                message: "All repository scans failed".to_string(),
+            });
+        }
+
+        Ok(())
     }
 }
 
