@@ -156,8 +156,8 @@ impl ScannerTask {
                 }
             },
             _ = tokio::time::sleep(timeout) => {
-                // Timeout reached
-                Ok(true)
+                // Timeout reached - no shutdown event received
+                Ok(false)
             }
         }
     }
