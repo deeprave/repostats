@@ -5,7 +5,6 @@ pub mod plugin;
 pub mod queue;
 pub mod scanner;
 
-
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
 /// Parse the API version string from build script into u32

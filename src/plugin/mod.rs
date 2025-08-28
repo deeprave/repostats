@@ -22,6 +22,4 @@ pub use settings::PluginSettings;
 pub use traits::{
     ConsumerPlugin, Plugin, PluginDataRequirements, PluginFunction, PluginInfo, PluginType,
 };
-pub use unified_discovery::{
-    DiscoveredPlugin, PluginSource,
-};
+pub use unified_discovery::{DiscoveredPlugin, PluginSource};

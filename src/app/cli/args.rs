@@ -742,6 +742,14 @@ impl Args {
         Self::parse_config_file_impl(margs, config_file).await;
     }
 
+    /// Parse config file and return both Args updates and raw TOML config (async version)
+    pub async fn parse_config_file_with_raw_config(
+        margs: &mut Self,
+        config_file: Option<PathBuf>,
+    ) -> Option<toml::Table> {
+        Self::parse_config_file_impl_with_raw(margs, config_file).await
+    }
+
     /// Core implementation for config file parsing - now async
     async fn parse_config_file_impl(margs: &mut Self, config_file: Option<PathBuf>) {
         let config_path = match config_file {
@@ -795,6 +803,64 @@ impl Args {
         }
     }
 
+    /// Core implementation for config file parsing with raw config return (async)
+    async fn parse_config_file_impl_with_raw(
+        margs: &mut Self,
+        config_file: Option<PathBuf>,
+    ) -> Option<toml::Table> {
+        let config_path = match config_file {
+            Some(path) => {
+                // User specified a config file-it must exist
+                if !path.exists() {
+                    eprintln!(
+                        "Error: The specified configuration file does not exist: {}",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+                Some(path)
+            }
+            None => {
+                // Use default config path if it exists
+                let default_path =
+                    dirs::config_dir().map(|d| d.join("Repostats").join("repostats.toml"));
+                match default_path {
+                    Some(path) if path.exists() => Some(path),
+                    _ => None, // No config file to load
+                }
+            }
+        };
+
+        // If we have a config path, load and parse it
+        if let Some(path) = config_path {
+            match tokio::fs::read_to_string(&path).await {
+                Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
+                    Ok(config) => {
+                        if let Err(e) = Self::apply_toml_values(margs, &config) {
+                            eprintln!(
+                                "Error in configuration file validation {}: {}",
+                                path.display(),
+                                e
+                            );
+                            std::process::exit(1);
+                        }
+                        Some(config) // Return the raw config
+                    }
+                    Err(e) => {
+                        eprintln!("Error parsing configuration file {}: {}", path.display(), e);
+                        std::process::exit(1);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Error reading configuration file {}: {}", path.display(), e);
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None // No config file found
+        }
+    }
+
     /// Apply TOML configuration values to Args
     fn apply_toml_values(args: &mut Self, config: &toml::Table) -> Result<(), String> {
         if let Some(repo_value) = config.get("repository") {
@@ -820,7 +886,7 @@ impl Args {
         if let Some(plugin_dir) = config.get("plugin-dir").and_then(|v| v.as_str()) {
             args.plugin_dir = Some(plugin_dir.to_string());
         }
-        
+
         // Handle plugin exclusions (support both single string and array formats)
         if let Some(exclusions_value) = config.get("exclude-plugin") {
             let mut exclusion_strings = Vec::new();
@@ -1778,7 +1844,11 @@ mod tests {
 
         assert_eq!(
             result.plugin_exclusions,
-            vec!["dump".to_string(), "plugin2".to_string(), "plugin3".to_string()]
+            vec![
+                "dump".to_string(),
+                "plugin2".to_string(),
+                "plugin3".to_string()
+            ]
         );
     }
 
@@ -1794,7 +1864,10 @@ mod tests {
 
         let result = Args::try_parse_from(&args).unwrap();
 
-        assert_eq!(result.plugin_exclusions, vec!["dump".to_string(), "plugin2".to_string()]);
+        assert_eq!(
+            result.plugin_exclusions,
+            vec!["dump".to_string(), "plugin2".to_string()]
+        );
     }
 
     #[test]

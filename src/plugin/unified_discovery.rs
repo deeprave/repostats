@@ -79,20 +79,16 @@ impl PluginDiscovery {
         if let Some(path) = search_path {
             config.search_path = Some(PathBuf::from(path));
         }
-        
-        Self {
-            config,
-        }
+
+        Self { config }
     }
 
     /// Create plugin discovery with exclusions
     pub(crate) fn with_excludes(excludes: Vec<&str>) -> Self {
         let mut config = DiscoveryConfig::default();
         config.excluded_plugins = excludes.iter().map(|s| s.to_string()).collect();
-        
-        Self {
-            config,
-        }
+
+        Self { config }
     }
 
     /// Create plugin discovery with path and exclusions
@@ -102,10 +98,8 @@ impl PluginDiscovery {
             config.search_path = Some(PathBuf::from(path));
         }
         config.excluded_plugins = excludes.iter().map(|s| s.to_string()).collect();
-        
-        Self {
-            config,
-        }
+
+        Self { config }
     }
 
     /// Internal method to control plugin type inclusion
@@ -122,10 +116,8 @@ impl PluginDiscovery {
         config.excluded_plugins = excludes.iter().map(|s| s.to_string()).collect();
         config.include_builtins = include_builtins;
         config.include_externals = include_externals;
-        
-        Self {
-            config,
-        }
+
+        Self { config }
     }
 
     /// Discover all available plugins using internal configuration
@@ -135,7 +127,9 @@ impl PluginDiscovery {
         // 1. Discover external plugins (main focus) - create on demand
         if self.config.include_externals {
             let external_discovery = ExternalPluginDiscovery::new();
-            let external_plugins = external_discovery.discover_external_plugins(&self.config).await?;
+            let external_plugins = external_discovery
+                .discover_external_plugins(&self.config)
+                .await?;
             plugins.extend(external_plugins);
         }
 
