@@ -111,12 +111,29 @@ impl RepositoryDataBuilder {
             .string("repository.description")
             .map(|s| s.to_string());
 
-        // Get default branch
+        // Get default branch by querying repository HEAD
         self.default_branch = config
             .string("init.defaultBranch")
             .or_else(|| config.string("branch.default"))
             .map(|s| s.to_string())
-            .or_else(|| Some("main".to_string())); // fallback to main
+            .or_else(|| {
+                // Try to get the current branch name from HEAD
+                repo.head_name().ok().flatten().map(|head_name| {
+                    // Extract branch name from full ref (e.g., "refs/heads/main" -> "main")
+                    head_name.shorten().to_string()
+                })
+            })
+            .or_else(|| {
+                // Try to get remote default branch from origin/HEAD
+                repo.find_reference("refs/remotes/origin/HEAD")
+                    .ok()
+                    .and_then(|origin_head| {
+                        // Extract the branch name from the reference name
+                        let name = origin_head.name();
+                        Some(name.shorten().to_string())
+                    })
+            })
+            .or_else(|| Some("main".to_string())); // final fallback only if all queries fail
 
         self.is_bare = Some(repo.is_bare());
         self.is_shallow = Some(repo.is_shallow());
