@@ -31,39 +31,45 @@ impl ScannerTask {
     pub async fn publish_messages(&self, messages: Vec<ScanMessage>) -> ScanResult<()> {
         // Create a queue publisher
         let publisher = self.create_queue_publisher().await?;
+        let scanner_id = self.scanner_id().to_string();
 
-        // Publish each message to the queue
-        for scan_message in messages {
-            // Serialize the scan message to JSON
-            let json_data = serde_json::to_string(&scan_message).map_err(|e| ScanError::Io {
-                message: format!("Failed to serialize message: {}", e),
-            })?;
+        // Use spawn_blocking to prevent blocking the async executor
+        tokio::task::spawn_blocking(move || {
+            // Publish each message to the queue
+            for scan_message in messages {
+                // Serialize the scan message to JSON
+                let json_data =
+                    serde_json::to_string(&scan_message).map_err(|e| ScanError::Io {
+                        message: format!("Failed to serialize message: {}", e),
+                    })?;
 
-            // Determine message type based on scan message variant
-            let message_type = match &scan_message {
-                ScanMessage::RepositoryData { .. } => "repository_data",
-                ScanMessage::ScanStarted { .. } => "scan_started",
-                ScanMessage::CommitData { .. } => "commit_data",
-                ScanMessage::FileChange { .. } => "file_change",
-                ScanMessage::ScanCompleted { .. } => "scan_completed",
-                ScanMessage::ScanError { .. } => "scan_error",
-            };
+                // Determine message type based on scan message variant
+                let message_type = match &scan_message {
+                    ScanMessage::RepositoryData { .. } => "repository_data",
+                    ScanMessage::ScanStarted { .. } => "scan_started",
+                    ScanMessage::CommitData { .. } => "commit_data",
+                    ScanMessage::FileChange { .. } => "file_change",
+                    ScanMessage::ScanCompleted { .. } => "scan_completed",
+                    ScanMessage::ScanError { .. } => "scan_error",
+                };
 
-            // Create a queue message
-            let queue_message = Message::new(
-                self.scanner_id().to_string(),
-                message_type.to_string(),
-                json_data,
-            );
+                // Create a queue message
+                let queue_message =
+                    Message::new(scanner_id.clone(), message_type.to_string(), json_data);
 
-            // Publish to the queue (not async)
-            publisher
-                .publish(queue_message)
-                .map_err(|e| ScanError::Io {
-                    message: format!("Failed to publish message to queue: {}", e),
-                })?;
-        }
+                // Publish to the queue (synchronous operation in blocking thread)
+                publisher
+                    .publish(queue_message)
+                    .map_err(|e| ScanError::Io {
+                        message: format!("Failed to publish message to queue: {}", e),
+                    })?;
+            }
 
-        Ok(())
+            Ok::<(), ScanError>(())
+        })
+        .await
+        .map_err(|e| ScanError::Io {
+            message: format!("Failed to execute queue publishing task: {}", e),
+        })?
     }
 }
