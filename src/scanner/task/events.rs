@@ -88,6 +88,7 @@ impl ScannerTask {
     pub async fn handle_queue_started_event(
         &self,
         mut receiver: EventReceiver,
+        timeout: std::time::Duration,
     ) -> ScanResult<bool> {
         // Wait for a queue started event
         tokio::select! {
@@ -105,15 +106,15 @@ impl ScannerTask {
                     None => Ok(false), // Channel closed
                 }
             },
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                // Timeout for test purposes
+            _ = tokio::time::sleep(timeout) => {
+                // Timeout reached
                 Ok(false)
             }
         }
     }
 
     /// Handle scanner shutdown via system events
-    pub async fn handle_shutdown_event(&self) -> ScanResult<bool> {
+    pub async fn handle_shutdown_event(&self, timeout: std::time::Duration) -> ScanResult<bool> {
         let services = get_services();
         let mut notification_manager = services.notification_manager().await;
 
@@ -154,8 +155,8 @@ impl ScannerTask {
                     None => Ok(false), // Channel closed
                 }
             },
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                // Timeout - assume shutdown handled for test purposes
+            _ = tokio::time::sleep(timeout) => {
+                // Timeout reached
                 Ok(true)
             }
         }

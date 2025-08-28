@@ -817,7 +817,10 @@ mod tests {
         let scanner_task = manager.create_scanner(&current_path).await.unwrap();
 
         // Test that scanner can handle shutdown events
-        let shutdown_handled = scanner_task.handle_shutdown_event().await.unwrap();
+        let shutdown_handled = scanner_task
+            .handle_shutdown_event(std::time::Duration::from_millis(100))
+            .await
+            .unwrap();
         assert!(
             shutdown_handled,
             "Scanner should handle shutdown events gracefully"
