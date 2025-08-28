@@ -69,20 +69,19 @@ async fn start_scanner(scanner_manager: std::sync::Arc<scanner::ScannerManager>)
     info!("Starting repository scanner...");
     debug!("Scanner manager configured and ready");
 
-    // For now, just demonstrate that the scanner manager was properly configured
-    // The actual scanning will be triggered by the plugin consumers when they receive
-    // scan messages from the queue. This completes the startup lifecycle.
+    // Start scanning all configured repositories
+    match scanner_manager.start_scanning().await {
+        Ok(()) => {
+            info!("All repository scanning completed successfully");
+            debug!("Scan results have been published to the queue for plugin processing");
+        }
+        Err(e) => {
+            error!("Repository scanning failed: {}", e);
+            error!("Some or all repositories could not be scanned");
+        }
+    }
 
-    info!("Scanner manager is configured and plugins are listening");
-    info!("System is now ready - scanning will occur when repositories are processed");
-
-    // The scanner infrastructure is ready:
-    // 1. ScannerManager is configured with repositories
-    // 2. Plugin consumers are activated via SystemStarted event
-    // 3. Queue is ready for message flow
-    // 4. Notification system is coordinating lifecycle events
-
-    debug!("Scanner startup process complete");
+    debug!("Scanner process complete");
 }
 
 #[cfg(test)]

@@ -153,12 +153,20 @@ pub async fn startup(command_name: &str) -> Option<std::sync::Arc<crate::scanner
 
     // Stage 7: Scanner configuration and system integration
     log::info!("Starting scanner configuration and system integration");
-    let scanner_manager = configure_scanner(&final_args.repository, query_params).await;
+    let scanner_manager_opt = configure_scanner(&final_args.repository, query_params).await;
 
-    // Return the configured scanner manager for main.rs to use
-    log::info!("✅ System startup completed successfully - all components ready");
-    log::debug!("Returning configured scanner manager to main process");
-    Some(scanner_manager)
+    // Return the configured scanner manager for main.rs to use, or None if no valid scanners
+    match scanner_manager_opt {
+        Some(scanner_manager) => {
+            log::info!("✅ System startup completed successfully - all components ready");
+            log::debug!("Returning configured scanner manager to main process");
+            Some(scanner_manager)
+        }
+        None => {
+            log::warn!("No valid scanners found during configuration. Startup aborted.");
+            None
+        }
+    }
 }
 
 /// Discover plugins and return list of available commands
@@ -518,20 +526,19 @@ async fn build_query_params(
 async fn configure_scanner(
     repositories: &[std::path::PathBuf],
     query_params: crate::core::query::QueryParams,
-) -> std::sync::Arc<crate::scanner::ScannerManager> {
+) -> Option<std::sync::Arc<crate::scanner::ScannerManager>> {
     use crate::scanner::ScannerManager;
     use log::{debug, error, trace, warn};
-    use std::process::exit;
 
     trace!("Starting scanner configuration");
 
-    // Fatal error check: must have repositories to scan
+    // Check: must have repositories to scan
     if repositories.is_empty() {
-        error!("FATAL: No repositories specified for scanning - this is a fatal error");
+        error!("No repositories specified for scanning");
         error!("Repository scanning cannot proceed without at least one repository");
         error!("Expected repository paths in command line arguments or configuration");
         error!("Use --repository <path> or configure repositories in TOML config file");
-        exit(1);
+        return None;
     }
 
     // Step 1: Create ScannerManager
@@ -545,11 +552,11 @@ async fn configure_scanner(
         let active_plugins = plugin_manager.get_active_plugins();
 
         if active_plugins.is_empty() {
-            error!("FATAL: No active processing plugins found - this is a fatal error");
+            error!("No active processing plugins found");
             error!("Scanner requires at least one active plugin to process scan results");
             error!("This indicates plugin activation in previous step failed silently");
             error!("Check plugin configuration and activation logs above");
-            exit(1);
+            return None;
         }
 
         trace!(
@@ -577,12 +584,12 @@ async fn configure_scanner(
             .setup_plugin_consumers(&queue_manager, &plugin_names, &plugin_args)
             .await
         {
-            error!("FATAL: Failed to setup plugin consumers for queue integration");
+            error!("Failed to setup plugin consumers for queue integration");
             error!("Error details: {}", e);
             error!("Plugin names: {:?}", plugin_names);
             error!("This indicates plugins cannot receive scan messages from the queue");
             error!("Scanner and plugin integration has failed");
-            exit(1);
+            return None;
         }
 
         debug!(
@@ -592,12 +599,15 @@ async fn configure_scanner(
     }
 
     // Step 4: Create scanners for all repositories
+    let mut successful_scanners = 0;
+    let mut failed_repositories = Vec::new();
+
     for (index, repo_path) in repositories.iter().enumerate() {
         let repo_path_str = repo_path.to_string_lossy();
 
         if let Err(e) = scanner_manager.create_scanner(&repo_path_str).await {
             error!(
-                "FATAL: Failed to create scanner for repository '{}' (#{}/{})",
+                "Failed to create scanner for repository '{}' (#{}/{})",
                 repo_path_str,
                 index + 1,
                 repositories.len()
@@ -608,22 +618,39 @@ async fn configure_scanner(
             error!("  1. Repository path does not exist or is not accessible");
             error!("  2. Repository is not a valid Git repository");
             error!("  3. Permissions issue accessing the repository");
-            error!("Cannot continue with scanner creation - first error is fatal");
-            exit(1);
+            failed_repositories.push(repo_path_str.to_string());
+        } else {
+            successful_scanners += 1;
+            debug!(
+                "Scanner created successfully for repository: {} (#{}/{})",
+                repo_path_str,
+                index + 1,
+                repositories.len()
+            );
         }
+    }
 
-        debug!(
-            "Scanner created successfully for repository: {} (#{}/{})",
-            repo_path_str,
-            index + 1,
-            repositories.len()
+    // Check if we have any successful scanners
+    if successful_scanners == 0 {
+        error!("Failed to create scanners for any repositories");
+        error!("Total repositories attempted: {}", repositories.len());
+        error!("Failed repositories: {:?}", failed_repositories);
+        error!("No valid repositories available for scanning");
+        return None;
+    } else if !failed_repositories.is_empty() {
+        warn!(
+            "Some repositories failed to initialize: {} successful, {} failed",
+            successful_scanners,
+            failed_repositories.len()
         );
+        warn!("Failed repositories: {:?}", failed_repositories);
+        warn!("Continuing with {} valid repositories", successful_scanners);
     }
 
     debug!("Query parameters configured: {:?}", query_params);
     debug!(
         "Scanner configuration completed successfully for {} repositories",
-        repositories.len()
+        successful_scanners
     );
 
     // Step 5: Publish system startup event to activate plugin consumers
@@ -640,7 +667,7 @@ async fn configure_scanner(
     }
 
     // Return the configured scanner manager
-    scanner_manager
+    Some(scanner_manager)
 }
 
 /// Validate that all required services are available and properly initialized

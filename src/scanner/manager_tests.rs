@@ -18,7 +18,7 @@ mod tests {
         let manager = ScannerManager::create().await;
 
         // Should successfully create a ScannerManager with empty scanner tasks
-        assert_eq!(manager._scanner_tasks.len(), 0);
+        assert_eq!(manager._scanner_tasks.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]
