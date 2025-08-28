@@ -181,28 +181,83 @@ impl ScannerManager {
         let scanner_task =
             ScannerTask::new_with_repository(scanner_id, normalized_path.clone(), repo);
 
-        // Create queue publisher to ensure queue is ready
-        let _publisher =
-            scanner_task
-                .create_queue_publisher()
-                .await
-                .map_err(|e| ScanError::Configuration {
-                    message: format!(
-                        "Failed to create queue publisher for '{}': {}",
-                        repository_path, e
-                    ),
-                })?;
+        // Create queue publisher to ensure queue is ready, with retries for transient errors
+        let mut last_publisher_err = None;
+        let mut publisher = None;
+        let max_retries = 3;
+        let retry_delay = std::time::Duration::from_millis(500);
 
-        // Create notification subscriber for system messages during initialization
-        let _subscriber = scanner_task
-            .create_notification_subscriber()
-            .await
-            .map_err(|e| ScanError::Configuration {
-                message: format!(
-                    "Failed to create notification subscriber for '{}': {}",
-                    repository_path, e
-                ),
-            })?;
+        for attempt in 0..max_retries {
+            match scanner_task.create_queue_publisher().await {
+                Ok(pub_result) => {
+                    publisher = Some(pub_result);
+                    break;
+                }
+                Err(e) => {
+                    last_publisher_err = Some(e);
+                    if attempt < max_retries - 1 {
+                        log::debug!(
+                            "Queue publisher creation attempt {} failed for '{}', retrying in {}ms",
+                            attempt + 1,
+                            repository_path,
+                            retry_delay.as_millis()
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                    }
+                }
+            }
+        }
+
+        let _publisher = match publisher {
+            Some(p) => p,
+            None => {
+                let e = last_publisher_err.unwrap();
+                return Err(ScanError::Configuration {
+                    message: format!(
+                        "Failed to create queue publisher for '{}' after {} attempts: {}",
+                        repository_path, max_retries, e
+                    ),
+                });
+            }
+        };
+
+        // Create notification subscriber with retries for transient errors
+        let mut last_subscriber_err = None;
+        let mut subscriber = None;
+
+        for attempt in 0..max_retries {
+            match scanner_task.create_notification_subscriber().await {
+                Ok(sub_result) => {
+                    subscriber = Some(sub_result);
+                    break;
+                }
+                Err(e) => {
+                    last_subscriber_err = Some(e);
+                    if attempt < max_retries - 1 {
+                        log::debug!(
+                            "Notification subscriber creation attempt {} failed for '{}', retrying in {}ms",
+                            attempt + 1,
+                            repository_path,
+                            retry_delay.as_millis()
+                        );
+                        tokio::time::sleep(retry_delay).await;
+                    }
+                }
+            }
+        }
+
+        let _subscriber = match subscriber {
+            Some(s) => s,
+            None => {
+                let e = last_subscriber_err.unwrap();
+                return Err(ScanError::Configuration {
+                    message: format!(
+                        "Failed to create notification subscriber for '{}' after {} attempts: {}",
+                        repository_path, max_retries, e
+                    ),
+                });
+            }
+        };
 
         // Lock is held until here - scanner successfully created
 
