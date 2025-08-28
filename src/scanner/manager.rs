@@ -37,6 +37,47 @@ impl ScannerManager {
         }
     }
 
+    /// Redact sensitive information from repository paths for secure logging
+    fn redact_repo_path(&self, path: &str) -> String {
+        // For URLs, redact everything after the protocol and host
+        if path.contains("://") {
+            if let Some(scheme_end) = path.find("://") {
+                let scheme_and_host = &path[..scheme_end + 3];
+                if let Some(host_end) = path[scheme_end + 3..].find('/') {
+                    let host = &path[scheme_end + 3..scheme_end + 3 + host_end];
+                    // Remove credentials from host if present
+                    let clean_host = if host.contains('@') {
+                        host.split('@').last().unwrap_or(host)
+                    } else {
+                        host
+                    };
+                    return format!("{}{}/**REDACTED**", scheme_and_host, clean_host);
+                } else {
+                    let clean_host = if path[scheme_end + 3..].contains('@') {
+                        path[scheme_end + 3..]
+                            .split('@')
+                            .last()
+                            .unwrap_or(&path[scheme_end + 3..])
+                    } else {
+                        &path[scheme_end + 3..]
+                    };
+                    return format!("{}{}", scheme_and_host, clean_host);
+                }
+            }
+        }
+
+        // For local paths, show only the last component
+        if let Some(last_separator) = path.rfind('/').or_else(|| path.rfind('\\')) {
+            let filename = &path[last_separator + 1..];
+            if !filename.is_empty() {
+                return format!("**REDACTED**/{}", filename);
+            }
+        }
+
+        // Fallback: completely redact
+        "**REDACTED**".to_string()
+    }
+
     /// Create a ScannerManager and integrate with services
     pub async fn create() -> Arc<Self> {
         Arc::new(Self::new())
@@ -259,7 +300,7 @@ impl ScannerManager {
                         log::debug!(
                             "Queue publisher creation attempt {} failed for '{}', retrying in {}ms",
                             attempt + 1,
-                            repository_path,
+                            self.redact_repo_path(repository_path),
                             retry_delay.as_millis()
                         );
                         tokio::time::sleep(retry_delay).await;
@@ -299,7 +340,7 @@ impl ScannerManager {
                         log::debug!(
                             "Notification subscriber creation attempt {} failed for '{}', retrying in {}ms",
                             attempt + 1,
-                            repository_path,
+                            self.redact_repo_path(repository_path),
                             retry_delay.as_millis()
                         );
                         tokio::time::sleep(retry_delay).await;
@@ -335,9 +376,8 @@ impl ScannerManager {
         }
 
         log::debug!(
-            "Scanner created successfully for repository: {} (ID: {}, Scanner: {})",
-            repository_path,
-            repo_id,
+            "Scanner created successfully for repository: {} (Scanner: {})",
+            self.redact_repo_path(repository_path),
             scanner_task.scanner_id()
         );
         Ok(scanner_task)
@@ -1089,5 +1129,45 @@ mod tests {
 
         let result = scanner_task.run_integration_tests().await.unwrap();
         assert!(result, "Integration tests should pass");
+    }
+
+    #[test]
+    fn test_secure_logging_redaction() {
+        let manager = ScannerManager::new();
+
+        // Test URL redaction with credentials
+        let url_with_creds = "https://username:password@github.com/user/repo.git";
+        let redacted = manager.redact_repo_path(url_with_creds);
+        assert_eq!(redacted, "https://github.com/**REDACTED**");
+
+        // Test URL redaction without credentials
+        let clean_url = "https://github.com/user/repo.git";
+        let redacted = manager.redact_repo_path(clean_url);
+        assert_eq!(redacted, "https://github.com/**REDACTED**");
+
+        // Test local path redaction (Unix)
+        let local_path = "/home/user/sensitive/project/.git";
+        let redacted = manager.redact_repo_path(local_path);
+        assert_eq!(redacted, "**REDACTED**/.git");
+
+        // Test local path redaction (Windows)
+        let windows_path = "C:\\Users\\user\\sensitive\\project";
+        let redacted = manager.redact_repo_path(windows_path);
+        assert_eq!(redacted, "**REDACTED**/project");
+
+        // Test edge case - no separators
+        let simple_path = "project";
+        let redacted = manager.redact_repo_path(simple_path);
+        assert_eq!(redacted, "**REDACTED**");
+
+        // Test SSH URL (no protocol, treated as local path)
+        let ssh_url = "git@github.com:user/repo.git";
+        let redacted = manager.redact_repo_path(ssh_url);
+        assert_eq!(redacted, "**REDACTED**/repo.git");
+
+        // Test URL without path component
+        let url_no_path = "https://github.com";
+        let redacted = manager.redact_repo_path(url_no_path);
+        assert_eq!(redacted, "https://github.com");
     }
 }
