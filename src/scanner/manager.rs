@@ -6,16 +6,26 @@
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Repository reservation state
+#[derive(Debug, Clone)]
+enum RepoState {
+    /// Repository is confirmed as being scanned
+    Active,
+    /// Repository is reserved for scanning (with timestamp for cleanup)
+    Reserved(Instant),
+}
 
 /// Central scanner manager for coordinating multiple repository scanner tasks
 pub struct ScannerManager {
     /// Active scanner tasks by repository hash
     _scanner_tasks: HashMap<String, String>, // hash -> repository path
-    /// Repository IDs to prevent duplicate scanners (wrapped in Mutex for thread safety)
-    repo_ids: Mutex<HashSet<String>>,
+    /// Repository states to prevent duplicate scanners with reservation system
+    repo_states: Mutex<HashMap<String, RepoState>>,
 }
 
 impl ScannerManager {
@@ -23,13 +33,58 @@ impl ScannerManager {
     pub fn new() -> Self {
         Self {
             _scanner_tasks: HashMap::new(),
-            repo_ids: Mutex::new(HashSet::new()),
+            repo_states: Mutex::new(HashMap::new()),
         }
     }
 
     /// Create a ScannerManager and integrate with services
     pub async fn create() -> Arc<Self> {
         Arc::new(Self::new())
+    }
+
+    /// Try to reserve a repository for scanning
+    /// Returns true if reservation successful, false if already active/reserved
+    fn try_reserve_repository(&self, repo_id: &str) -> bool {
+        let mut repo_states = self.repo_states.lock().unwrap();
+
+        // Clean up expired reservations (older than 30 seconds)
+        let now = Instant::now();
+        let expiry_threshold = Duration::from_secs(30);
+        repo_states.retain(|_, state| {
+            match state {
+                RepoState::Active => true, // Keep active entries
+                RepoState::Reserved(timestamp) => now.duration_since(*timestamp) < expiry_threshold,
+            }
+        });
+
+        // Try to reserve if not already active or reserved
+        match repo_states.get(repo_id) {
+            Some(RepoState::Active) | Some(RepoState::Reserved(_)) => false,
+            None => {
+                repo_states.insert(repo_id.to_string(), RepoState::Reserved(now));
+                true
+            }
+        }
+    }
+
+    /// Confirm a reservation by marking repository as active
+    fn confirm_reservation(&self, repo_id: &str) -> bool {
+        let mut repo_states = self.repo_states.lock().unwrap();
+        match repo_states.get(repo_id) {
+            Some(RepoState::Reserved(_)) => {
+                repo_states.insert(repo_id.to_string(), RepoState::Active);
+                true
+            }
+            _ => false, // Not reserved or already active
+        }
+    }
+
+    /// Cancel a reservation
+    fn cancel_reservation(&self, repo_id: &str) {
+        let mut repo_states = self.repo_states.lock().unwrap();
+        if let Some(RepoState::Reserved(_)) = repo_states.get(repo_id) {
+            repo_states.remove(repo_id);
+        }
     }
 
     /// Validate a repository path using gix and return the Repository and normalized path
@@ -157,23 +212,20 @@ impl ScannerManager {
         // Get the unique repository ID
         let repo_id = self.get_unique_repo_id(&repo)?;
 
-        // Preliminary check for early exit (performance optimization)
-        {
-            let repo_ids = self.repo_ids.lock().unwrap();
-            if repo_ids.contains(&repo_id) {
-                return Err(ScanError::Configuration {
-                    message: format!(
-                        "Repository '{}' is already being scanned (duplicate detected via {})",
-                        repository_path,
-                        if repo_id.contains("://") {
-                            "remote URL"
-                        } else {
-                            "git directory"
-                        }
-                    ),
-                });
-            }
-        } // Release lock immediately after preliminary check
+        // Try to reserve the repository for scanning (atomic operation)
+        if !self.try_reserve_repository(&repo_id) {
+            return Err(ScanError::Configuration {
+                message: format!(
+                    "Repository '{}' is already being scanned (duplicate detected via {})",
+                    repository_path,
+                    if repo_id.contains("://") {
+                        "remote URL"
+                    } else {
+                        "git directory"
+                    }
+                ),
+            });
+        }
 
         // Generate scanner ID from the unique repo ID
         let scanner_id = self.generate_scanner_id(&repo_id)?;
@@ -212,6 +264,8 @@ impl ScannerManager {
         let _publisher = match publisher {
             Some(p) => p,
             None => {
+                // Cancel reservation on failure
+                self.cancel_reservation(&repo_id);
                 let e = last_publisher_err.unwrap();
                 return Err(ScanError::Configuration {
                     message: format!(
@@ -250,6 +304,8 @@ impl ScannerManager {
         let _subscriber = match subscriber {
             Some(s) => s,
             None => {
+                // Cancel reservation on failure
+                self.cancel_reservation(&repo_id);
                 let e = last_subscriber_err.unwrap();
                 return Err(ScanError::Configuration {
                     message: format!(
@@ -260,23 +316,16 @@ impl ScannerManager {
             }
         };
 
-        // Final atomic check-and-insert now that all async operations succeeded
-        {
-            let mut repo_ids = self.repo_ids.lock().unwrap();
-            if !repo_ids.insert(repo_id.clone()) {
-                return Err(ScanError::Configuration {
-                    message: format!(
-                        "Repository '{}' is already being scanned (duplicate detected via {})",
-                        repository_path,
-                        if repo_id.contains("://") {
-                            "remote URL"
-                        } else {
-                            "git directory"
-                        }
-                    ),
-                });
-            }
-        } // Lock released immediately after atomic insert
+        // Confirm the reservation now that all async operations succeeded
+        if !self.confirm_reservation(&repo_id) {
+            // This should not happen unless there was a reservation timeout
+            return Err(ScanError::Configuration {
+                message: format!(
+                    "Repository reservation expired for '{}'. Please retry.",
+                    repository_path
+                ),
+            });
+        }
 
         log::debug!(
             "Scanner created successfully for repository: {} (ID: {}, Scanner: {})",
