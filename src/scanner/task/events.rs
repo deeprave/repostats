@@ -117,9 +117,12 @@ impl ScannerTask {
         let services = get_services();
         let mut notification_manager = services.notification_manager().await;
 
-        // For testing: immediately publish a shutdown event
-        let shutdown_event = Event::System(SystemEvent::new(SystemEventType::Shutdown));
-        let _ = notification_manager.publish(shutdown_event).await;
+        // Only publish shutdown event for testing - prevent production side effects
+        #[cfg(test)]
+        {
+            let shutdown_event = Event::System(SystemEvent::new(SystemEventType::Shutdown));
+            let _ = notification_manager.publish(shutdown_event).await;
+        }
 
         // Subscribe to system events to listen for shutdown
         let mut receiver = notification_manager
