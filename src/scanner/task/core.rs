@@ -5,83 +5,32 @@
 use crate::core::query::QueryParams;
 use crate::scanner::error::ScanResult;
 use gix;
-use std::sync::Arc;
 
 /// Individual scanner task for a specific repository
-#[derive(Clone)]
 pub struct ScannerTask {
     /// Unique scanner ID (scan-<sha256>)
     scanner_id: String,
     /// Repository path (local or remote URL - normalized)
     repository_path: String,
-    /// Cached thread-safe repository instance
-    repository: Option<Arc<gix::ThreadSafeRepository>>,
+    /// Git repository instance
+    repository: gix::Repository,
     /// Flag indicating if this is a remote repository
     is_remote: bool,
 }
 
 impl ScannerTask {
-    /// Create a new ScannerTask with cached repository instance
-    pub fn new_with_cache(
+    /// Create a new ScannerTask with repository instance
+    pub fn new_with_repository(
         scanner_id: String,
         repository_path: String,
-        repository: Arc<gix::ThreadSafeRepository>,
+        repository: gix::Repository,
     ) -> Self {
         Self {
             scanner_id,
             repository_path: repository_path.clone(),
-            repository: Some(repository),
+            repository,
             is_remote: repository_path.contains("://") || !repository_path.starts_with('/'),
         }
-    }
-
-    /// Create a new ScannerTask for a repository (for testing)
-    pub async fn new(
-        manager: &crate::scanner::ScannerManager,
-        repository_path: &str,
-    ) -> ScanResult<Self> {
-        // This method is primarily for testing - production code should use create_scanner
-
-        // Check if this is a remote URL BEFORE normalizing (since normalization strips protocols)
-        if repository_path.contains("://") {
-            // For remote URLs, use the original URL as the repo_id and normalize it
-            log::warn!(
-                "Remote repository URLs are not yet fully supported: {}",
-                repository_path
-            );
-            let normalized_path = manager.normalise_repository_path(repository_path)?;
-            let repo_id = repository_path.to_string(); // Use original URL as repo_id
-            let scanner_id = manager.generate_scanner_id(&repo_id)?;
-
-            return Ok(Self {
-                scanner_id,
-                repository_path: normalized_path,
-                repository: None,
-                is_remote: true,
-            });
-        }
-
-        let normalized_path = manager.normalise_repository_path(repository_path)?;
-
-        // For local repositories, validate and cache
-        let path = std::path::Path::new(&normalized_path);
-        let (repo, _git_dir) = manager.validate_repository(path)?;
-
-        // Get the unique repository ID
-        let repo_id = manager.get_unique_repo_id(&repo)?;
-
-        // Generate scanner ID from the unique repo ID
-        let scanner_id = manager.generate_scanner_id(&repo_id)?;
-
-        // Convert to thread-safe repository for caching
-        let thread_safe_repo = repo.into_sync();
-
-        Ok(Self {
-            scanner_id,
-            repository_path: normalized_path,
-            repository: Some(Arc::new(thread_safe_repo)),
-            is_remote: false,
-        })
     }
 
     /// Get the scanner ID
@@ -94,13 +43,13 @@ impl ScannerTask {
         &self.repository_path
     }
 
-    /// Get reference to the cached repository instance
-    pub(super) fn repository(&self) -> &Option<Arc<gix::ThreadSafeRepository>> {
+    /// Get reference to the repository instance
+    pub fn repository(&self) -> &gix::Repository {
         &self.repository
     }
 
     /// Check if this is a remote repository
-    pub(super) fn is_remote(&self) -> bool {
+    pub fn is_remote(&self) -> bool {
         self.is_remote
     }
 

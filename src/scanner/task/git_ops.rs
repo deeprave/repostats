@@ -7,7 +7,6 @@ use crate::notifications::event::ScanEventType;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::{CommitInfo, RepositoryData, ScanMessage, ScanStats};
 use gix;
-use std::path::Path;
 use std::time::SystemTime;
 
 use super::core::ScannerTask;
@@ -17,72 +16,23 @@ impl ScannerTask {
     pub async fn extract_repository_data(
         &self,
         query_params: Option<&QueryParams>,
+        repository: &gix::Repository,
     ) -> ScanResult<RepositoryData> {
-        let repo = self.open_repository().await?;
         let repository_path = self.repository_path().to_string();
 
-        // Clone query_params for move into spawn_blocking
-        let query_params = query_params.cloned();
+        // Extract data from repository synchronously since we have it already
+        let mut builder = RepositoryData::builder()
+            .with_repository(repository_path)
+            .with_repository_info(repository);
 
-        // Use spawn_blocking for potentially blocking gix operations
-        tokio::task::spawn_blocking(move || {
-            // Use builder pattern to create RepositoryData
-            let mut builder = RepositoryData::builder()
-                .with_repository(repository_path)
-                .with_repository_info(&repo);
+        // Add query parameters if provided
+        if let Some(query) = query_params {
+            builder = builder.with_query(query);
+        }
 
-            // Add query parameters if provided
-            if let Some(ref query) = query_params {
-                builder = builder.with_query(query);
-            }
-
-            builder.build().map_err(|e| {
-                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
-                    as Box<dyn std::error::Error + Send + Sync>
-            })
+        builder.build().map_err(|e| ScanError::Repository {
+            message: format!("Failed to extract repository data: {}", e),
         })
-        .await
-        .map_err(|e| ScanError::Io {
-            message: format!("Task execution failed: {}", e),
-        })?
-        .map_err(
-            |e: Box<dyn std::error::Error + Send + Sync>| ScanError::Repository {
-                message: format!("Failed to extract repository data: {}", e),
-            },
-        )
-    }
-
-    /// Open the git repository using gix
-    pub async fn open_repository(&self) -> ScanResult<gix::Repository> {
-        // Check if we have a cached repository instance
-        if let Some(repo_arc) = self.repository() {
-            // Convert ThreadSafeRepository to Repository for this thread
-            return Ok(repo_arc.to_thread_local());
-        }
-
-        // Fallback: open repository if not cached (shouldn't happen with new create_scanner)
-        if !self.is_remote() {
-            // It's a local path
-            let path = Path::new(self.repository_path());
-
-            // Use spawn_blocking for potentially blocking gix operations
-            let repo_path = path.to_path_buf();
-            let repo = tokio::task::spawn_blocking(move || gix::discover(&repo_path))
-                .await
-                .map_err(|e| ScanError::Io {
-                    message: format!("Task execution failed: {}", e),
-                })?
-                .map_err(|e| ScanError::Repository {
-                    message: format!("Failed to open repository '{}': {}", path.display(), e),
-                })?;
-
-            Ok(repo)
-        } else {
-            // Remote repository - not yet supported
-            Err(ScanError::Configuration {
-                message: "Remote repository support not yet implemented".to_string(),
-            })
-        }
     }
 
     /// Scan commits in the repository and generate scan messages
@@ -104,8 +54,11 @@ impl ScannerTask {
 
         let mut messages = Vec::new();
 
-        // FIRST: Extract and add repository data as the very first message
-        let repository_data = match self.extract_repository_data(query_params).await {
+        // Use the repository directly - it's already opened
+        let repo = self.repository();
+
+        // FIRST: Extract and add repository data as the very first message, reusing the repository
+        let repository_data = match self.extract_repository_data(query_params, repo).await {
             Ok(data) => data,
             Err(e) => {
                 let error_msg = format!("Failed to extract repository data: {}", e);
@@ -122,18 +75,6 @@ impl ScannerTask {
             timestamp: SystemTime::now(),
         });
 
-        // Open the repository - if this fails, publish error event
-        let repo = match self.open_repository().await {
-            Ok(repo) => repo,
-            Err(e) => {
-                let error_msg = format!("Failed to open repository: {}", e);
-                self.publish_scanner_event(ScanEventType::Error, Some(error_msg.clone()))
-                    .await
-                    .ok(); // Don't fail on event error
-                return Err(e);
-            }
-        };
-
         // Add scan started message
         messages.push(ScanMessage::ScanStarted {
             scanner_id: self.scanner_id().to_string(),
@@ -141,55 +82,55 @@ impl ScannerTask {
             timestamp: SystemTime::now(),
         });
 
-        // Use spawn_blocking for potentially blocking git operations
-        let scanner_id = self.scanner_id().to_string();
+        // Get commit data directly - no need for spawn_blocking since we have the repo
+        let mut commit_messages = Vec::new();
 
-        let commit_messages = tokio::task::spawn_blocking(move || {
-            let mut result_messages = Vec::new();
-
-            // Get HEAD reference and traverse commits
-            let mut head = repo.head()?;
-            let commit = head.peel_to_commit_in_place()?;
-
-            // Basic commit traversal - just get the HEAD commit for now
-            let author = commit.author()?;
-            let committer = commit.committer()?;
-            let time = commit.time()?;
-            let message = commit.message()?;
-
-            let commit_info = CommitInfo {
-                hash: commit.id().to_string(),
-                short_hash: commit.id().to_string()[..8].to_string(),
-                author_name: author.name.to_string(),
-                author_email: author.email.to_string(),
-                committer_name: committer.name.to_string(),
-                committer_email: committer.email.to_string(),
-                timestamp: SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(time.seconds as u64),
-                message: message
-                    .body()
-                    .map(|b| b.to_string())
-                    .unwrap_or_else(|| message.summary().to_string()),
-                parent_hashes: commit.parent_ids().map(|id| id.to_string()).collect(),
-                insertions: 0, // Will be implemented with diff parsing
-                deletions: 0,  // Will be implemented with diff parsing
-            };
-
-            result_messages.push(ScanMessage::CommitData {
-                scanner_id: scanner_id.clone(),
-                commit_info,
-                timestamp: SystemTime::now(),
-            });
-
-            Ok::<Vec<ScanMessage>, Box<dyn std::error::Error + Send + Sync>>(result_messages)
-        })
-        .await
-        .map_err(|e| ScanError::Io {
-            message: format!("Task execution failed: {}", e),
-        })?
-        .map_err(|e| ScanError::Repository {
-            message: format!("Failed to scan commits: {}", e),
+        // Get HEAD reference and traverse commits
+        let mut head = repo.head().map_err(|e| ScanError::Repository {
+            message: format!("Failed to get HEAD: {}", e),
         })?;
+        let commit = head
+            .peel_to_commit_in_place()
+            .map_err(|e| ScanError::Repository {
+                message: format!("Failed to get commit: {}", e),
+            })?;
+
+        // Basic commit traversal - just get the HEAD commit for now
+        let author = commit.author().map_err(|e| ScanError::Repository {
+            message: format!("Failed to get author: {}", e),
+        })?;
+        let committer = commit.committer().map_err(|e| ScanError::Repository {
+            message: format!("Failed to get committer: {}", e),
+        })?;
+        let time = commit.time().map_err(|e| ScanError::Repository {
+            message: format!("Failed to get time: {}", e),
+        })?;
+        let message = commit.message().map_err(|e| ScanError::Repository {
+            message: format!("Failed to get message: {}", e),
+        })?;
+
+        let commit_info = CommitInfo {
+            hash: commit.id().to_string(),
+            short_hash: commit.id().to_string()[..8].to_string(),
+            author_name: author.name.to_string(),
+            author_email: author.email.to_string(),
+            committer_name: committer.name.to_string(),
+            committer_email: committer.email.to_string(),
+            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds as u64),
+            message: message
+                .body()
+                .map(|b| b.to_string())
+                .unwrap_or_else(|| message.summary().to_string()),
+            parent_hashes: commit.parent_ids().map(|id| id.to_string()).collect(),
+            insertions: 0, // Will be implemented with diff parsing
+            deletions: 0,  // Will be implemented with diff parsing
+        };
+
+        commit_messages.push(ScanMessage::CommitData {
+            scanner_id: self.scanner_id().to_string(),
+            commit_info,
+            timestamp: SystemTime::now(),
+        });
 
         messages.extend(commit_messages);
 
