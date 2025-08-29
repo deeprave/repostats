@@ -7,12 +7,16 @@
 use crate::plugin::args::{
     create_format_args, determine_format, OutputFormat, PluginArgParser, PluginConfig,
 };
-use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginFunction, PluginInfo, PluginType};
+use crate::plugin::traits::{
+    ConsumerPlugin, Plugin, PluginDataRequirements, PluginFunction, PluginInfo, PluginType,
+};
 use crate::plugin::{PluginError, PluginResult};
 use crate::queue::QueueConsumer;
+use crate::scanner::types::ScanMessage;
 use clap::Arg;
 use log::{debug, error, info};
 use serde_json::json;
+use std::collections::HashMap;
 use tokio::sync::oneshot;
 
 /// Dump plugin for outputting queue messages to stdout
@@ -188,40 +192,125 @@ impl ConsumerPlugin for DumpPlugin {
                     ) => {
                         match result {
                             Ok(Ok(Some(msg))) => {
+                                // Try to deserialize as ScanMessage for special handling
+                                let scan_message: Option<ScanMessage> = if msg.header.message_type.starts_with("repository_data")
+                                    || msg.header.message_type.starts_with("scan_")
+                                    || msg.header.message_type.starts_with("commit_")
+                                    || msg.header.message_type.starts_with("file_") {
+                                    serde_json::from_str(&msg.data).ok()
+                                } else {
+                                    None
+                                };
+
                                 // Format and output the message
                                 let formatted = match output_format {
                                     OutputFormat::Json => {
-                                        let json_obj = json!({
-                                            "sequence": msg.header.sequence,
-                                            "producer_id": msg.header.producer_id,
-                                            "message_type": msg.header.message_type,
-                                            "timestamp": msg.header
-                                                .timestamp
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                            "data": msg.data
-                                        });
-                                        json_obj.to_string()
+                                        // For JSON, include the deserialized scan message if available
+                                        if let Some(scan_msg) = scan_message {
+                                            json!({
+                                                "sequence": msg.header.sequence,
+                                                "producer_id": msg.header.producer_id,
+                                                "message_type": msg.header.message_type,
+                                                "timestamp": msg.header
+                                                    .timestamp
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs(),
+                                                "scan_message": scan_msg
+                                            }).to_string()
+                                        } else {
+                                            json!({
+                                                "sequence": msg.header.sequence,
+                                                "producer_id": msg.header.producer_id,
+                                                "message_type": msg.header.message_type,
+                                                "timestamp": msg.header
+                                                    .timestamp
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs(),
+                                                "data": msg.data
+                                            }).to_string()
+                                        }
                                     },
-                                    OutputFormat::Compact => format!(
-                                        "{}:{}:{}:{}",
-                                        msg.header.sequence,
-                                        msg.header.producer_id,
-                                        msg.header.message_type,
-                                        msg.data
-                                    ),
-                                    OutputFormat::Text => {
-                                        if show_headers {
+                                    OutputFormat::Compact => {
+                                        // For compact, show key fields from RepositoryData if available
+                                        if msg.header.message_type == "repository_data" {
+                                            if let Some(ScanMessage::RepositoryData { repository_data, .. }) = scan_message {
+                                                format!(
+                                                    "{}:{}:repository[{}]:{:?}",
+                                                    msg.header.sequence,
+                                                    msg.header.producer_id,
+                                                    repository_data.path,
+                                                    repository_data.git_ref
+                                                )
+                                            } else {
+                                                format!(
+                                                    "{}:{}:{}:{}",
+                                                    msg.header.sequence,
+                                                    msg.header.producer_id,
+                                                    msg.header.message_type,
+                                                    msg.data
+                                                )
+                                            }
+                                        } else {
                                             format!(
-                                                "[{}] {} from {}: {}",
+                                                "{}:{}:{}:{}",
                                                 msg.header.sequence,
-                                                msg.header.message_type,
                                                 msg.header.producer_id,
+                                                msg.header.message_type,
                                                 msg.data
                                             )
+                                        }
+                                    },
+                                    OutputFormat::Text => {
+                                        // For text, provide human-readable format for RepositoryData
+                                        if msg.header.message_type == "repository_data" {
+                                            if let Some(ScanMessage::RepositoryData { repository_data, .. }) = scan_message {
+                                                if show_headers {
+                                                    format!(
+                                                        "[{}] Repository Scan Metadata:\n  Path: {}\n  Branch: {:?}\n  Filters: {} files, {} authors, {:?} commits max\n  Date Range: {:?}",
+                                                        msg.header.sequence,
+                                                        repository_data.path,
+                                                        repository_data.git_ref.as_deref().unwrap_or("default"),
+                                                        repository_data.file_paths.as_deref().unwrap_or("all"),
+                                                        repository_data.authors.as_deref().unwrap_or("all"),
+                                                        repository_data.max_commits,
+                                                        repository_data.date_range.as_deref().unwrap_or("all time")
+                                                    )
+                                                } else {
+                                                    format!(
+                                                        "Repository: {} (branch: {:?}, filters: active)",
+                                                        repository_data.path,
+                                                        repository_data.git_ref
+                                                    )
+                                                }
+                                            } else {
+                                                // Fallback if deserialization fails
+                                                if show_headers {
+                                                    format!(
+                                                        "[{}] {} from {}: {}",
+                                                        msg.header.sequence,
+                                                        msg.header.message_type,
+                                                        msg.header.producer_id,
+                                                        msg.data
+                                                    )
+                                                } else {
+                                                    msg.data.clone()
+                                                }
+                                            }
                                         } else {
-                                            msg.data.clone()
+                                            // Non-repository data messages
+                                            if show_headers {
+                                                format!(
+                                                    "[{}] {} from {}: {}",
+                                                    msg.header.sequence,
+                                                    msg.header.message_type,
+                                                    msg.header.producer_id,
+                                                    msg.data
+                                                )
+                                            } else {
+                                                msg.data.clone()
+                                            }
                                         }
                                     }
                                 };
@@ -275,6 +364,26 @@ impl ConsumerPlugin for DumpPlugin {
 
         info!("DumpPlugin: Shutdown signal sent");
         Ok(())
+    }
+}
+
+impl PluginDataRequirements for DumpPlugin {
+    fn requires_file_content(&self) -> bool {
+        // Dump plugin doesn't need file content, just metadata
+        false
+    }
+
+    fn requires_historical_content(&self) -> bool {
+        // Dump plugin doesn't need historical content reconstruction
+        false
+    }
+
+    fn additional_requirements(&self) -> HashMap<String, String> {
+        let mut requirements = HashMap::new();
+        // Indicate that we want repository metadata for proper display
+        requirements.insert("repository_metadata".to_string(), "true".to_string());
+        requirements.insert("scan_messages".to_string(), "all".to_string());
+        requirements
     }
 }
 

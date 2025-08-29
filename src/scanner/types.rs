@@ -162,13 +162,8 @@ impl RepositoryDataBuilder {
             }
         }
 
-        // Only include file_paths if they are not restrictive
-        // Consider restrictive if there are exclude patterns or very specific include patterns
-        let file_paths_restrictive = !query_params.file_paths.exclude.is_empty()
-            || (!query_params.file_paths.include.is_empty()
-                && query_params.file_paths.include.len() < 10);
-
-        if !file_paths_restrictive && !query_params.file_paths.include.is_empty() {
+        // Include file_paths if they are specified
+        if !query_params.file_paths.include.is_empty() {
             self.file_paths = Some(
                 query_params
                     .file_paths
@@ -180,23 +175,13 @@ impl RepositoryDataBuilder {
             );
         }
 
-        // Only include authors if they are not restrictive (no excludes, or very broad include)
-        let authors_restrictive = !query_params.authors.exclude.is_empty()
-            || (!query_params.authors.include.is_empty() && query_params.authors.include.len() < 5);
-
-        if !authors_restrictive && !query_params.authors.include.is_empty() {
+        // Include authors if they are specified
+        if !query_params.authors.include.is_empty() {
             self.authors = Some(query_params.authors.include.join(", "));
         }
 
-        // Only include max_commits if it's not restrictive (None or very large > 1000)
-        if let Some(max) = query_params.max_commits {
-            if max > 1000 {
-                self.max_commits = Some(max);
-            }
-        } else {
-            // None means unlimited, which is not restrictive
-            self.max_commits = None;
-        }
+        // Include max_commits if specified
+        self.max_commits = query_params.max_commits;
 
         self
     }
@@ -287,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_repository_data_builder_with_restrictive_query() {
+    fn test_repository_data_builder_with_specified_query() {
         let query = QueryParams {
             git_ref: None,
             date_range: Some(DateRange::new(
@@ -295,14 +280,14 @@ mod tests {
                 SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86400),
             )),
             file_paths: FilePathFilter {
-                include: vec![PathBuf::from("*.rs")], // Specific file restriction (< 10 patterns)
-                exclude: vec![PathBuf::from("*.tmp")], // Has exclusions
+                include: vec![PathBuf::from("*.rs")],
+                exclude: vec![PathBuf::from("*.tmp")],
             },
             authors: AuthorFilter {
-                include: vec!["author1".to_string()], // Specific author (< 5 authors)
+                include: vec!["author1".to_string()],
                 exclude: vec![],
             },
-            max_commits: Some(100), // Limited commits (< 1000)
+            max_commits: Some(100),
         };
 
         let mut builder = RepositoryData::builder()
@@ -314,11 +299,10 @@ mod tests {
 
         let repo_data = builder.build().expect("Should build successfully");
 
-        // These should be None because they are restrictive
-        assert_eq!(repo_data.file_paths, None); // Has excludes, so restrictive
-        assert_eq!(repo_data.authors, None); // Only 1 author, so restrictive
-        assert_eq!(repo_data.max_commits, None); // 100 < 1000, so restrictive
-                                                 // Date range should be included for informational purposes
+        // Now all specified filters should be included
+        assert_eq!(repo_data.file_paths, Some("*.rs".to_string()));
+        assert_eq!(repo_data.authors, Some("author1".to_string()));
+        assert_eq!(repo_data.max_commits, Some(100));
         assert!(repo_data.date_range.is_some());
     }
 }
