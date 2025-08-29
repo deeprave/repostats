@@ -44,6 +44,22 @@ impl DumpPlugin {
             shutdown_tx: None,
         }
     }
+
+    /// Check if a message type is a scan message that should be deserialized
+    fn is_scan_message(message_type: &str) -> bool {
+        message_type.starts_with("repository_data")
+            || message_type.starts_with("scan_")
+            || message_type.starts_with("commit_")
+            || message_type.starts_with("file_")
+    }
+
+    /// Format a message header in standard format
+    fn format_header(sequence: u64, message_type: &str, producer_id: &str, data: &str) -> String {
+        format!(
+            "[{}] {} from {}: {}",
+            sequence, message_type, producer_id, data
+        )
+    }
 }
 
 impl Default for DumpPlugin {
@@ -193,11 +209,15 @@ impl ConsumerPlugin for DumpPlugin {
                         match result {
                             Ok(Ok(Some(msg))) => {
                                 // Try to deserialize as ScanMessage for special handling
-                                let scan_message: Option<ScanMessage> = if msg.header.message_type.starts_with("repository_data")
-                                    || msg.header.message_type.starts_with("scan_")
-                                    || msg.header.message_type.starts_with("commit_")
-                                    || msg.header.message_type.starts_with("file_") {
-                                    serde_json::from_str(&msg.data).ok()
+                                let scan_message: Option<ScanMessage> = if DumpPlugin::is_scan_message(&msg.header.message_type) {
+                                    match serde_json::from_str::<ScanMessage>(&msg.data) {
+                                        Ok(scan_msg) => Some(scan_msg),
+                                        Err(e) => {
+                                            error!("DumpPlugin: Failed to deserialize ScanMessage (type: {}): {}",
+                                                msg.header.message_type, e);
+                                            None
+                                        }
+                                    }
                                 } else {
                                     None
                                 };
@@ -234,7 +254,7 @@ impl ConsumerPlugin for DumpPlugin {
                                     },
                                     OutputFormat::Compact => {
                                         // For compact, show key fields from RepositoryData if available
-                                        if msg.header.message_type == "repository_data" {
+                                        if msg.header.message_type.starts_with("repository_data") {
                                             if let Some(ScanMessage::RepositoryData { repository_data, .. }) = scan_message {
                                                 format!(
                                                     "{}:{}:repository[{}]:{:?}",
@@ -264,7 +284,7 @@ impl ConsumerPlugin for DumpPlugin {
                                     },
                                     OutputFormat::Text => {
                                         // For text, provide human-readable format for RepositoryData
-                                        if msg.header.message_type == "repository_data" {
+                                        if msg.header.message_type.starts_with("repository_data") {
                                             if let Some(ScanMessage::RepositoryData { repository_data, .. }) = scan_message {
                                                 if show_headers {
                                                     format!(
@@ -287,12 +307,11 @@ impl ConsumerPlugin for DumpPlugin {
                                             } else {
                                                 // Fallback if deserialization fails
                                                 if show_headers {
-                                                    format!(
-                                                        "[{}] {} from {}: {}",
+                                                    DumpPlugin::format_header(
                                                         msg.header.sequence,
-                                                        msg.header.message_type,
-                                                        msg.header.producer_id,
-                                                        msg.data
+                                                        &msg.header.message_type,
+                                                        &msg.header.producer_id,
+                                                        &msg.data
                                                     )
                                                 } else {
                                                     msg.data.clone()
@@ -301,12 +320,11 @@ impl ConsumerPlugin for DumpPlugin {
                                         } else {
                                             // Non-repository data messages
                                             if show_headers {
-                                                format!(
-                                                    "[{}] {} from {}: {}",
+                                                DumpPlugin::format_header(
                                                     msg.header.sequence,
-                                                    msg.header.message_type,
-                                                    msg.header.producer_id,
-                                                    msg.data
+                                                    &msg.header.message_type,
+                                                    &msg.header.producer_id,
+                                                    &msg.data
                                                 )
                                             } else {
                                                 msg.data.clone()
