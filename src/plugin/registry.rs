@@ -3,6 +3,7 @@
 //! Thread-safe plugin registry for managing loaded plugins with registration,
 //! retrieval, and lifecycle management capabilities.
 
+use crate::plugin::args::PluginConfig;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use std::collections::HashMap;
@@ -244,7 +245,11 @@ mod tests {
             Ok(())
         }
 
-        async fn parse_plugin_arguments(&mut self, _args: &[String]) -> PluginResult<()> {
+        async fn parse_plugin_arguments(
+            &mut self,
+            _args: &[String],
+            _config: &PluginConfig,
+        ) -> PluginResult<()> {
             Ok(())
         }
     }
@@ -292,8 +297,12 @@ mod tests {
             self.base.cleanup().await
         }
 
-        async fn parse_plugin_arguments(&mut self, args: &[String]) -> PluginResult<()> {
-            self.base.parse_plugin_arguments(args).await
+        async fn parse_plugin_arguments(
+            &mut self,
+            args: &[String],
+            config: &PluginConfig,
+        ) -> PluginResult<()> {
+            self.base.parse_plugin_arguments(args, config).await
         }
     }
 

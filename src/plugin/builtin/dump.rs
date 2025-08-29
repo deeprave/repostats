@@ -1,30 +1,33 @@
 //! Dump Plugin - Output queue messages to stdout for debugging
 //!
-//! This plugin consumes messages from the global queue and outputs them in human-readable
-//! format to stdout. It's useful for debugging and monitoring message flow.
+//! This plugin consumes messages from the global queue and outputs them in various formats
+//! to stdout.
+//! It's useful for debugging and monitoring message flow.
 
+use crate::plugin::args::{
+    create_format_args, determine_format, OutputFormat, PluginArgParser, PluginConfig,
+};
 use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginFunction, PluginInfo, PluginType};
 use crate::plugin::{PluginError, PluginResult};
-use crate::queue::{Message, QueueConsumer};
+use crate::queue::QueueConsumer;
+use clap::Arg;
 use log::{debug, error, info};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use serde_json::json;
+use tokio::sync::oneshot;
 
 /// Dump plugin for outputting queue messages to stdout
 pub struct DumpPlugin {
     /// Plugin initialization state
     initialized: bool,
 
-    /// Consumer for reading messages from the queue
-    consumer: Arc<RwLock<Option<QueueConsumer>>>,
+    /// Output format setting
+    output_format: OutputFormat,
 
-    /// Whether the plugin is actively consuming
-    consuming: Arc<RwLock<bool>>,
-
-    /// Plugin settings parsed from CLI arguments
-    format_json: bool,
+    /// Whether to show message headers
     show_headers: bool,
-    max_messages: Option<usize>,
+
+    /// Shutdown sender to signal task termination
+    shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 impl DumpPlugin {
@@ -32,53 +35,9 @@ impl DumpPlugin {
     pub fn new() -> Self {
         Self {
             initialized: false,
-            consumer: Arc::new(RwLock::new(None)),
-            consuming: Arc::new(RwLock::new(false)),
-            format_json: false,
+            output_format: OutputFormat::Text,
             show_headers: true,
-            max_messages: None,
-        }
-    }
-
-    /// Format a message for output
-    fn format_message(&self, message: &Message) -> String {
-        if self.format_json {
-            self.format_message_json(message)
-        } else {
-            self.format_message_text(message)
-        }
-    }
-
-    /// Format message as JSON
-    fn format_message_json(&self, message: &Message) -> String {
-        // Simple JSON-like output (not using serde to avoid dependencies)
-        format!(
-            r#"{{"sequence":{},"producer_id":"{}","message_type":"{}","timestamp":"{}","data":"{}"}}"#,
-            message.header.sequence,
-            message.header.producer_id,
-            message.header.message_type,
-            message
-                .header
-                .timestamp
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            message.data.replace('"', r#"\""#) // Escape quotes for JSON
-        )
-    }
-
-    /// Format message as human-readable text
-    fn format_message_text(&self, message: &Message) -> String {
-        if self.show_headers {
-            format!(
-                "[{}] {} from {}: {}",
-                message.header.sequence,
-                message.header.message_type,
-                message.header.producer_id,
-                message.data
-            )
-        } else {
-            message.data.clone()
+            shutdown_tx: None,
         }
     }
 }
@@ -91,13 +50,11 @@ impl Default for DumpPlugin {
 
 impl std::fmt::Debug for DumpPlugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DumpPlugin")
+        f.debug_struct("DumpPlu00gin")
             .field("initialized", &self.initialized)
-            .field("format_json", &self.format_json)
+            .field("output_format", &self.output_format)
             .field("show_headers", &self.show_headers)
-            .field("max_messages", &self.max_messages)
-            .field("consumer", &"<consumer>")
-            .field("consuming", &"<consuming>")
+            .field("shutdown_tx", &self.shutdown_tx.is_some())
             .finish()
     }
 }
@@ -156,76 +113,43 @@ impl Plugin for DumpPlugin {
         // Stop consuming first
         let _ = self.stop_consuming().await;
 
-        // Clear consumer
-        let mut consumer = self.consumer.write().await;
-        *consumer = None;
-
         self.initialized = false;
         info!("DumpPlugin: Cleanup completed");
         Ok(())
     }
 
-    async fn parse_plugin_arguments(&mut self, args: &[String]) -> PluginResult<()> {
+    async fn parse_plugin_arguments(
+        &mut self,
+        args: &[String],
+        config: &PluginConfig,
+    ) -> PluginResult<()> {
         debug!("DumpPlugin: Parsing arguments: {:?}", args);
 
-        // Reset to defaults
-        self.format_json = false;
-        self.show_headers = true;
-        self.max_messages = None;
+        // Create argument parser with format options and header control
+        let plugin_info = self.plugin_info();
+        let parser = PluginArgParser::new(
+            &plugin_info.name,
+            &plugin_info.description,
+            &plugin_info.version,
+        )
+        .args(create_format_args())
+        .arg(
+            Arg::new("no-headers")
+                .long("no-headers")
+                .action(clap::ArgAction::SetTrue)
+                .help("Don't show message headers (sequence, producer, etc.)"),
+        );
 
-        // Parse arguments
-        let mut i = 0;
-        while i < args.len() {
-            match args[i].as_str() {
-                "--json" => {
-                    self.format_json = true;
-                }
-                "--no-headers" => {
-                    self.show_headers = false;
-                }
-                "--max-messages" => {
-                    if i + 1 >= args.len() {
-                        return Err(PluginError::Generic {
-                            message: "--max-messages requires a number".to_string(),
-                        });
-                    }
-                    i += 1;
-                    match args[i].parse::<usize>() {
-                        Ok(count) => self.max_messages = Some(count),
-                        Err(_) => {
-                            return Err(PluginError::Generic {
-                                message: format!("Invalid number for --max-messages: {}", args[i]),
-                            });
-                        }
-                    }
-                }
-                "--help" | "-h" => {
-                    return Err(PluginError::Generic {
-                        message: "Dump Plugin Help:\n\n\
-                            USAGE: dump [OPTIONS]\n\n\
-                            OPTIONS:\n\
-                            --json           Output messages in JSON format\n\
-                            --no-headers     Don't show message headers (sequence, producer, etc.)\n\
-                            --max-messages N Stop after N messages\n\
-                            --help, -h       Show this help message\n\n\
-                            DESCRIPTION:\n\
-                            The dump plugin reads messages from the global queue and outputs them\n\
-                            to stdout. This is useful for debugging and monitoring message flow.\n\
-                            By default, messages are formatted as human-readable text with headers.".to_string(),
-                    });
-                }
-                arg => {
-                    return Err(PluginError::Generic {
-                        message: format!("Unknown argument: {}", arg),
-                    });
-                }
-            }
-            i += 1;
-        }
+        // Parse arguments using clap
+        let matches = parser.parse(args)?;
+
+        // Determine format from arguments and configuration
+        self.output_format = determine_format(&matches, config);
+        self.show_headers = !matches.get_flag("no-headers");
 
         debug!(
-            "DumpPlugin: Arguments parsed - json={}, headers={}, max_messages={:?}",
-            self.format_json, self.show_headers, self.max_messages
+            "DumpPlugin: Arguments parsed - format={}, headers={}",
+            self.output_format, self.show_headers
         );
 
         Ok(())
@@ -237,102 +161,95 @@ impl ConsumerPlugin for DumpPlugin {
     async fn start_consuming(&mut self, consumer: QueueConsumer) -> PluginResult<()> {
         debug!("DumpPlugin: Starting message consumption");
 
-        // Store the consumer
-        let mut consumer_guard = self.consumer.write().await;
-        *consumer_guard = Some(consumer);
-        drop(consumer_guard);
+        // Create shutdown channel for graceful shutdown
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
-        // Set consuming flag
-        let mut consuming = self.consuming.write().await;
-        *consuming = true;
-        drop(consuming);
-
-        // Start the consumption task
-        let consumer_clone = Arc::clone(&self.consumer);
-        let consuming_clone = Arc::clone(&self.consuming);
-        let format_json = self.format_json;
+        // Capture plugin settings for the task
+        let output_format = self.output_format;
         let show_headers = self.show_headers;
-        let max_messages = self.max_messages;
 
+        // Spawn the consumer task that owns the consumer directly
         tokio::spawn(async move {
-            let mut message_count = 0;
-
+            let mut _message_count = 0;
             info!("DumpPlugin: Message consumption started");
 
             loop {
-                // Check if we should still be consuming
-                {
-                    let consuming_guard = consuming_clone.read().await;
-                    if !*consuming_guard {
+                tokio::select! {
+                    // Check for shutdown signal
+                    _ = &mut shutdown_rx => {
+                        info!("DumpPlugin: Shutdown signal received, stopping message consumption");
                         break;
                     }
-                }
 
-                // Try to read a message
-                let message = {
-                    let consumer_guard = consumer_clone.read().await;
-                    if let Some(ref consumer) = *consumer_guard {
-                        match consumer.read() {
-                            Ok(Some(msg)) => Some(msg),
-                            Ok(None) => None, // No messages available
-                            Err(e) => {
+                    // Try to read a message (with timeout to allow shutdown checks)
+                    result = tokio::time::timeout(
+                        tokio::time::Duration::from_millis(100),
+                        async { consumer.read() }
+                    ) => {
+                        match result {
+                            Ok(Ok(Some(msg))) => {
+                                // Format and output the message
+                                let formatted = match output_format {
+                                    OutputFormat::Json => {
+                                        let json_obj = json!({
+                                            "sequence": msg.header.sequence,
+                                            "producer_id": msg.header.producer_id,
+                                            "message_type": msg.header.message_type,
+                                            "timestamp": msg.header
+                                                .timestamp
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_secs(),
+                                            "data": msg.data
+                                        });
+                                        json_obj.to_string()
+                                    },
+                                    OutputFormat::Compact => format!(
+                                        "{}:{}:{}:{}",
+                                        msg.header.sequence,
+                                        msg.header.producer_id,
+                                        msg.header.message_type,
+                                        msg.data
+                                    ),
+                                    OutputFormat::Text => {
+                                        if show_headers {
+                                            format!(
+                                                "[{}] {} from {}: {}",
+                                                msg.header.sequence,
+                                                msg.header.message_type,
+                                                msg.header.producer_id,
+                                                msg.data
+                                            )
+                                        } else {
+                                            msg.data.clone()
+                                        }
+                                    }
+                                };
+
+                                println!("{}", formatted);
+                                _message_count += 1;
+                            }
+                            Ok(Ok(None)) => {
+                                // No messages available, continue the loop
+                                // (timeout will naturally provide a small delay)
+                            }
+                            Ok(Err(e)) => {
                                 error!("DumpPlugin: Error reading message: {:?}", e);
-                                None
+                                // Continue processing despite errors
+                            }
+                            Err(_) => {
+                                // Timeout occurred, continue loop to check for shutdown
                             }
                         }
-                    } else {
-                        break; // Consumer was removed
                     }
-                };
-
-                if let Some(msg) = message {
-                    // Format and output the message
-                    let formatted = if format_json {
-                        format!(
-                            r#"{{"sequence":{},"producer_id":"{}","message_type":"{}","timestamp":"{}","data":"{}"}}"#,
-                            msg.header.sequence,
-                            msg.header.producer_id,
-                            msg.header.message_type,
-                            msg.header
-                                .timestamp
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                            msg.data.replace('"', r#"\""#) // Escape quotes for JSON
-                        )
-                    } else if show_headers {
-                        format!(
-                            "[{}] {} from {}: {}",
-                            msg.header.sequence,
-                            msg.header.message_type,
-                            msg.header.producer_id,
-                            msg.data
-                        )
-                    } else {
-                        msg.data.clone()
-                    };
-
-                    println!("{}", formatted);
-                    message_count += 1;
-
-                    // Check if we've reached the maximum number of messages
-                    if let Some(max) = max_messages {
-                        if message_count >= max {
-                            info!(
-                                "DumpPlugin: Reached maximum message count ({}), stopping",
-                                max
-                            );
-                            break;
-                        }
-                    }
-                } else {
-                    // No messages available, brief sleep to avoid busy waiting
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             }
 
             info!("DumpPlugin: Message consumption stopped");
         });
+
+        // Store the shutdown sender for lifecycle management
+        self.shutdown_tx = Some(shutdown_tx);
 
         info!("DumpPlugin: Consumer task started");
         Ok(())
@@ -341,11 +258,14 @@ impl ConsumerPlugin for DumpPlugin {
     async fn stop_consuming(&mut self) -> PluginResult<()> {
         debug!("DumpPlugin: Stopping message consumption");
 
-        // Set consuming flag to false
-        let mut consuming = self.consuming.write().await;
-        *consuming = false;
+        // Send shutdown signal to the task
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            if let Err(_) = shutdown_tx.send(()) {
+                debug!("DumpPlugin: Task may have already stopped");
+            }
+        }
 
-        info!("DumpPlugin: Message consumption stopped");
+        info!("DumpPlugin: Shutdown signal sent");
         Ok(())
     }
 }
@@ -353,7 +273,7 @@ impl ConsumerPlugin for DumpPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::queue::{Message, QueueManager};
+    use crate::queue::QueueManager;
 
     #[tokio::test]
     async fn test_dump_plugin_creation() {
@@ -370,9 +290,8 @@ mod tests {
         let plugin = DumpPlugin::default();
 
         assert!(!plugin.initialized);
-        assert!(!plugin.format_json);
+        assert_eq!(plugin.output_format, OutputFormat::Text);
         assert!(plugin.show_headers);
-        assert!(plugin.max_messages.is_none());
     }
 
     #[tokio::test]
@@ -423,58 +342,54 @@ mod tests {
         let mut plugin = DumpPlugin::new();
 
         // Test JSON flag
-        let result = plugin.parse_plugin_arguments(&["--json".to_string()]).await;
+        let config = PluginConfig::default();
+        let result = plugin
+            .parse_plugin_arguments(&["--json".to_string()], &config)
+            .await;
         assert!(result.is_ok());
-        assert!(plugin.format_json);
+        assert_eq!(plugin.output_format, OutputFormat::Json);
 
         // Test no headers flag
         let result = plugin
-            .parse_plugin_arguments(&["--no-headers".to_string()])
+            .parse_plugin_arguments(&["--no-headers".to_string()], &config)
             .await;
         assert!(result.is_ok());
         assert!(!plugin.show_headers);
 
-        // Test max messages
-        let result = plugin
-            .parse_plugin_arguments(&["--max-messages".to_string(), "100".to_string()])
-            .await;
-        assert!(result.is_ok());
-        assert_eq!(plugin.max_messages, Some(100));
+        // Removed max-messages test as it's no longer supported
 
         // Test combined flags
         let result = plugin
-            .parse_plugin_arguments(&[
-                "--json".to_string(),
-                "--no-headers".to_string(),
-                "--max-messages".to_string(),
-                "50".to_string(),
-            ])
+            .parse_plugin_arguments(&["--json".to_string(), "--no-headers".to_string()], &config)
             .await;
         assert!(result.is_ok());
-        assert!(plugin.format_json);
+        assert_eq!(plugin.output_format, OutputFormat::Json);
         assert!(!plugin.show_headers);
-        assert_eq!(plugin.max_messages, Some(50));
     }
 
     #[tokio::test]
     async fn test_dump_plugin_argument_parsing_errors() {
         let mut plugin = DumpPlugin::new();
+        let config = PluginConfig::default();
 
         // Test missing argument for max-messages
         let result = plugin
-            .parse_plugin_arguments(&["--max-messages".to_string()])
+            .parse_plugin_arguments(&["--max-messages".to_string()], &config)
             .await;
         assert!(result.is_err());
 
         // Test invalid number for max-messages
         let result = plugin
-            .parse_plugin_arguments(&["--max-messages".to_string(), "invalid".to_string()])
+            .parse_plugin_arguments(
+                &["--max-messages".to_string(), "invalid".to_string()],
+                &config,
+            )
             .await;
         assert!(result.is_err());
 
         // Test unknown argument
         let result = plugin
-            .parse_plugin_arguments(&["--unknown".to_string()])
+            .parse_plugin_arguments(&["--unknown".to_string()], &config)
             .await;
         assert!(result.is_err());
     }
@@ -482,54 +397,28 @@ mod tests {
     #[tokio::test]
     async fn test_dump_plugin_help() {
         let mut plugin = DumpPlugin::new();
+        let config = PluginConfig::default();
 
         // Test help flag
-        let result = plugin.parse_plugin_arguments(&["--help".to_string()]).await;
+        let result = plugin
+            .parse_plugin_arguments(&["--help".to_string()], &config)
+            .await;
         assert!(result.is_err());
 
         if let Err(PluginError::Generic { message }) = result {
-            assert!(message.contains("Dump Plugin Help"));
+            // The help message should contain the plugin name and available options
+            assert!(message.contains("dump"));
             assert!(message.contains("--json"));
             assert!(message.contains("--no-headers"));
-            assert!(message.contains("--max-messages"));
         } else {
             panic!("Expected Generic error with help message");
         }
 
         // Test short help flag
-        let result = plugin.parse_plugin_arguments(&["-h".to_string()]).await;
+        let result = plugin
+            .parse_plugin_arguments(&["-h".to_string()], &config)
+            .await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_dump_plugin_message_formatting() {
-        let plugin = DumpPlugin::new();
-
-        let message = Message::new(
-            "test-producer".to_string(),
-            "test-event".to_string(),
-            "test data".to_string(),
-        );
-
-        // Test text format with headers
-        let formatted = plugin.format_message(&message);
-        assert!(formatted.contains("test-event"));
-        assert!(formatted.contains("test-producer"));
-        assert!(formatted.contains("test data"));
-
-        // Test JSON format
-        let mut json_plugin = DumpPlugin::new();
-        json_plugin.format_json = true;
-        let formatted = json_plugin.format_message(&message);
-        assert!(formatted.contains("\"producer_id\":\"test-producer\""));
-        assert!(formatted.contains("\"message_type\":\"test-event\""));
-        assert!(formatted.contains("\"data\":\"test data\""));
-
-        // Test no headers format
-        let mut no_headers_plugin = DumpPlugin::new();
-        no_headers_plugin.show_headers = false;
-        let formatted = no_headers_plugin.format_message(&message);
-        assert_eq!(formatted, "test data");
     }
 
     #[tokio::test]
@@ -549,17 +438,14 @@ mod tests {
         let result = plugin.start_consuming(consumer).await;
         assert!(result.is_ok());
 
-        // Check that consuming flag is set
-        let consuming = plugin.consuming.read().await;
-        assert!(*consuming);
-        drop(consuming);
+        // Check that shutdown sender is set
+        assert!(plugin.shutdown_tx.is_some());
 
         // Stop consuming
         let result = plugin.stop_consuming().await;
         assert!(result.is_ok());
 
-        // Check that consuming flag is cleared
-        let consuming = plugin.consuming.read().await;
-        assert!(!*consuming);
+        // Check that shutdown sender is consumed (cleared)
+        assert!(plugin.shutdown_tx.is_none());
     }
 }

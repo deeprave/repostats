@@ -4,6 +4,7 @@
 //! Owns the plugin registry and provides high-level plugin management operations.
 
 use crate::app::cli::command_segmenter::CommandSegment;
+use crate::plugin::args::PluginConfig;
 use crate::plugin::unified_discovery::PluginDiscovery;
 use crate::plugin::SharedPluginRegistry;
 use crate::plugin::{PluginError, PluginFunction, PluginInfo, PluginResult};
@@ -487,13 +488,20 @@ impl PluginManager {
                     })?;
 
                 // Parse plugin arguments
-                plugin.parse_plugin_arguments(args).await.map_err(|e| {
-                    PluginError::ExecutionError {
+                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
+                    crate::plugin::args::PluginConfig::from_toml(false, toml_table)
+                // TODO: get use_colors from global config
+                } else {
+                    crate::plugin::args::PluginConfig::default()
+                };
+                plugin
+                    .parse_plugin_arguments(args, &plugin_config)
+                    .await
+                    .map_err(|e| PluginError::ExecutionError {
                         plugin_name: plugin_name.clone(),
                         operation: "parse_arguments".to_string(),
                         cause: format!("Failed to parse plugin arguments: {}", e),
-                    }
-                })?;
+                    })?;
 
                 plugin_initialized = true;
                 info!(
@@ -514,13 +522,20 @@ impl PluginManager {
                     })?;
 
                 // Parse plugin arguments
-                plugin.parse_plugin_arguments(args).await.map_err(|e| {
-                    PluginError::ExecutionError {
+                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
+                    crate::plugin::args::PluginConfig::from_toml(false, toml_table)
+                // TODO: get use_colors from global config
+                } else {
+                    crate::plugin::args::PluginConfig::default()
+                };
+                plugin
+                    .parse_plugin_arguments(args, &plugin_config)
+                    .await
+                    .map_err(|e| PluginError::ExecutionError {
                         plugin_name: plugin_name.clone(),
                         operation: "parse_arguments".to_string(),
                         cause: format!("Failed to parse consumer plugin arguments: {}", e),
-                    }
-                })?;
+                    })?;
 
                 plugin_initialized = true;
                 info!(
@@ -572,9 +587,16 @@ impl PluginManager {
             );
 
             // Parse plugin arguments while we have the registry lock
+            let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
+                crate::plugin::args::PluginConfig::from_toml(false, toml_table) // TODO: get use_colors from global config
+            } else {
+                crate::plugin::args::PluginConfig::default()
+            };
             let mut registry = self.registry.inner().write().await;
             if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
-                plugin.parse_plugin_arguments(plugin_args).await?;
+                plugin
+                    .parse_plugin_arguments(plugin_args, &plugin_config)
+                    .await?;
                 debug!(
                     "PluginManager: Plugin {} arguments parsed successfully",
                     plugin_name
@@ -932,7 +954,11 @@ mod tests {
             Ok(())
         }
 
-        async fn parse_plugin_arguments(&mut self, _args: &[String]) -> PluginResult<()> {
+        async fn parse_plugin_arguments(
+            &mut self,
+            _args: &[String],
+            _config: &PluginConfig,
+        ) -> PluginResult<()> {
             Ok(())
         }
     }

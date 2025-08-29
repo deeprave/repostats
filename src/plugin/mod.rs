@@ -3,6 +3,7 @@
 //! Provides a trait-based interface for plugin communication with async notifications.
 //! Supports dynamic plugin loading, version compatibility, and real-time notifications.
 
+pub mod args;
 pub mod builtin;
 pub mod context;
 pub mod discovery;
@@ -14,6 +15,7 @@ pub mod traits;
 pub mod unified_discovery;
 
 // Re-export core types for easier access
+pub use args::{OutputFormat, PluginArgParser, PluginConfig};
 pub use context::PluginContext;
 pub use error::{PluginError, PluginResult};
 pub use manager::{PluginManager, PluginMetadata, PluginProxy};

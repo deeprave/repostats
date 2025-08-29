@@ -16,6 +16,7 @@
 //!
 //! Plugins do NOT control scanners, manage queues, or handle system functions.
 
+use crate::plugin::args::PluginConfig;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::queue::QueueConsumer;
 use std::collections::HashMap;
@@ -71,8 +72,12 @@ pub trait Plugin: Send + Sync {
     /// Clean up plugin resources
     async fn cleanup(&mut self) -> PluginResult<()>;
 
-    /// Parse plugin-specific command line arguments
-    async fn parse_plugin_arguments(&mut self, args: &[String]) -> PluginResult<()>;
+    /// Parse plugin-specific command line arguments with configuration context
+    async fn parse_plugin_arguments(
+        &mut self,
+        args: &[String],
+        config: &PluginConfig,
+    ) -> PluginResult<()>;
 }
 
 /// Consumer plugin trait for plugins that consume messages from queue
@@ -178,7 +183,11 @@ mod tests {
             Ok(())
         }
 
-        async fn parse_plugin_arguments(&mut self, _args: &[String]) -> PluginResult<()> {
+        async fn parse_plugin_arguments(
+            &mut self,
+            _args: &[String],
+            _config: &PluginConfig,
+        ) -> PluginResult<()> {
             self.args_parsed = true;
             Ok(())
         }
@@ -227,8 +236,12 @@ mod tests {
             self.base.cleanup().await
         }
 
-        async fn parse_plugin_arguments(&mut self, args: &[String]) -> PluginResult<()> {
-            self.base.parse_plugin_arguments(args).await
+        async fn parse_plugin_arguments(
+            &mut self,
+            args: &[String],
+            config: &PluginConfig,
+        ) -> PluginResult<()> {
+            self.base.parse_plugin_arguments(args, config).await
         }
     }
 
@@ -314,8 +327,9 @@ mod tests {
 
         // Test argument parsing
         assert!(!plugin.args_parsed);
+        let config = PluginConfig::default();
         plugin
-            .parse_plugin_arguments(&["--test".to_string()])
+            .parse_plugin_arguments(&["--test".to_string()], &config)
             .await
             .unwrap();
         assert!(plugin.args_parsed);
