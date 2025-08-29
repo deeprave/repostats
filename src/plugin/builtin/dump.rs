@@ -50,7 +50,7 @@ impl Default for DumpPlugin {
 
 impl std::fmt::Debug for DumpPlugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DumpPlu00gin")
+        f.debug_struct("DumpPlugin")
             .field("initialized", &self.initialized)
             .field("output_format", &self.output_format)
             .field("show_headers", &self.show_headers)
@@ -170,7 +170,7 @@ impl ConsumerPlugin for DumpPlugin {
 
         // Spawn the consumer task that owns the consumer directly
         tokio::spawn(async move {
-            let mut _message_count = 0;
+            let mut message_count = 0;
             info!("DumpPlugin: Message consumption started");
 
             loop {
@@ -227,7 +227,12 @@ impl ConsumerPlugin for DumpPlugin {
                                 };
 
                                 println!("{}", formatted);
-                                _message_count += 1;
+                                message_count += 1;
+
+                                // Log message processing progress
+                                if message_count % 100 == 0 {
+                                    log::trace!("DumpPlugin: Processed {} messages", message_count);
+                                }
                             }
                             Ok(Ok(None)) => {
                                 // No messages available, continue the loop
@@ -245,7 +250,10 @@ impl ConsumerPlugin for DumpPlugin {
                 }
             }
 
-            info!("DumpPlugin: Message consumption stopped");
+            info!(
+                "DumpPlugin: Message consumption stopped after processing {} messages",
+                message_count
+            );
         });
 
         // Store the shutdown sender for lifecycle management
