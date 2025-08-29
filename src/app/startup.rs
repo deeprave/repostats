@@ -532,14 +532,13 @@ async fn configure_scanner(
 
     trace!("Starting scanner configuration");
 
-    // Check: must have repositories to scan
-    if repositories.is_empty() {
-        error!("No repositories specified for scanning");
-        error!("Repository scanning cannot proceed without at least one repository");
-        error!("Expected repository paths in command line arguments or configuration");
-        error!("Use --repository <path> or configure repositories in TOML config file");
-        return None;
-    }
+    // Default to current directory if no repositories specified
+    let repositories_to_scan = if repositories.is_empty() {
+        debug!("No repositories specified, defaulting to current directory");
+        vec![std::path::PathBuf::from(".")]
+    } else {
+        repositories.to_vec()
+    };
 
     // Step 1: Create ScannerManager
     let scanner_manager = ScannerManager::create().await;
@@ -602,7 +601,7 @@ async fn configure_scanner(
     let mut successful_scanners = 0;
     let mut failed_repositories = Vec::new();
 
-    for (index, repo_path) in repositories.iter().enumerate() {
+    for (index, repo_path) in repositories_to_scan.iter().enumerate() {
         let repo_path_str = repo_path.to_string_lossy();
 
         if let Err(e) = scanner_manager.create_scanner(&repo_path_str).await {
@@ -610,7 +609,7 @@ async fn configure_scanner(
                 "Failed to create scanner for repository '{}' (#{}/{})",
                 repo_path_str,
                 index + 1,
-                repositories.len()
+                repositories_to_scan.len()
             );
             error!("Error details: {}", e);
             error!("Repository path: {}", repo_path_str);
@@ -625,7 +624,7 @@ async fn configure_scanner(
                 "Scanner created successfully for repository: {} (#{}/{})",
                 repo_path_str,
                 index + 1,
-                repositories.len()
+                repositories_to_scan.len()
             );
         }
     }
@@ -633,7 +632,10 @@ async fn configure_scanner(
     // Check if we have any successful scanners
     if successful_scanners == 0 {
         error!("Failed to create scanners for any repositories");
-        error!("Total repositories attempted: {}", repositories.len());
+        error!(
+            "Total repositories attempted: {}",
+            repositories_to_scan.len()
+        );
         error!("Failed repositories: {:?}", failed_repositories);
         error!("No valid repositories available for scanning");
         return None;
