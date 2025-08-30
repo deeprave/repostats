@@ -4,3 +4,4 @@
 //! including manager tests, registry tests, and integration tests.
 
 mod error;
+mod utils;

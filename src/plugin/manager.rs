@@ -124,9 +124,10 @@ impl PluginManager {
             let info = plugin.plugin_info();
             let functions = plugin.advertised_functions();
 
-            // Use default values for file requirements (metadata is for display only)
-            let requires_file_content = false;
-            let requires_historical_content = false;
+            // Use actual plugin requirements instead of hardcoded values
+            let requirements = plugin.requirements();
+            let requires_file_content = requirements.requires_file_content();
+            let requires_historical_content = requirements.requires_history();
 
             Ok(PluginMetadata {
                 name: info.name.clone(),
@@ -324,6 +325,30 @@ impl PluginManager {
     /// Get currently active plugins
     pub fn get_active_plugins(&self) -> &[ActivePluginInfo] {
         &self.active_plugins
+    }
+
+    /// Get combined requirements from all active plugins
+    pub async fn get_combined_requirements(&self) -> crate::scanner::api::ScanRequires {
+        use crate::scanner::api::ScanRequires;
+
+        let registry = self.registry.inner().read().await;
+        let mut combined = ScanRequires::NONE;
+
+        // Only get requirements from active plugins, not all plugins
+        let active_plugin_names = registry.get_active_plugins();
+
+        for plugin_name in active_plugin_names {
+            // Try to get as standard plugin first
+            if let Some(plugin) = registry.get_plugin(&plugin_name) {
+                combined |= plugin.requirements();
+            }
+            // Then try as consumer plugin
+            else if let Some(plugin) = registry.get_consumer_plugin(&plugin_name) {
+                combined |= plugin.requirements();
+            }
+        }
+
+        combined
     }
 
     /// Set plugin configurations from main TOML config
@@ -745,6 +770,7 @@ impl PluginManager {
             let plugin_metadata = if let Some(plugin) = registry.get_plugin(plugin_name) {
                 let info = plugin.plugin_info();
                 let functions = plugin.advertised_functions();
+                let requirements = plugin.requirements();
 
                 PluginMetadata {
                     name: info.name.clone(),
@@ -752,12 +778,13 @@ impl PluginManager {
                     description: info.description.clone(),
                     author: info.author.clone(),
                     functions,
-                    requires_file_content: false, // Default for display
-                    requires_historical_content: false, // Default for display
+                    requires_file_content: requirements.requires_file_content(),
+                    requires_historical_content: requirements.requires_history(),
                 }
             } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
                 let info = consumer_plugin.plugin_info();
                 let functions = consumer_plugin.advertised_functions();
+                let requirements = consumer_plugin.requirements();
 
                 PluginMetadata {
                     name: info.name.clone(),
@@ -765,8 +792,8 @@ impl PluginManager {
                     description: info.description.clone(),
                     author: info.author.clone(),
                     functions,
-                    requires_file_content: false, // Default for display
-                    requires_historical_content: false, // Default for display
+                    requires_file_content: requirements.requires_file_content(),
+                    requires_historical_content: requirements.requires_history(),
                 }
             } else {
                 continue; // Plugin not found in either registry

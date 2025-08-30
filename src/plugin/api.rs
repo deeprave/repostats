@@ -12,7 +12,7 @@ pub use crate::plugin::manager::PluginManager;
 pub use crate::plugin::error::{PluginError, PluginResult};
 
 // Plugin traits and core interfaces
-pub use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginDataRequirements};
+pub use crate::plugin::traits::{ConsumerPlugin, Plugin};
 
 // Plugin metadata and information
 pub use crate::plugin::types::{

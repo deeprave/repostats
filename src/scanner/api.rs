@@ -18,5 +18,5 @@ pub use crate::scanner::task::ScannerTask;
 // Core data types and structures
 pub use crate::scanner::types::{
     ChangeType, CommitInfo, FileChangeData, RepositoryData, RepositoryDataBuilder, ScanMessage,
-    ScanStats,
+    ScanRequires, ScanStats,
 };

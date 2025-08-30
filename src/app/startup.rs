@@ -237,7 +237,7 @@ async fn configure_plugins(
 
     // Enhanced validation with detailed context
     if command_segments.is_empty() {
-        log::error!("FATAL: No processing plugins activated=");
+        log::error!("FATAL: No processing plugins activated");
         exit(1);
     }
 
@@ -263,7 +263,7 @@ async fn configure_plugins(
 
     // Step 3: Initialise active plugins with their configurations
     if let Err(e) = plugin_manager.initialize_active_plugins().await {
-        log::error!("FATAL: Plugin intialization failed");
+        log::error!("FATAL: Plugin initialization failed");
         log::debug!("Error details: {}", e);
         exit(1);
     }
@@ -518,38 +518,22 @@ async fn configure_scanner(
         }
     }
 
-    // Step 4: Create scanners for all repositories
-    let mut successful_scanners = 0;
-    let mut failed_repositories = Vec::new();
-
-    for (index, repo_path) in repositories_to_scan.iter().enumerate() {
-        let repo_path_str = repo_path.to_string_lossy();
-
-        if let Err(e) = scanner_manager.create_scanner(&repo_path_str).await {
-            log::error!(
-                "Failed to create scanner for repository '{}' (#{}/{})",
-                repo_path_str,
-                index + 1,
-                repositories_to_scan.len()
+    // Step 4: Create scanners for all repositories using batch method with all-or-nothing semantics
+    match scanner_manager
+        .create_scanners(&repositories_to_scan, Some(&query_params))
+        .await
+    {
+        Ok(scanners) => {
+            log::debug!(
+                "Successfully created {} scanners for all repositories",
+                scanners.len()
             );
-            log::debug!("Error details: {e}, path: {repo_path_str}");
-            failed_repositories.push(repo_path_str.to_string());
-        } else {
-            successful_scanners += 1;
         }
-    }
-
-    // Check if we have any successful scanners
-    if successful_scanners == 0 {
-        log::error!("Failed to create scanners for any repositories");
-        log::debug!("Failed repositories: {failed_repositories:?}");
-        return None;
-    } else if !failed_repositories.is_empty() {
-        log::warn!(
-            "Repositories failed initialise: {successful_scanners} successful, {} failed",
-            failed_repositories.len()
-        );
-        log::warn!("Failed repositories: {failed_repositories:?}");
+        Err(e) => {
+            log::error!("Failed to initialise repository scan");
+            log::debug!("Error: {e}");
+            return None;
+        }
     }
 
     // Return the configured scanner manager

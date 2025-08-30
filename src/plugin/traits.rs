@@ -20,7 +20,7 @@ use crate::plugin::args::PluginConfig;
 use crate::plugin::error::PluginResult;
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
-use std::collections::HashMap;
+use crate::scanner::api::ScanRequires;
 
 /// Base plugin trait that all plugins must implement
 ///
@@ -37,6 +37,14 @@ pub trait Plugin: Send + Sync {
 
     /// Get list of functions this plugin advertises
     fn advertised_functions(&self) -> Vec<PluginFunction>;
+
+    /// Get scanner requirements for this plugin
+    ///
+    /// Returns bitflags indicating what data the scanner needs to provide
+    /// for this plugin to function properly. Defaults to NONE.
+    fn requirements(&self) -> ScanRequires {
+        ScanRequires::NONE
+    }
 
     /// Initialize the plugin
     async fn initialize(&mut self) -> PluginResult<()>;
@@ -72,18 +80,6 @@ pub trait ConsumerPlugin: Plugin {
 
     /// Stop consuming messages
     async fn stop_consuming(&mut self) -> PluginResult<()>;
-}
-
-/// Trait for plugins to specify data requirements for optimization
-pub trait PluginDataRequirements {
-    /// Whether plugin needs file content or just metadata
-    fn requires_file_content(&self) -> bool;
-
-    /// Whether plugin needs historical content reconstruction
-    fn requires_historical_content(&self) -> bool;
-
-    /// Additional data requirements as key-value pairs
-    fn additional_requirements(&self) -> HashMap<String, String>;
 }
 
 #[cfg(test)]
@@ -241,25 +237,6 @@ mod tests {
         }
     }
 
-    // Mock plugin with data requirements
-    struct MockDataRequirementsPlugin;
-
-    impl PluginDataRequirements for MockDataRequirementsPlugin {
-        fn requires_file_content(&self) -> bool {
-            true
-        }
-
-        fn requires_historical_content(&self) -> bool {
-            false
-        }
-
-        fn additional_requirements(&self) -> HashMap<String, String> {
-            let mut reqs = HashMap::new();
-            reqs.insert("format".to_string(), "json".to_string());
-            reqs
-        }
-    }
-
     #[tokio::test]
     async fn test_plugin_info_creation() {
         let plugin = MockPlugin::new();
@@ -397,14 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_data_requirements() {
-        let plugin = MockDataRequirementsPlugin;
+    fn test_plugin_requirements() {
+        let plugin = MockPlugin::new();
 
-        assert_eq!(plugin.requires_file_content(), true);
-        assert_eq!(plugin.requires_historical_content(), false);
-
-        let reqs = plugin.additional_requirements();
-        assert_eq!(reqs.get("format"), Some(&"json".to_string()));
+        // Default implementation should return NONE
+        assert_eq!(plugin.requirements(), ScanRequires::NONE);
+        assert!(plugin.requirements().is_empty());
     }
 
     #[test]

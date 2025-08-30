@@ -8,14 +8,14 @@ use crate::plugin::args::{
     create_format_args, determine_format, OutputFormat, PluginArgParser, PluginConfig,
 };
 use crate::plugin::error::{PluginError, PluginResult};
-use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginDataRequirements};
+use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::{Message, QueueConsumer};
-use crate::scanner::api::ScanMessage;
+use crate::scanner::api::{ScanMessage, ScanRequires};
 use clap::Arg;
 use log::error;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use tokio::sync::oneshot;
 
 /// Dump plugin for outputting queue messages to stdout
@@ -250,12 +250,18 @@ impl Plugin for DumpPlugin {
         }]
     }
 
+    fn requirements(&self) -> ScanRequires {
+        // Dump plugin needs comprehensive data for debugging purposes
+        // Including repository info, history, and file changes for complete debugging visibility
+        ScanRequires::REPOSITORY_INFO | ScanRequires::HISTORY | ScanRequires::FILE_CHANGES
+    }
+
     async fn initialize(&mut self) -> PluginResult<()> {
         self.initialized = true;
         Ok(())
     }
 
-    async fn execute(&mut self, args: &[String]) -> PluginResult<()> {
+    async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
         if !self.initialized {
             return Err(PluginError::ExecutionError {
                 plugin_name: "dump".to_string(),
@@ -321,11 +327,14 @@ impl ConsumerPlugin for DumpPlugin {
         // Spawn the consumer task that owns the consumer directly
         tokio::spawn(async move {
             let mut message_count = 0;
+            let mut active_scanners = HashSet::new();
+            let mut completed_scanners = HashSet::new();
 
             loop {
                 tokio::select! {
                     // Check for shutdown signal
                     _ = &mut shutdown_rx => {
+                        log::debug!("DumpPlugin: Received shutdown signal, stopping...");
                         break;
                     }
 
@@ -339,6 +348,41 @@ impl ConsumerPlugin for DumpPlugin {
                                 let formatted = DumpPlugin::format_message(&msg, output_format, show_headers);
                                 println!("{}", formatted);
                                 message_count += 1;
+
+                                // Track scanner lifecycle
+                                if let Ok(scan_message) = serde_json::from_str::<ScanMessage>(&msg.data) {
+                                    match scan_message {
+                                        ScanMessage::ScanStarted { scanner_id, .. } => {
+                                            active_scanners.insert(scanner_id.clone());
+                                            log::debug!("DumpPlugin: Started tracking scanner: {}", scanner_id);
+                                        }
+                                        ScanMessage::ScanCompleted { scanner_id, .. } => {
+                                            completed_scanners.insert(scanner_id.clone());
+                                            log::debug!("DumpPlugin: Scanner completed: {}", scanner_id);
+
+                                            // Check if all active scanners have completed
+                                            if !active_scanners.is_empty() &&
+                                               active_scanners.iter().all(|id| completed_scanners.contains(id)) {
+                                                log::debug!("DumpPlugin: All scanners completed, finishing...");
+                                                break;
+                                            }
+                                        }
+                                        ScanMessage::ScanError { scanner_id, .. } => {
+                                            completed_scanners.insert(scanner_id.clone());
+                                            log::debug!("DumpPlugin: Scanner failed: {}", scanner_id);
+
+                                            // Check if all active scanners have completed (including errors)
+                                            if !active_scanners.is_empty() &&
+                                               active_scanners.iter().all(|id| completed_scanners.contains(id)) {
+                                                log::debug!("DumpPlugin: All scanners completed (some with errors), finishing...");
+                                                break;
+                                            }
+                                        }
+                                        _ => {
+                                            // Other message types don't affect lifecycle
+                                        }
+                                    }
+                                }
                             }
                             Ok(Ok(None)) => {
                                 // No messages available, continue the loop
@@ -355,6 +399,8 @@ impl ConsumerPlugin for DumpPlugin {
                     }
                 }
             }
+
+            log::info!("DumpPlugin: Processed {} messages total", message_count);
         });
 
         // Store the shutdown sender for lifecycle management
@@ -370,26 +416,6 @@ impl ConsumerPlugin for DumpPlugin {
         }
 
         Ok(())
-    }
-}
-
-impl PluginDataRequirements for DumpPlugin {
-    fn requires_file_content(&self) -> bool {
-        // Dump plugin doesn't need file content, just metadata
-        false
-    }
-
-    fn requires_historical_content(&self) -> bool {
-        // Dump plugin doesn't need historical content reconstruction
-        false
-    }
-
-    fn additional_requirements(&self) -> HashMap<String, String> {
-        let mut requirements = HashMap::new();
-        // Indicate that we want repository metadata for proper display
-        requirements.insert("repository_metadata".to_string(), "true".to_string());
-        requirements.insert("scan_messages".to_string(), "all".to_string());
-        requirements
     }
 }
 
