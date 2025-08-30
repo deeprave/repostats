@@ -10,7 +10,7 @@ use crate::plugin::args::{
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginDataRequirements};
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
-use crate::queue::api::QueueConsumer;
+use crate::queue::api::{Message, QueueConsumer};
 use crate::scanner::api::ScanMessage;
 use clap::Arg;
 use log::error;
@@ -58,6 +58,154 @@ impl DumpPlugin {
             "[{}] {} from {}: {}",
             sequence, message_type, producer_id, data
         )
+    }
+
+    /// Extract scan message from raw message data
+    fn extract_scan_message(msg: &Message) -> Option<ScanMessage> {
+        if Self::is_scan_message(&msg.header.message_type) {
+            match serde_json::from_str::<ScanMessage>(&msg.data) {
+                Ok(scan_msg) => Some(scan_msg),
+                Err(e) => {
+                    error!(
+                        "DumpPlugin: Failed to deserialize ScanMessage (type: {}): {}",
+                        msg.header.message_type, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Format message in JSON format
+    fn format_json(msg: &Message, scan_message: Option<&ScanMessage>) -> String {
+        if let Some(scan_msg) = scan_message {
+            json!({
+                "sequence": msg.header.sequence,
+                "producer_id": msg.header.producer_id,
+                "message_type": msg.header.message_type,
+                "timestamp": msg.header
+                    .timestamp
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                "scan_message": scan_msg
+            })
+            .to_string()
+        } else {
+            json!({
+                "sequence": msg.header.sequence,
+                "producer_id": msg.header.producer_id,
+                "message_type": msg.header.message_type,
+                "timestamp": msg.header
+                    .timestamp
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                "data": msg.data
+            })
+            .to_string()
+        }
+    }
+
+    /// Format message in compact format
+    fn format_compact(msg: &Message, scan_message: Option<&ScanMessage>) -> String {
+        if msg.header.message_type.starts_with("repository_data") {
+            if let Some(ScanMessage::RepositoryData {
+                repository_data, ..
+            }) = scan_message
+            {
+                format!(
+                    "{}:{}:repository[{}]:{:?}",
+                    msg.header.sequence,
+                    msg.header.producer_id,
+                    repository_data.path,
+                    repository_data.git_ref
+                )
+            } else {
+                format!(
+                    "{}:{}:{}:{}",
+                    msg.header.sequence, msg.header.producer_id, msg.header.message_type, msg.data
+                )
+            }
+        } else {
+            format!(
+                "{}:{}:{}:{}",
+                msg.header.sequence, msg.header.producer_id, msg.header.message_type, msg.data
+            )
+        }
+    }
+
+    /// Format message in text format
+    fn format_text(
+        msg: &Message,
+        scan_message: Option<&ScanMessage>,
+        show_headers: bool,
+    ) -> String {
+        if msg.header.message_type.starts_with("repository_data") {
+            Self::format_repository_data_text(msg, scan_message, show_headers)
+        } else {
+            Self::format_regular_message_text(msg, show_headers)
+        }
+    }
+
+    /// Format repository data message in text format
+    fn format_repository_data_text(
+        msg: &Message,
+        scan_message: Option<&ScanMessage>,
+        show_headers: bool,
+    ) -> String {
+        if let Some(ScanMessage::RepositoryData {
+            repository_data, ..
+        }) = scan_message
+        {
+            if show_headers {
+                format!(
+                    "[{}] Repository Scan Metadata:\n  Path: {}\n  Branch: {:?}\n  Filters: {} files, {} authors, {:?} commits max\n  Date Range: {:?}",
+                    msg.header.sequence,
+                    repository_data.path,
+                    repository_data.git_ref.as_deref().unwrap_or("default"),
+                    repository_data.file_paths.as_deref().unwrap_or("all"),
+                    repository_data.authors.as_deref().unwrap_or("all"),
+                    repository_data.max_commits,
+                    repository_data.date_range.as_deref().unwrap_or("all time")
+                )
+            } else {
+                format!(
+                    "Repository: {} (branch: {:?}, filters: active)",
+                    repository_data.path, repository_data.git_ref
+                )
+            }
+        } else {
+            // Fallback if deserialization fails
+            Self::format_regular_message_text(msg, show_headers)
+        }
+    }
+
+    /// Format regular (non-repository) message in text format
+    fn format_regular_message_text(msg: &Message, show_headers: bool) -> String {
+        if show_headers {
+            Self::format_header(
+                msg.header.sequence,
+                &msg.header.message_type,
+                &msg.header.producer_id,
+                &msg.data,
+            )
+        } else {
+            msg.data.clone()
+        }
+    }
+
+    /// Format message according to output format
+    fn format_message(msg: &Message, output_format: OutputFormat, show_headers: bool) -> String {
+        let scan_message = Self::extract_scan_message(msg);
+
+        match output_format {
+            OutputFormat::Json => Self::format_json(msg, scan_message.as_ref()),
+            OutputFormat::Compact => Self::format_compact(msg, scan_message.as_ref()),
+            OutputFormat::Text => Self::format_text(msg, scan_message.as_ref(), show_headers),
+        }
     }
 }
 
@@ -188,134 +336,9 @@ impl ConsumerPlugin for DumpPlugin {
                     ) => {
                         match result {
                             Ok(Ok(Some(msg))) => {
-                                // Try to deserialize as ScanMessage for special handling
-                                let scan_message: Option<ScanMessage> = if DumpPlugin::is_scan_message(&msg.header.message_type) {
-                                    match serde_json::from_str::<ScanMessage>(&msg.data) {
-                                        Ok(scan_msg) => Some(scan_msg),
-                                        Err(e) => {
-                                            error!("DumpPlugin: Failed to deserialize ScanMessage (type: {}): {}",
-                                                msg.header.message_type, e);
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    None
-                                };
-
-                                // Format and output the message
-                                let formatted = match output_format {
-                                    OutputFormat::Json => {
-                                        // For JSON, include the deserialized scan message if available
-                                        if let Some(scan_msg) = scan_message {
-                                            json!({
-                                                "sequence": msg.header.sequence,
-                                                "producer_id": msg.header.producer_id,
-                                                "message_type": msg.header.message_type,
-                                                "timestamp": msg.header
-                                                    .timestamp
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs(),
-                                                "scan_message": scan_msg
-                                            }).to_string()
-                                        } else {
-                                            json!({
-                                                "sequence": msg.header.sequence,
-                                                "producer_id": msg.header.producer_id,
-                                                "message_type": msg.header.message_type,
-                                                "timestamp": msg.header
-                                                    .timestamp
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_secs(),
-                                                "data": msg.data
-                                            }).to_string()
-                                        }
-                                    },
-                                    OutputFormat::Compact => {
-                                        // For compact, show key fields from RepositoryData if available
-                                        if msg.header.message_type.starts_with("repository_data") {
-                                            if let Some(ScanMessage::RepositoryData { repository_data, .. }) = scan_message {
-                                                format!(
-                                                    "{}:{}:repository[{}]:{:?}",
-                                                    msg.header.sequence,
-                                                    msg.header.producer_id,
-                                                    repository_data.path,
-                                                    repository_data.git_ref
-                                                )
-                                            } else {
-                                                format!(
-                                                    "{}:{}:{}:{}",
-                                                    msg.header.sequence,
-                                                    msg.header.producer_id,
-                                                    msg.header.message_type,
-                                                    msg.data
-                                                )
-                                            }
-                                        } else {
-                                            format!(
-                                                "{}:{}:{}:{}",
-                                                msg.header.sequence,
-                                                msg.header.producer_id,
-                                                msg.header.message_type,
-                                                msg.data
-                                            )
-                                        }
-                                    },
-                                    OutputFormat::Text => {
-                                        // For text, provide human-readable format for RepositoryData
-                                        if msg.header.message_type.starts_with("repository_data") {
-                                            if let Some(ScanMessage::RepositoryData { repository_data, .. }) = scan_message {
-                                                if show_headers {
-                                                    format!(
-                                                        "[{}] Repository Scan Metadata:\n  Path: {}\n  Branch: {:?}\n  Filters: {} files, {} authors, {:?} commits max\n  Date Range: {:?}",
-                                                        msg.header.sequence,
-                                                        repository_data.path,
-                                                        repository_data.git_ref.as_deref().unwrap_or("default"),
-                                                        repository_data.file_paths.as_deref().unwrap_or("all"),
-                                                        repository_data.authors.as_deref().unwrap_or("all"),
-                                                        repository_data.max_commits,
-                                                        repository_data.date_range.as_deref().unwrap_or("all time")
-                                                    )
-                                                } else {
-                                                    format!(
-                                                        "Repository: {} (branch: {:?}, filters: active)",
-                                                        repository_data.path,
-                                                        repository_data.git_ref
-                                                    )
-                                                }
-                                            } else {
-                                                // Fallback if deserialization fails
-                                                if show_headers {
-                                                    DumpPlugin::format_header(
-                                                        msg.header.sequence,
-                                                        &msg.header.message_type,
-                                                        &msg.header.producer_id,
-                                                        &msg.data
-                                                    )
-                                                } else {
-                                                    msg.data.clone()
-                                                }
-                                            }
-                                        } else {
-                                            // Non-repository data messages
-                                            if show_headers {
-                                                DumpPlugin::format_header(
-                                                    msg.header.sequence,
-                                                    &msg.header.message_type,
-                                                    &msg.header.producer_id,
-                                                    &msg.data
-                                                )
-                                            } else {
-                                                msg.data.clone()
-                                            }
-                                        }
-                                    }
-                                };
-
+                                let formatted = DumpPlugin::format_message(&msg, output_format, show_headers);
                                 println!("{}", formatted);
                                 message_count += 1;
-
                             }
                             Ok(Ok(None)) => {
                                 // No messages available, continue the loop
