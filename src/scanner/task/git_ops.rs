@@ -3,10 +3,11 @@
 //! Git-related operations including repository access, commit scanning, and content reconstruction.
 
 use crate::core::query::QueryParams;
-use crate::notifications::event::ScanEventType;
+use crate::notifications::api::ScanEventType;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::{CommitInfo, RepositoryData, ScanMessage, ScanStats};
 use gix;
+use log;
 use std::time::SystemTime;
 
 use super::core::ScannerTask;
@@ -46,6 +47,7 @@ impl ScannerTask {
         query_params: Option<&QueryParams>,
     ) -> ScanResult<Vec<ScanMessage>> {
         // Publish scanner started event
+        log::trace!("Publishing scanner started event");
         self.publish_scanner_event(
             ScanEventType::Started,
             Some("Starting repository scan".to_string()),
@@ -58,6 +60,7 @@ impl ScannerTask {
         let repo = self.repository();
 
         // FIRST: Extract and add repository data as the very first message, reusing the repository
+        log::trace!("Extracting repository data");
         let repository_data = match self.extract_repository_data(query_params, repo).await {
             Ok(data) => data,
             Err(e) => {

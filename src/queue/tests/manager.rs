@@ -1,6 +1,6 @@
 //! Tests for Queue Module
 
-use super::*;
+use crate::queue::api::*;
 
 #[cfg(test)]
 mod queue_manager_tests {

@@ -4,7 +4,9 @@
 //! its own independent position. This allows multiple consumers to process the
 //! same message stream at their own pace.
 
-use crate::queue::{Message, QueueManager, QueueResult};
+use crate::queue::error::{QueueError, QueueResult};
+use crate::queue::manager::QueueManager;
+use crate::queue::message::Message;
 use std::sync::{Arc, Weak};
 
 /// Consumer handle for reading messages from the queue
@@ -81,12 +83,12 @@ impl QueueConsumer {
     /// Read the next available message from the global queue
     pub fn read(&self) -> QueueResult<Option<Arc<Message>>> {
         // Get strong reference to manager
-        let manager =
-            self.manager
-                .upgrade()
-                .ok_or_else(|| crate::queue::QueueError::OperationFailed {
-                    message: "QueueManager no longer exists".to_string(),
-                })?;
+        let manager = self
+            .manager
+            .upgrade()
+            .ok_or_else(|| QueueError::OperationFailed {
+                message: "QueueManager no longer exists".to_string(),
+            })?;
 
         // Get the global queue and read next message
         let queue = manager.get_global_queue()?;

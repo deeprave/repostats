@@ -3,7 +3,6 @@
 //! Thread-safe plugin registry for managing loaded plugins with registration,
 //! retrieval, and lifecycle management capabilities.
 
-use crate::plugin::args::PluginConfig;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use std::collections::HashMap;
@@ -193,8 +192,9 @@ impl Default for SharedPluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::traits::{PluginFunction, PluginInfo, PluginType};
-    use crate::queue::QueueConsumer;
+    use crate::plugin::args::PluginConfig;
+    use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+    use crate::queue::api::QueueConsumer;
 
     // Mock plugin for testing
     #[derive(Debug)]

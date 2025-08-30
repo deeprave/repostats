@@ -4,12 +4,15 @@
 //! Owns the plugin registry and provides high-level plugin management operations.
 
 use crate::app::cli::command_segmenter::CommandSegment;
-use crate::plugin::args::PluginConfig;
+use crate::plugin::error::{PluginError, PluginResult};
+use crate::plugin::registry::SharedPluginRegistry;
+use crate::plugin::types::PluginSource;
+use crate::plugin::types::{
+    ActivePluginInfo, PluginFunction, PluginId, PluginInfo, PluginMetadata, PluginProxy,
+};
 use crate::plugin::unified_discovery::PluginDiscovery;
-use crate::plugin::SharedPluginRegistry;
-use crate::plugin::{PluginError, PluginFunction, PluginInfo, PluginResult};
-use crate::queue::QueueManager;
-use log::{debug, info, warn};
+use crate::queue::api::{QueueConsumer, QueueManager};
+use log::{info, warn};
 use std::collections::HashMap;
 use toml::Table;
 
@@ -42,23 +45,12 @@ pub struct PluginManager {
 
     /// Queue consumers that have been created but not yet activated
     /// Maps plugin name to its QueueConsumer
-    pending_consumers: HashMap<String, crate::queue::QueueConsumer>,
-}
+    pending_consumers: HashMap<String, QueueConsumer>,
 
-/// Information about an active plugin (matched to a command segment)
-#[derive(Debug, Clone)]
-pub struct ActivePluginInfo {
-    /// Name of the plugin
-    pub plugin_name: String,
-    /// Function name that was matched
-    pub function_name: String,
-    /// Arguments for this plugin from the command segment
-    pub args: Vec<String>,
+    /// Notification receivers to keep channels alive
+    /// Maps subscriber ID to notification receiver
+    notification_receivers: HashMap<String, crate::notifications::api::EventReceiver>,
 }
-
-/// Unique identifier for a plugin within the manager
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PluginId(u64);
 
 impl PluginManager {
     /// Create a new plugin manager
@@ -68,10 +60,11 @@ impl PluginManager {
             api_version,
             active_command: None,
             plugin_ids: HashMap::new(),
-            next_id: PluginId(1),
+            next_id: PluginId::new(1),
             active_plugins: Vec::new(),
             plugin_configs: HashMap::new(),
             pending_consumers: HashMap::new(),
+            notification_receivers: HashMap::new(),
         }
     }
 
@@ -148,7 +141,7 @@ impl PluginManager {
     /// Generate next plugin ID
     fn next_plugin_id(&mut self) -> PluginId {
         let id = self.next_id;
-        self.next_id = PluginId(self.next_id.0 + 1);
+        self.next_id.increment();
         id
     }
 
@@ -189,11 +182,6 @@ impl PluginManager {
         plugin_dir: Option<&str>,
         exclusions: &[String],
     ) -> PluginResult<()> {
-        debug!(
-            "PluginManager: Starting plugin discovery with dir: {:?}, exclusions: {:?}",
-            plugin_dir, exclusions
-        );
-
         // Create discovery implementation with our configuration
         let exclusion_strs: Vec<&str> = exclusions.iter().map(|s| s.as_str()).collect();
         let discovery = PluginDiscovery::with_inclusion_config(
@@ -213,15 +201,15 @@ impl PluginManager {
 
             // Create plugin instance and register
             match discovered.source {
-                crate::plugin::PluginSource::Builtin { factory } => {
+                PluginSource::Builtin { factory } => {
                     let plugin = factory();
                     registry.register_plugin(plugin)?;
                 }
-                crate::plugin::PluginSource::BuiltinConsumer { factory } => {
+                PluginSource::BuiltinConsumer { factory } => {
                     let consumer_plugin = factory();
                     registry.register_consumer_plugin(consumer_plugin)?;
                 }
-                crate::plugin::PluginSource::External { library_path } => {
+                PluginSource::External { library_path } => {
                     // TODO: Implement external plugin loading from shared library
                     return Err(PluginError::LoadError {
                         plugin_name: discovered.info.name.clone(),
@@ -234,7 +222,6 @@ impl PluginManager {
             }
         }
 
-        debug!("PluginManager: Plugin discovery completed successfully");
         Ok(())
     }
 
@@ -246,15 +233,6 @@ impl PluginManager {
         &mut self,
         command_segments: &[CommandSegment],
     ) -> PluginResult<()> {
-        debug!(
-            "PluginManager: Activating plugins for {} command segments: {:?}",
-            command_segments.len(),
-            command_segments
-                .iter()
-                .map(|s| &s.command_name)
-                .collect::<Vec<_>>()
-        );
-
         // Clear any existing active plugins
         self.active_plugins.clear();
 
@@ -271,11 +249,6 @@ impl PluginManager {
                     if function.name == segment.command_name
                         || function.aliases.contains(&segment.command_name)
                     {
-                        info!(
-                            "PluginManager: Matched command '{}' to plugin '{}' function '{}'",
-                            segment.command_name, plugin_name, function.name
-                        );
-
                         self.active_plugins.push(ActivePluginInfo {
                             plugin_name: plugin_name.clone(),
                             function_name: function.name.clone(),
@@ -301,16 +274,6 @@ impl PluginManager {
                 });
             }
         }
-
-        info!(
-            "PluginManager: Successfully activated {} plugins: {}",
-            self.active_plugins.len(),
-            self.active_plugins
-                .iter()
-                .map(|p| p.plugin_name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
 
         Ok(())
     }
@@ -351,8 +314,6 @@ impl PluginManager {
     /// Extracts plugin-specific configuration sections from the main TOML config.
     /// Supports both `[plugins.plugin_name]` and `[plugin_name]` section formats.
     pub fn set_plugin_configs(&mut self, main_config: &Table) -> PluginResult<()> {
-        debug!("PluginManager: Setting plugin configurations from main TOML config");
-
         // Clear existing plugin configs
         self.plugin_configs.clear();
 
@@ -361,10 +322,6 @@ impl PluginManager {
             if let Some(plugins_table) = plugins_section.as_table() {
                 for (plugin_name, plugin_config) in plugins_table {
                     if let Some(config_table) = plugin_config.as_table() {
-                        debug!(
-                            "PluginManager: Found config for plugin '{}' in [plugins.{}] section",
-                            plugin_name, plugin_name
-                        );
                         self.plugin_configs
                             .insert(plugin_name.clone(), config_table.clone());
                     } else {
@@ -390,25 +347,11 @@ impl PluginManager {
                 if !self.plugin_configs.contains_key(key) {
                     // Try to determine if this looks like a plugin config section
                     // For now, we'll be permissive and include any table section
-                    debug!(
-                        "PluginManager: Found potential plugin config for '{}' in [{}] section",
-                        key, key
-                    );
                     self.plugin_configs
                         .insert(key.clone(), config_table.clone());
                 }
             }
         }
-
-        info!(
-            "PluginManager: Loaded configurations for {} plugins: {}",
-            self.plugin_configs.len(),
-            self.plugin_configs
-                .keys()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
 
         Ok(())
     }
@@ -441,13 +384,7 @@ impl PluginManager {
     /// Note: Plugins don't currently receive TOML config directly through their interface.
     /// The TOML config is stored in the PluginManager for future use.
     pub async fn initialize_active_plugins(&mut self) -> PluginResult<()> {
-        debug!(
-            "PluginManager: Initializing {} active plugins",
-            self.active_plugins.len()
-        );
-
         if self.active_plugins.is_empty() {
-            info!("PluginManager: No active plugins to initialize");
             return Ok(());
         }
 
@@ -457,20 +394,9 @@ impl PluginManager {
             let plugin_name = &active_plugin.plugin_name;
             let args = &active_plugin.args;
 
-            info!(
-                "PluginManager: Initializing plugin '{}' with {} arguments",
-                plugin_name,
-                args.len()
-            );
-
             // Check if plugin has configuration
             let has_config = self.has_plugin_config(plugin_name);
-            if has_config {
-                debug!(
-                    "PluginManager: Plugin '{}' has TOML configuration available",
-                    plugin_name
-                );
-            }
+            if has_config {}
 
             // Try to find plugin in either standard or consumer plugin registry
             let mut plugin_initialized = false;
@@ -494,20 +420,9 @@ impl PluginManager {
                 } else {
                     crate::plugin::args::PluginConfig::default()
                 };
-                plugin
-                    .parse_plugin_arguments(args, &plugin_config)
-                    .await
-                    .map_err(|e| PluginError::ExecutionError {
-                        plugin_name: plugin_name.clone(),
-                        operation: "parse_arguments".to_string(),
-                        cause: format!("Failed to parse plugin arguments: {}", e),
-                    })?;
+                plugin.parse_plugin_arguments(args, &plugin_config).await?;
 
                 plugin_initialized = true;
-                info!(
-                    "PluginManager: Standard plugin '{}' initialized successfully",
-                    plugin_name
-                );
             }
             // Try consumer plugin if not found as standard plugin
             else if let Some(plugin) = registry.get_consumer_plugin_mut(plugin_name) {
@@ -528,20 +443,9 @@ impl PluginManager {
                 } else {
                     crate::plugin::args::PluginConfig::default()
                 };
-                plugin
-                    .parse_plugin_arguments(args, &plugin_config)
-                    .await
-                    .map_err(|e| PluginError::ExecutionError {
-                        plugin_name: plugin_name.clone(),
-                        operation: "parse_arguments".to_string(),
-                        cause: format!("Failed to parse consumer plugin arguments: {}", e),
-                    })?;
+                plugin.parse_plugin_arguments(args, &plugin_config).await?;
 
                 plugin_initialized = true;
-                info!(
-                    "PluginManager: Consumer plugin '{}' initialized successfully",
-                    plugin_name
-                );
             }
 
             if !plugin_initialized {
@@ -550,11 +454,6 @@ impl PluginManager {
                 });
             }
         }
-
-        info!(
-            "PluginManager: Successfully initialized {} active plugins",
-            self.active_plugins.len()
-        );
 
         Ok(())
     }
@@ -566,11 +465,6 @@ impl PluginManager {
         plugin_names: &[String],
         plugin_args: &[String],
     ) -> PluginResult<()> {
-        debug!(
-            "PluginManager: Setting up consumers for plugins (creating but NOT activating): {:?}",
-            plugin_names
-        );
-
         for plugin_name in plugin_names {
             // Create consumer but don't activate it yet
             let consumer = queue.create_consumer(plugin_name.clone()).map_err(|e| {
@@ -581,10 +475,6 @@ impl PluginManager {
 
             // Store the consumer for later activation
             self.pending_consumers.insert(plugin_name.clone(), consumer);
-            debug!(
-                "PluginManager: Created queue consumer for plugin {} (pending activation)",
-                plugin_name
-            );
 
             // Parse plugin arguments while we have the registry lock
             let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
@@ -597,23 +487,16 @@ impl PluginManager {
                 plugin
                     .parse_plugin_arguments(plugin_args, &plugin_config)
                     .await?;
-                debug!(
-                    "PluginManager: Plugin {} arguments parsed successfully",
-                    plugin_name
-                );
             }
         }
 
-        debug!("PluginManager: All plugin consumers created (ready but idle, awaiting activation)");
         Ok(())
     }
 
     /// Setup notification subscribers for active plugins during initialization
     pub async fn setup_plugin_notification_subscribers(&mut self) -> PluginResult<()> {
         use crate::core::services::get_services;
-        use crate::notifications::event::EventFilter;
-
-        debug!("PluginManager: Setting up notification subscribers for active plugins");
+        use crate::notifications::api::EventFilter;
 
         let services = get_services();
         let mut notification_manager = services.notification_manager().await;
@@ -625,11 +508,9 @@ impl PluginManager {
             // Create notification subscriber for system, queue, and scan messages
             // Plugins need to see system events, queue events, and scan events
             match notification_manager.subscribe(subscriber_id.clone(), EventFilter::All, source) {
-                Ok(_receiver) => {
-                    debug!(
-                        "PluginManager: Plugin {} subscribed to notifications with ID: {}",
-                        active_plugin.plugin_name, subscriber_id
-                    );
+                Ok(receiver) => {
+                    // Store the receiver to keep the channel alive
+                    self.notification_receivers.insert(subscriber_id, receiver);
                 }
                 Err(e) => {
                     return Err(PluginError::AsyncError {
@@ -642,16 +523,13 @@ impl PluginManager {
             }
         }
 
-        debug!("PluginManager: All plugin notification subscribers setup completed");
         Ok(())
     }
 
     /// Setup notification subscriber for plugin manager to receive system events
     pub async fn setup_system_notification_subscriber(&mut self) -> PluginResult<()> {
         use crate::core::services::get_services;
-        use crate::notifications::event::EventFilter;
-
-        debug!("PluginManager: Setting up system notification subscriber");
+        use crate::notifications::api::EventFilter;
 
         let services = get_services();
         let mut notification_manager = services.notification_manager().await;
@@ -661,11 +539,9 @@ impl PluginManager {
 
         match notification_manager.subscribe(subscriber_id.clone(), EventFilter::SystemOnly, source)
         {
-            Ok(_receiver) => {
-                debug!(
-                    "PluginManager: Subscribed to system notifications with ID: {}",
-                    subscriber_id
-                );
+            Ok(receiver) => {
+                // Store the receiver to keep the channel alive
+                self.notification_receivers.insert(subscriber_id, receiver);
                 Ok(())
             }
             Err(e) => Err(PluginError::AsyncError {
@@ -679,8 +555,6 @@ impl PluginManager {
 
     /// Handle system started event by activating plugin consumers
     pub async fn handle_system_started_event(&mut self) -> PluginResult<()> {
-        debug!("PluginManager: Received system started event, activating plugin consumers");
-
         self.activate_plugin_consumers().await?;
 
         info!("PluginManager: System started event handling completed");
@@ -689,24 +563,18 @@ impl PluginManager {
 
     /// Activate all pending plugin consumers (called when system started event is received)
     pub async fn activate_plugin_consumers(&mut self) -> PluginResult<()> {
-        debug!(
-            "PluginManager: Activating {} pending plugin consumers",
-            self.pending_consumers.len()
-        );
-
         if self.pending_consumers.is_empty() {
             info!("PluginManager: No pending consumers to activate");
             return Ok(());
         }
 
         // Move consumers out of pending_consumers for activation
-        let consumers_to_activate: Vec<(String, crate::queue::QueueConsumer)> =
+        let consumers_to_activate: Vec<(String, QueueConsumer)> =
             self.pending_consumers.drain().collect();
 
-        let consumer_count = consumers_to_activate.len();
         let mut registry = self.registry.inner().write().await;
 
-        for (plugin_name, consumer) in consumers_to_activate {
+        for (plugin_name, consumer) in consumers_to_activate.into_iter() {
             info!(
                 "PluginManager: Activating consumer for plugin '{}'",
                 plugin_name
@@ -737,27 +605,16 @@ impl PluginManager {
             }
         }
 
-        info!(
-            "PluginManager: Successfully activated {} plugin consumers",
-            consumer_count
-        );
-
         Ok(())
     }
 
     /// Execute the resolved command (when ready)
     pub fn execute(&self) -> PluginResult<()> {
-        debug!(
-            "PluginManager: Execute called with active command: {:?}",
-            self.active_command
-        );
         Ok(())
     }
 
     /// Resolve a command to a PluginProxy
     pub async fn resolve_command_to_proxy(&mut self, input: &str) -> PluginResult<PluginProxy> {
-        debug!("PluginManager: Resolving command '{}' to proxy", input);
-
         // Check for explicit plugin:function syntax
         if let Some(colon_pos) = input.find(':') {
             let plugin_name = &input[..colon_pos];
@@ -864,42 +721,12 @@ impl PluginManager {
     }
 }
 
-/// Plugin metadata exposed to external systems for display/help
-#[derive(Debug, Clone)]
-pub struct PluginMetadata {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub author: String,
-    pub functions: Vec<PluginFunction>,
-    pub requires_file_content: bool,
-    pub requires_historical_content: bool,
-}
-
-/// Simplified plugin proxy for controlled access
-#[derive(Debug, Clone)]
-pub struct PluginProxy {
-    /// Plugin metadata
-    pub metadata: PluginMetadata,
-}
-
-impl PluginProxy {
-    /// Get plugin metadata for display/help systems
-    pub fn get_metadata(&self) -> PluginResult<PluginMetadata> {
-        Ok(self.metadata.clone())
-    }
-
-    /// Configure plugin with command-line arguments (placeholder)
-    pub fn parse_arguments(&self, _args: &[String]) -> PluginResult<()> {
-        // TODO: Implement argument parsing through PluginManager reference
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::args::PluginConfig;
     use crate::plugin::traits::*;
+    use crate::plugin::types::PluginType;
 
     // Mock plugin for testing
     #[derive(Debug)]

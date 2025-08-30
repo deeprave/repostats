@@ -17,35 +17,10 @@
 //! Plugins do NOT control scanners, manage queues, or handle system functions.
 
 use crate::plugin::args::PluginConfig;
-use crate::plugin::error::{PluginError, PluginResult};
-use crate::queue::QueueConsumer;
+use crate::plugin::error::PluginResult;
+use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::queue::api::QueueConsumer;
 use std::collections::HashMap;
-
-/// Plugin metadata information
-#[derive(Debug, Clone, PartialEq)]
-pub struct PluginInfo {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub author: String,
-    pub api_version: u32,
-}
-
-/// Plugin function metadata
-#[derive(Debug, Clone, PartialEq)]
-pub struct PluginFunction {
-    pub name: String,
-    pub description: String,
-    pub aliases: Vec<String>,
-}
-
-/// Plugin type classification
-#[derive(Debug, Clone, PartialEq)]
-pub enum PluginType {
-    Processing,
-    Output,
-    Notification,
-}
 
 /// Base plugin trait that all plugins must implement
 ///
@@ -114,6 +89,7 @@ pub trait PluginDataRequirements {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::error::PluginError;
 
     // Mock plugin for testing
     #[derive(Debug)]

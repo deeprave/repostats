@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::queue::{GroupedMessage, Message};
+    use crate::queue::api::{GroupedMessage, Message};
 
     /// Test message type that implements grouping for testing
     #[derive(Debug, Clone)]

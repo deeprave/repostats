@@ -6,7 +6,9 @@
 //! - Per-consumer position tracking
 //! - Memory management and garbage collection
 
-use crate::queue::{MemoryStats, Message, QueueError, QueueResult};
+use crate::queue::error::{QueueError, QueueResult};
+use crate::queue::message::{Message, MessageHeader};
+use crate::queue::types::MemoryStats;
 use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::{Arc, RwLock};
@@ -245,7 +247,7 @@ impl MultiConsumerQueue {
 
     /// Calculate the approximate memory size of a Message
     fn calculate_message_size(&self, message: &Message) -> usize {
-        let header_size = mem::size_of::<crate::queue::MessageHeader>()
+        let header_size = mem::size_of::<MessageHeader>()
             + message.header.producer_id.len()
             + message.header.message_type.len();
 

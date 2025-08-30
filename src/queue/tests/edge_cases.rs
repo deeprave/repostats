@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::queue::{Message, QueueManager};
+    use crate::queue::api::{Message, QueueManager};
     use std::sync::Arc;
     use std::time::Duration;
 

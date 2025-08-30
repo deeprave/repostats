@@ -1,9 +1,13 @@
+use crate::notifications::api::{Event, SystemEvent, SystemEventType};
+use crate::scanner::api::ScanError;
+
 mod app;
 mod core;
 mod notifications;
 mod plugin;
 mod queue;
 mod scanner;
+use notifications::api::*;
 
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
@@ -22,66 +26,66 @@ async fn main() {
             .file_name()
             .map(|os| os.to_string_lossy().into_owned())
     });
-
     let command_name = command_name_owned.as_deref().unwrap_or(COMMAND_NAME);
+    let pid = std::process::id();
 
     // Startup returns configured scanner manager, or None if no repositories to scan
     let scanner_manager = app::startup::startup(command_name).await;
 
+    if let Err(e) = system_start(pid).await {
+        log::error!("Failed to start system: {e}");
+        std::process::exit(1);
+    } else {
+        log::info!("{command_name}: ✅ Repository Statistics Tool starting");
+
+        // Start the actual scanner if we have one configured
+        if let Some(scanner_manager) = scanner_manager {
+            if let Err(e) = start_scanner(scanner_manager).await {
+                log::error!("Failed to start scanner: {e}");
+                std::process::exit(1);
+            }
+        }
+
+        if let Err(e) = system_stop(pid).await {
+            log::warn!("Error stopping system: {e}");
+        }
+    }
+}
+
+async fn system_start(pid: u32) -> Result<(), NotificationError> {
     // Get notification manager and process ID once
     let mut notification_manager = core::services::get_services().notification_manager().await;
-    let pid = std::process::id();
 
     // Publish system startup event
     let startup_event = Event::System(SystemEvent::with_message(
         SystemEventType::Startup,
         format!("System started, pid={pid}"),
     ));
+    notification_manager.publish(startup_event).await
+}
 
-    if let Err(e) = notification_manager.publish(startup_event).await {
-        log::warn!("Failed to publish startup event: {e}");
-    }
-
-    log::info!("{command_name}: Repository Statistics Tool starting");
-
-    // Start the actual scanner if we have one configured
-    if let Some(scanner_manager) = scanner_manager {
-        start_scanner(scanner_manager).await;
-    } else {
-        log::warn!("No scanner configured - no repositories to scan");
-    }
-
-    use notifications::api::*;
+async fn system_stop(pid: u32) -> Result<(), NotificationError> {
+    let mut notification_manager = core::services::get_services().notification_manager().await;
     let shutdown_event = Event::System(SystemEvent::with_message(
         SystemEventType::Shutdown,
         format!("System shutting down, pid={pid}"),
     ));
-
-    if let Err(e) = notification_manager.publish(shutdown_event).await {
-        log::warn!("Failed to publish shutdown event: {e}");
-    }
+    notification_manager.publish(shutdown_event).await
 }
 
 /// Start the actual repository scanner with the configured scanner manager
-async fn start_scanner(scanner_manager: std::sync::Arc<scanner::ScannerManager>) {
-    use log::{debug, error, info};
-
-    info!("Starting repository scanner...");
-    debug!("Scanner manager configured and ready");
+async fn start_scanner(
+    scanner_manager: std::sync::Arc<scanner::api::ScannerManager>,
+) -> Result<(), ScanError> {
+    use log::debug;
 
     // Start scanning all configured repositories
-    match scanner_manager.start_scanning().await {
-        Ok(()) => {
-            info!("All repository scanning completed successfully");
-            debug!("Scan results have been published to the queue for plugin processing");
-        }
-        Err(e) => {
-            error!("Repository scanning failed: {}", e);
-            error!("Some or all repositories could not be scanned");
-        }
+    let result = scanner_manager.start_scanning().await;
+    match &result {
+        Ok(()) => debug!("All repository scanning completed successfully"),
+        Err(e) => debug!("Repository scanning failed: {e}"),
     }
-
-    debug!("Scanner process complete");
+    result
 }
 
 #[cfg(test)]

@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use crate::core::services::get_services;
-    use crate::notifications::event::{Event, EventFilter, QueueEvent, QueueEventType};
-    use crate::queue::QueueManager;
+    use crate::notifications::api::{Event, EventFilter, QueueEvent, QueueEventType};
+    use crate::queue::api::QueueManager;
     use tokio::time::{timeout, Duration};
 
     #[tokio::test]

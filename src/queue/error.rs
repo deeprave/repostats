@@ -17,3 +17,6 @@ pub enum QueueError {
     #[error("Operation failed: {message}")]
     OperationFailed { message: String },
 }
+
+/// Result type for queue operations
+pub type QueueResult<T> = Result<T, QueueError>;

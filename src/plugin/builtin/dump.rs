@@ -7,14 +7,13 @@
 use crate::plugin::args::{
     create_format_args, determine_format, OutputFormat, PluginArgParser, PluginConfig,
 };
-use crate::plugin::traits::{
-    ConsumerPlugin, Plugin, PluginDataRequirements, PluginFunction, PluginInfo, PluginType,
-};
-use crate::plugin::{PluginError, PluginResult};
-use crate::queue::QueueConsumer;
-use crate::scanner::types::ScanMessage;
+use crate::plugin::error::{PluginError, PluginResult};
+use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginDataRequirements};
+use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::queue::api::QueueConsumer;
+use crate::scanner::api::ScanMessage;
 use clap::Arg;
-use log::{debug, error, info};
+use log::error;
 use serde_json::json;
 use std::collections::HashMap;
 use tokio::sync::oneshot;
@@ -85,7 +84,7 @@ impl Plugin for DumpPlugin {
         PluginInfo {
             name: "dump".to_string(),
             version: "1.0.0".to_string(),
-            description: "Output queue messages to stdout for debugging".to_string(),
+            description: "Dump repository data for debugging purposes".to_string(),
             author: "RepoStats".to_string(),
             api_version: 20250101,
         }
@@ -104,9 +103,7 @@ impl Plugin for DumpPlugin {
     }
 
     async fn initialize(&mut self) -> PluginResult<()> {
-        debug!("DumpPlugin: Initializing");
         self.initialized = true;
-        info!("DumpPlugin: Initialized successfully");
         Ok(())
     }
 
@@ -119,22 +116,16 @@ impl Plugin for DumpPlugin {
             });
         }
 
-        debug!("DumpPlugin: Execute called with args: {:?}", args);
-
         // For now, just log that execute was called
         // The actual message consumption happens via ConsumerPlugin trait
-        info!("DumpPlugin: Execute command received");
         Ok(())
     }
 
     async fn cleanup(&mut self) -> PluginResult<()> {
-        debug!("DumpPlugin: Cleanup started");
-
         // Stop consuming first
         let _ = self.stop_consuming().await;
 
         self.initialized = false;
-        info!("DumpPlugin: Cleanup completed");
         Ok(())
     }
 
@@ -143,8 +134,6 @@ impl Plugin for DumpPlugin {
         args: &[String],
         config: &PluginConfig,
     ) -> PluginResult<()> {
-        debug!("DumpPlugin: Parsing arguments: {:?}", args);
-
         // Create argument parser with format options and header control
         let plugin_info = self.plugin_info();
         let parser = PluginArgParser::new(
@@ -167,11 +156,6 @@ impl Plugin for DumpPlugin {
         self.output_format = determine_format(&matches, config);
         self.show_headers = !matches.get_flag("no-headers");
 
-        debug!(
-            "DumpPlugin: Arguments parsed - format={}, headers={}",
-            self.output_format, self.show_headers
-        );
-
         Ok(())
     }
 }
@@ -179,8 +163,6 @@ impl Plugin for DumpPlugin {
 #[async_trait::async_trait]
 impl ConsumerPlugin for DumpPlugin {
     async fn start_consuming(&mut self, consumer: QueueConsumer) -> PluginResult<()> {
-        debug!("DumpPlugin: Starting message consumption");
-
         // Create shutdown channel for graceful shutdown
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -191,13 +173,11 @@ impl ConsumerPlugin for DumpPlugin {
         // Spawn the consumer task that owns the consumer directly
         tokio::spawn(async move {
             let mut message_count = 0;
-            info!("DumpPlugin: Message consumption started");
 
             loop {
                 tokio::select! {
                     // Check for shutdown signal
                     _ = &mut shutdown_rx => {
-                        info!("DumpPlugin: Shutdown signal received, stopping message consumption");
                         break;
                     }
 
@@ -336,10 +316,6 @@ impl ConsumerPlugin for DumpPlugin {
                                 println!("{}", formatted);
                                 message_count += 1;
 
-                                // Log message processing progress
-                                if message_count % 100 == 0 {
-                                    log::trace!("DumpPlugin: Processed {} messages", message_count);
-                                }
                             }
                             Ok(Ok(None)) => {
                                 // No messages available, continue the loop
@@ -356,31 +332,20 @@ impl ConsumerPlugin for DumpPlugin {
                     }
                 }
             }
-
-            info!(
-                "DumpPlugin: Message consumption stopped after processing {} messages",
-                message_count
-            );
         });
 
         // Store the shutdown sender for lifecycle management
         self.shutdown_tx = Some(shutdown_tx);
 
-        info!("DumpPlugin: Consumer task started");
         Ok(())
     }
 
     async fn stop_consuming(&mut self) -> PluginResult<()> {
-        debug!("DumpPlugin: Stopping message consumption");
-
         // Send shutdown signal to the task
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            if let Err(_) = shutdown_tx.send(()) {
-                debug!("DumpPlugin: Task may have already stopped");
-            }
+            if let Err(_) = shutdown_tx.send(()) {}
         }
 
-        info!("DumpPlugin: Shutdown signal sent");
         Ok(())
     }
 }
@@ -408,7 +373,7 @@ impl PluginDataRequirements for DumpPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::queue::QueueManager;
+    use crate::queue::api::QueueManager;
 
     #[tokio::test]
     async fn test_dump_plugin_creation() {

@@ -4,7 +4,9 @@
 //! to all registered consumers. Each publisher is identified by a unique
 //! producer_id that is included in message headers.
 
-use crate::queue::{Message, QueueManager, QueueResult};
+use crate::queue::error::{QueueError, QueueResult};
+use crate::queue::manager::QueueManager;
+use crate::queue::message::Message;
 use std::sync::Weak;
 
 /// Publisher handle for sending messages to the queue
@@ -58,12 +60,12 @@ impl QueuePublisher {
     /// Publish a message to the global queue
     pub fn publish(&self, message: Message) -> QueueResult<u64> {
         // Get strong reference to manager
-        let manager =
-            self.manager
-                .upgrade()
-                .ok_or_else(|| crate::queue::QueueError::OperationFailed {
-                    message: "QueueManager no longer exists".to_string(),
-                })?;
+        let manager = self
+            .manager
+            .upgrade()
+            .ok_or_else(|| QueueError::OperationFailed {
+                message: "QueueManager no longer exists".to_string(),
+            })?;
 
         // Get the single global queue (producer_id is just metadata in the message)
         let queue = manager.get_global_queue()?;
