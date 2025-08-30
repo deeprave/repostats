@@ -129,19 +129,31 @@ impl std::fmt::Display for ScanRequires {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut requirements = Vec::new();
 
-        // Only show the highest-level requirements to avoid redundancy
+        // Show all top-level requirements that were explicitly requested
+        // Dependencies are automatically included but not separately displayed
+
         if self.requires_repository_info() {
             requirements.push("RepositoryInfo");
         }
 
-        // For file-related requirements, show only the highest level
+        // Show the highest level in the file content hierarchy
         if self.requires_file_content() {
             requirements.push("FileContent");
         } else if self.requires_file_changes() {
             requirements.push("FileChanges");
-        } else if self.requires_history() {
+        }
+
+        // History is independent of file content hierarchy
+        if self.requires_history() {
             requirements.push("History");
-        } else if self.requires_commits() {
+        }
+
+        // Only show commits if no higher-level requirement includes it
+        if self.requires_commits()
+            && !self.requires_file_changes()
+            && !self.requires_file_content()
+            && !self.requires_history()
+        {
             requirements.push("Commits");
         }
 
@@ -496,6 +508,13 @@ mod tests {
         // FILE_CONTENT includes FILE_CHANGES which includes COMMITS
         // Display should show FileContent (the highest level requirement)
         assert_eq!(format!("{}", file_content), "FileContent");
+
+        // Test that both HISTORY and FILE_CHANGES are shown when both are explicitly requested
+        let history_and_file_changes = ScanRequires::HISTORY | ScanRequires::FILE_CHANGES;
+        assert_eq!(
+            format!("{}", history_and_file_changes),
+            "FileChanges | History"
+        );
     }
 
     #[test]
