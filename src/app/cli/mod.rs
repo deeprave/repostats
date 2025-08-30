@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub mod args;
 pub mod command_segmenter;
 pub mod date_parser;
+pub mod display;
 
 pub struct RequiredArgs {
     pub global_args: Vec<String>,
@@ -16,6 +17,7 @@ pub struct RequiredArgs {
     pub log_format: Option<String>,
     pub log_level: Option<String>,
     pub log_file: Option<PathBuf>,
+    pub plugins: bool,
 }
 
 pub fn initial_args(command_name: &str) -> RequiredArgs {
@@ -38,5 +40,6 @@ pub fn initial_args(command_name: &str) -> RequiredArgs {
         log_format: parsed_args.log_format,
         log_level: parsed_args.log_level,
         log_file: parsed_args.log_file,
+        plugins: parsed_args.plugins,
     }
 }

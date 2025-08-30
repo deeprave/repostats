@@ -5,7 +5,7 @@
 
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -16,6 +16,9 @@ pub struct PluginRegistry {
 
     /// Map of plugin name to consumer plugin instance
     consumer_plugins: HashMap<String, Box<dyn ConsumerPlugin>>,
+
+    /// Set of plugin names that are currently active
+    active_plugins: HashSet<String>,
 }
 
 impl std::fmt::Debug for PluginRegistry {
@@ -26,6 +29,7 @@ impl std::fmt::Debug for PluginRegistry {
                 "consumer_plugins",
                 &self.consumer_plugins.keys().collect::<Vec<_>>(),
             )
+            .field("active_plugins", &self.active_plugins)
             .finish()
     }
 }
@@ -36,6 +40,7 @@ impl PluginRegistry {
         Self {
             plugins: HashMap::new(),
             consumer_plugins: HashMap::new(),
+            active_plugins: HashSet::new(),
         }
     }
 
@@ -108,9 +113,43 @@ impl PluginRegistry {
         names
     }
 
-    /// Get list of active plugin names (all registered plugins are considered active)
+    /// Get list of active plugin names (only truly active plugins)
     pub fn get_active_plugins(&self) -> Vec<String> {
-        self.get_plugin_names()
+        let mut active: Vec<String> = self.active_plugins.iter().cloned().collect();
+        active.sort();
+        active
+    }
+
+    /// Activate a plugin (mark it as active)
+    pub fn activate_plugin(&mut self, name: &str) -> PluginResult<()> {
+        if !self.has_plugin(name) {
+            return Err(PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            });
+        }
+        self.active_plugins.insert(name.to_string());
+        Ok(())
+    }
+
+    /// Deactivate a plugin (mark it as inactive)
+    pub fn deactivate_plugin(&mut self, name: &str) -> PluginResult<()> {
+        if !self.has_plugin(name) {
+            return Err(PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            });
+        }
+        self.active_plugins.remove(name);
+        Ok(())
+    }
+
+    /// Check if a plugin is currently active
+    pub fn is_plugin_active(&self, name: &str) -> bool {
+        self.active_plugins.contains(name)
+    }
+
+    /// Clear all active plugins
+    pub fn clear_active_plugins(&mut self) {
+        self.active_plugins.clear();
     }
 
     /// Remove a plugin from the registry
@@ -124,6 +163,8 @@ impl PluginRegistry {
             });
         }
 
+        // Also remove from active plugins
+        self.active_plugins.remove(name);
         Ok(())
     }
 
@@ -136,6 +177,7 @@ impl PluginRegistry {
     pub fn clear(&mut self) {
         self.plugins.clear();
         self.consumer_plugins.clear();
+        self.active_plugins.clear();
     }
 }
 
@@ -180,6 +222,36 @@ impl SharedPluginRegistry {
     pub async fn plugin_count(&self) -> usize {
         let registry = self.inner.read().await;
         registry.plugin_count()
+    }
+
+    /// Convenience method to get active plugin names
+    pub async fn get_active_plugins(&self) -> Vec<String> {
+        let registry = self.inner.read().await;
+        registry.get_active_plugins()
+    }
+
+    /// Convenience method to activate a plugin
+    pub async fn activate_plugin(&self, name: &str) -> PluginResult<()> {
+        let mut registry = self.inner.write().await;
+        registry.activate_plugin(name)
+    }
+
+    /// Convenience method to deactivate a plugin
+    pub async fn deactivate_plugin(&self, name: &str) -> PluginResult<()> {
+        let mut registry = self.inner.write().await;
+        registry.deactivate_plugin(name)
+    }
+
+    /// Convenience method to check if plugin is active
+    pub async fn is_plugin_active(&self, name: &str) -> bool {
+        let registry = self.inner.read().await;
+        registry.is_plugin_active(name)
+    }
+
+    /// Convenience method to clear all active plugins
+    pub async fn clear_active_plugins(&self) {
+        let mut registry = self.inner.write().await;
+        registry.clear_active_plugins();
     }
 }
 
@@ -512,13 +584,22 @@ mod tests {
         assert!(registry.has_plugin("regular1"));
         assert!(registry.has_plugin("consumer1"));
 
-        // Test active plugins (should be same as all plugins)
+        // Test active plugins (should be empty since none are activated)
+        let active_names = registry.get_active_plugins();
+        assert!(active_names.is_empty());
+
+        // Test activation of specific plugins
+        registry.activate_plugin("regular1").unwrap();
+        registry.activate_plugin("consumer1").unwrap();
+
         let mut active_names = registry.get_active_plugins();
         active_names.sort();
-        assert_eq!(
-            active_names,
-            vec!["consumer1", "consumer2", "regular1", "regular2"]
-        );
+        assert_eq!(active_names, vec!["consumer1", "regular1"]);
+
+        // Test deactivation
+        registry.deactivate_plugin("regular1").unwrap();
+        let active_names = registry.get_active_plugins();
+        assert_eq!(active_names, vec!["consumer1"]);
     }
 
     #[tokio::test]
@@ -594,6 +675,90 @@ mod tests {
                     .await
             );
         }
+    }
+
+    #[test]
+    fn test_plugin_activation_errors() {
+        let mut registry = PluginRegistry::new();
+
+        // Try to activate non-existent plugin
+        let result = registry.activate_plugin("nonexistent");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            PluginError::PluginNotFound { plugin_name } => {
+                assert_eq!(plugin_name, "nonexistent");
+            }
+            _ => panic!("Expected PluginNotFound error"),
+        }
+
+        // Try to deactivate non-existent plugin
+        let result = registry.deactivate_plugin("nonexistent");
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            PluginError::PluginNotFound { plugin_name } => {
+                assert_eq!(plugin_name, "nonexistent");
+            }
+            _ => panic!("Expected PluginNotFound error"),
+        }
+
+        // Test is_plugin_active for non-existent plugin
+        assert!(!registry.is_plugin_active("nonexistent"));
+
+        // Register a plugin and test activation
+        registry
+            .register_plugin(Box::new(MockPlugin::new("test")))
+            .unwrap();
+        assert!(!registry.is_plugin_active("test"));
+
+        registry.activate_plugin("test").unwrap();
+        assert!(registry.is_plugin_active("test"));
+
+        registry.deactivate_plugin("test").unwrap();
+        assert!(!registry.is_plugin_active("test"));
+    }
+
+    #[test]
+    fn test_registration_vs_activation_separation() {
+        let mut registry = PluginRegistry::new();
+
+        // Register multiple plugins
+        registry
+            .register_plugin(Box::new(MockPlugin::new("plugin1")))
+            .unwrap();
+        registry
+            .register_plugin(Box::new(MockPlugin::new("plugin2")))
+            .unwrap();
+        registry
+            .register_consumer_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
+            .unwrap();
+
+        // Verify all are registered
+        assert_eq!(registry.plugin_count(), 3);
+        assert!(registry.has_plugin("plugin1"));
+        assert!(registry.has_plugin("plugin2"));
+        assert!(registry.has_plugin("consumer1"));
+
+        // CRITICAL: Verify NO plugins are active after registration
+        let active = registry.get_active_plugins();
+        assert!(
+            active.is_empty(),
+            "No plugins should be active immediately after registration"
+        );
+
+        // Explicitly activate only some plugins
+        registry.activate_plugin("plugin1").unwrap();
+        registry.activate_plugin("consumer1").unwrap();
+
+        // Verify only activated plugins are active
+        let mut active = registry.get_active_plugins();
+        active.sort();
+        assert_eq!(active, vec!["consumer1", "plugin1"]);
+
+        // Verify plugin2 is registered but NOT active
+        assert!(registry.has_plugin("plugin2"));
+        assert!(!registry.is_plugin_active("plugin2"));
     }
 
     #[test]
