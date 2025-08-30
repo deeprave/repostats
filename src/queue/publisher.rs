@@ -23,7 +23,7 @@ use std::sync::Weak;
 /// # Example
 ///
 /// ```rust,no_run
-/// # use repostats::queue::{QueueManager, Message};
+/// # use repostats::queue::api::{QueueManager, Message};
 /// # use std::sync::Arc;
 /// # fn example(manager: Arc<QueueManager>) -> Result<(), Box<dyn std::error::Error>> {
 /// let publisher = manager.create_publisher("my-service".to_string())?;

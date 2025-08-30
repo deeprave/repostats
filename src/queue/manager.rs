@@ -33,7 +33,7 @@ use std::time::SystemTime;
 /// # Example
 ///
 /// ```rust,no_run
-/// use repostats::queue::QueueManager;
+/// use repostats::queue::api::QueueManager;
 /// use std::sync::Arc;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,7 +82,7 @@ impl QueueManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use repostats::queue::QueueManager;
+    /// use repostats::queue::api::QueueManager;
     /// # async fn example() {
     /// let manager = QueueManager::create().await;
     /// // Queue system is now ready for use

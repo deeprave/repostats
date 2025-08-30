@@ -44,7 +44,7 @@
 //! # Example Usage
 //!
 //! ```rust,no_run
-//! use repostats::queue::{QueueManager, Message};
+//! use repostats::queue::api::{QueueManager, Message};
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {

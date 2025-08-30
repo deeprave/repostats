@@ -19,7 +19,7 @@ use std::sync::{Arc, Weak};
 /// # Example
 ///
 /// ```rust,no_run
-/// # use repostats::queue::{QueueManager, Message};
+/// # use repostats::queue::api::{QueueManager, Message};
 /// # use std::sync::Arc;
 /// # fn example(manager: Arc<QueueManager>) -> Result<(), Box<dyn std::error::Error>> {
 /// let consumer = manager.create_consumer("my-plugin".to_string())?;

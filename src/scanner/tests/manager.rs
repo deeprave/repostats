@@ -219,6 +219,26 @@ async fn test_scanner_task_initialization() {
             "Remote repositories should currently fail: {}",
             repository_path
         );
+
+        // Verify the error type is Repository error for remote URLs
+        match result.unwrap_err() {
+            crate::scanner::error::ScanError::Repository { message } => {
+                assert!(
+                    message.contains("Invalid repository")
+                        || message.contains("not found")
+                        || message.contains("Remote"),
+                    "Error should indicate repository validation failure for remote URL {}: {}",
+                    repository_path,
+                    message
+                );
+            }
+            other_error => {
+                panic!(
+                    "Expected Repository error for remote URL {}, got: {:?}",
+                    repository_path, other_error
+                );
+            }
+        }
     }
 }
 

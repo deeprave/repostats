@@ -13,7 +13,7 @@
 /// # Example Implementation
 ///
 /// ```rust,no_run
-/// use repostats::queue::GroupedMessage;
+/// use repostats::queue::api::GroupedMessage;
 ///
 /// struct BatchMessage {
 ///     batch_id: String,

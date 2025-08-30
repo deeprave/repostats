@@ -32,7 +32,7 @@ pub struct MessageHeader {
 /// # Example
 ///
 /// ```rust
-/// use repostats::queue::Message;
+/// use repostats::queue::api::Message;
 ///
 /// let message = Message::new(
 ///     "file-scanner".to_string(),
