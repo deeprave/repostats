@@ -96,7 +96,6 @@ pub async fn startup(
         }
     };
 
-    let commands = commands.clone();
     let segmenter = CommandSegmenter::with_commands(commands);
     let all_args: Vec<String> = std::env::args().collect();
     let command_segments = segmenter
@@ -123,12 +122,17 @@ pub async fn startup(
         });
 
     // Stage 5: Plugin configuration (validate service dependencies first)
+    log::debug!("Starting plugin configuration and service validation");
     configure_plugins(&command_segments, toml_config.as_ref()).await;
 
     // Stage 6: Build query parameters from TOML config and CLI arguments
     let query_params = build_query_params(&final_args, toml_config.as_ref()).await;
 
     // Stage 7: Scanner configuration and system integration
+    log::debug!(
+        "Starting scanner configuration with {} repositories",
+        final_args.repository.len()
+    );
     let scanner_manager_opt = configure_scanner(&final_args.repository, query_params).await;
 
     // Return the configured scanner manager for main.rs to use, or None if no valid scanners

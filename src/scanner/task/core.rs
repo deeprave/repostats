@@ -7,6 +7,7 @@ use crate::scanner::error::ScanResult;
 use gix;
 
 /// Individual scanner task for a specific repository
+#[derive(Debug)]
 pub struct ScannerTask {
     /// Unique scanner ID (scan-<sha256>)
     scanner_id: String,
