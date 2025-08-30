@@ -250,13 +250,14 @@ impl ScannerManager {
         let requirements = plugin_manager.get_combined_requirements().await;
 
         // Create scanner task with the repository, requirements, and query params
-        let scanner_task = ScannerTask::new_with_all_options(
-            scanner_id.clone(),
-            normalized_path.clone(),
-            repo,
-            requirements,
-            query_params.cloned(),
-        );
+        let mut builder = ScannerTask::builder(scanner_id.clone(), normalized_path.clone(), repo)
+            .with_requirements(requirements);
+
+        if let Some(params) = query_params {
+            builder = builder.with_query_params(params.clone());
+        }
+
+        let scanner_task = builder.build();
         let scanner_task = Arc::new(scanner_task);
 
         // Store the scanner task in the manager for later use

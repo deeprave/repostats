@@ -375,7 +375,19 @@ async fn test_commit_traversal_and_message_creation() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
+    // Create scanner with explicit requirements to test comprehensive data collection
+    let scanner_task = {
+        let (repo, _) = manager.validate_repository(&current_dir).unwrap();
+        let repo_id = manager.get_unique_repo_id(&repo).unwrap();
+        let scanner_id = manager.generate_scanner_id(&repo_id).unwrap();
+
+        use crate::scanner::api::ScanRequires;
+        crate::scanner::task::ScannerTask::builder(scanner_id, current_path.to_string(), repo)
+            .with_requirements(
+                ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
+            )
+            .build()
+    };
 
     // Scan commits - should succeed now
     let result = scanner_task.scan_commits().await;
@@ -385,7 +397,10 @@ async fn test_commit_traversal_and_message_creation() {
     let messages = result.unwrap();
 
     // Should have at least 4 messages: RepositoryData, ScanStarted, CommitData, ScanCompleted
-    assert!(messages.len() >= 4, "Should have at least 4 messages");
+    assert!(
+        messages.len() >= 4,
+        "Should have at least 4 messages with full requirements"
+    );
 
     // Verify message types - first should be RepositoryData
     match &messages[0] {
