@@ -23,5 +23,9 @@ pub(crate) mod types;
 // Public API module - the only public interface for the scanner system
 pub mod api;
 
+// Public re-exports so external code can import from `crate::scanner::api`
+pub use error::{ScanError, ScanResult};
+pub use manager::ScannerManager;
+
 #[cfg(test)]
 mod tests;

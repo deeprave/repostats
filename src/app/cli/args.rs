@@ -55,7 +55,7 @@ pub struct Args {
     pub log_file: Option<PathBuf>,
 
     /// Log output format
-    #[arg(short = 'o', long = "log-format", value_name = "FORMAT", value_parser = ["text", "ext", "json"])]
+    #[arg(short = 'o', long = "log-format", value_name = "FORMAT", value_parser = ["text", "simle", "min", "ext", "json"])]
     pub log_format: Option<String>,
 
     /// Start date/time for filtering (ISO 8601 or relative)
@@ -413,7 +413,7 @@ impl Args {
                     .short('o')
                     .long("log-format")
                     .value_name("FORMAT")
-                    .value_parser(["text", "ext", "json"])
+                    .value_parser(["text", "simple", "min", "ext", "json"])
                     .help("Log output format"),
             )
             .arg(
