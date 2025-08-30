@@ -78,6 +78,12 @@ impl PluginManager {
         self.api_version
     }
 
+    /// Get color configuration setting
+    fn get_use_colors_setting(&self) -> bool {
+        // Check if stdout is a terminal and no NO_COLOR environment variable
+        std::io::IsTerminal::is_terminal(&std::io::stdout()) && std::env::var("NO_COLOR").is_err()
+    }
+
     /// Check if a plugin API version is compatible
     pub fn is_api_compatible(&self, plugin_api_version: u32) -> bool {
         // Same major version (year) is compatible
@@ -191,7 +197,12 @@ impl PluginManager {
             true, // Always include externals internally
         );
 
+        log::debug!("Starting plugin discovery with include_builtins=true, include_externals=true");
         let discovered_plugins = discovery.discover_plugins().await?;
+        log::debug!(
+            "Plugin discovery completed, found {} plugins total",
+            discovered_plugins.len()
+        );
 
         // Register discovered plugins
         let mut registry = self.registry.inner().write().await;
@@ -236,6 +247,9 @@ impl PluginManager {
         // Clear any existing active plugins
         self.active_plugins.clear();
 
+        // Clear active plugins in registry
+        self.registry.clear_active_plugins().await;
+
         // Get all available plugin functions
         let plugin_functions = self.list_plugins_with_functions().await?;
 
@@ -254,6 +268,9 @@ impl PluginManager {
                             function_name: function.name.clone(),
                             args: segment.args.clone(),
                         });
+
+                        // Also activate in registry
+                        self.registry.activate_plugin(plugin_name).await?;
 
                         matched = true;
                         break;
@@ -394,10 +411,6 @@ impl PluginManager {
             let plugin_name = &active_plugin.plugin_name;
             let args = &active_plugin.args;
 
-            // Check if plugin has configuration
-            let has_config = self.has_plugin_config(plugin_name);
-            if has_config {}
-
             // Try to find plugin in either standard or consumer plugin registry
             let mut plugin_initialized = false;
 
@@ -415,8 +428,10 @@ impl PluginManager {
 
                 // Parse plugin arguments
                 let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(false, toml_table)
-                // TODO: get use_colors from global config
+                    crate::plugin::args::PluginConfig::from_toml(
+                        self.get_use_colors_setting(),
+                        toml_table,
+                    )
                 } else {
                     crate::plugin::args::PluginConfig::default()
                 };
@@ -438,8 +453,10 @@ impl PluginManager {
 
                 // Parse plugin arguments
                 let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(false, toml_table)
-                // TODO: get use_colors from global config
+                    crate::plugin::args::PluginConfig::from_toml(
+                        self.get_use_colors_setting(),
+                        toml_table,
+                    )
                 } else {
                     crate::plugin::args::PluginConfig::default()
                 };
@@ -478,7 +495,10 @@ impl PluginManager {
 
             // Parse plugin arguments while we have the registry lock
             let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                crate::plugin::args::PluginConfig::from_toml(false, toml_table) // TODO: get use_colors from global config
+                crate::plugin::args::PluginConfig::from_toml(
+                    self.get_use_colors_setting(),
+                    toml_table,
+                )
             } else {
                 crate::plugin::args::PluginConfig::default()
             };
@@ -529,7 +549,8 @@ impl PluginManager {
     /// Setup notification subscriber for plugin manager to receive system events
     pub async fn setup_system_notification_subscriber(&mut self) -> PluginResult<()> {
         use crate::core::services::get_services;
-        use crate::notifications::api::EventFilter;
+        use crate::notifications::api::{Event, EventFilter, SystemEventType};
+        use log::{error, info};
 
         let services = get_services();
         let mut notification_manager = services.notification_manager().await;
@@ -539,9 +560,28 @@ impl PluginManager {
 
         match notification_manager.subscribe(subscriber_id.clone(), EventFilter::SystemOnly, source)
         {
-            Ok(receiver) => {
-                // Store the receiver to keep the channel alive
-                self.notification_receivers.insert(subscriber_id, receiver);
+            Ok(mut receiver) => {
+                // Spawn a task to listen for system events
+                tokio::spawn(async move {
+                    while let Some(event) = receiver.recv().await {
+                        if let Event::System(sys_event) = event {
+                            if sys_event.event_type == SystemEventType::Startup {
+                                info!("PluginManager: Received system startup event, activating plugin consumers");
+
+                                // Get services and plugin manager inside the loop
+                                let services = get_services();
+                                let mut plugin_manager = services.plugin_manager().await;
+
+                                // Activate plugin consumers
+                                if let Err(e) = plugin_manager.activate_plugin_consumers().await {
+                                    error!("Failed to activate plugin consumers: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    info!("PluginManager: System event listener task terminated");
+                });
+
                 Ok(())
             }
             Err(e) => Err(PluginError::AsyncError {
@@ -701,11 +741,12 @@ impl PluginManager {
         };
 
         for plugin_name in &plugin_names {
-            if let Some(plugin) = registry.get_plugin(plugin_name) {
+            // Try regular plugin first, then consumer plugin
+            let plugin_metadata = if let Some(plugin) = registry.get_plugin(plugin_name) {
                 let info = plugin.plugin_info();
                 let functions = plugin.advertised_functions();
 
-                plugins.push(PluginMetadata {
+                PluginMetadata {
                     name: info.name.clone(),
                     version: info.version.clone(),
                     description: info.description.clone(),
@@ -713,8 +754,25 @@ impl PluginManager {
                     functions,
                     requires_file_content: false, // Default for display
                     requires_historical_content: false, // Default for display
-                });
-            }
+                }
+            } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
+                let info = consumer_plugin.plugin_info();
+                let functions = consumer_plugin.advertised_functions();
+
+                PluginMetadata {
+                    name: info.name.clone(),
+                    version: info.version.clone(),
+                    description: info.description.clone(),
+                    author: info.author.clone(),
+                    functions,
+                    requires_file_content: false, // Default for display
+                    requires_historical_content: false, // Default for display
+                }
+            } else {
+                continue; // Plugin not found in either registry
+            };
+
+            plugins.push(plugin_metadata);
         }
 
         plugins
@@ -931,6 +989,16 @@ mod tests {
         assert_eq!(all_plugins[0].functions.len(), 1);
         assert_eq!(all_plugins[0].functions[0].name, "test");
 
+        // Test that newly registered plugins are NOT active by default
+        let active_plugins = manager.list_plugins_with_filter(true).await;
+        assert_eq!(active_plugins.len(), 0);
+
+        // Test explicit activation
+        manager
+            .registry()
+            .activate_plugin("test-plugin")
+            .await
+            .unwrap();
         let active_plugins = manager.list_plugins_with_filter(true).await;
         assert_eq!(active_plugins.len(), 1);
         assert_eq!(active_plugins[0].name, "test-plugin");

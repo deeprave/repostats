@@ -1,3 +1,4 @@
+use crate::app::cli::display::display_plugin_table;
 use crate::core::services::get_services;
 use crate::plugin::api::PluginError;
 use log;
@@ -24,6 +25,12 @@ pub async fn startup(
     let command_title = title_case(command_name);
     let use_color =
         (args.color || std::io::IsTerminal::is_terminal(&std::io::stdout())) && !args.no_color;
+
+    // Check if --plugins flag was provided (early exit)
+    if args.plugins {
+        log::debug!("--plugins flag detected, will list plugins after discovery");
+        // Continue with minimal setup to get to plugin discovery
+    }
 
     // 1.1 Initialize logging
     let log_file_str = args
@@ -95,6 +102,25 @@ pub async fn startup(
             exit(1);
         }
     };
+
+    // Check if --plugins flag was provided (after plugin discovery, before segmentation)
+    if args.plugins {
+        log::debug!("--plugins flag detected, listing all discovered plugins");
+        let services = get_services();
+        let plugin_manager = services.plugin_manager().await;
+        let plugins = plugin_manager.list_plugins_with_filter(false).await;
+
+        if plugins.is_empty() {
+            log::error!("No plugins available after discovery");
+            exit(1);
+        }
+
+        if let Err(e) = display_plugin_table(plugins, use_color) {
+            log::error!("Failed to display plugin table: {}", e);
+            exit(1);
+        }
+        exit(0);
+    }
 
     let segmenter = CommandSegmenter::with_commands(commands);
     let all_args: Vec<String> = std::env::args().collect();
@@ -526,30 +552,6 @@ async fn configure_scanner(
         log::warn!("Failed repositories: {failed_repositories:?}");
     }
 
-    // Step 5: Publish system startup event to activate plugin consumers
-    if let Err(e) = publish_system_startup_event().await {
-        log::error!("FATAL: System startup failure");
-        log::debug!("Error details: {e}");
-        exit(1);
-    }
-
     // Return the configured scanner manager
     Some(scanner_manager)
-}
-
-/// Publish system startup event to notify all components that system is ready
-async fn publish_system_startup_event() -> Result<(), Box<dyn std::error::Error>> {
-    use crate::notifications::api::{Event, SystemEvent, SystemEventType};
-
-    let services = get_services();
-    let mut notification_manager = services.notification_manager().await;
-
-    let startup_event = Event::System(SystemEvent::with_message(
-        SystemEventType::Startup,
-        "System initialization completed - plugins may now activate".to_string(),
-    ));
-
-    notification_manager.publish(startup_event).await?;
-
-    Ok(())
 }

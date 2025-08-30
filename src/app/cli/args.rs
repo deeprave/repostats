@@ -55,7 +55,7 @@ pub struct Args {
     pub log_file: Option<PathBuf>,
 
     /// Log output format
-    #[arg(short = 'o', long = "log-format", value_name = "FORMAT", value_parser = ["text", "simle", "min", "ext", "json"])]
+    #[arg(short = 'o', long = "log-format", value_name = "FORMAT", value_parser = ["text", "simple", "min", "ext", "json"])]
     pub log_format: Option<String>,
 
     /// Start date/time for filtering (ISO 8601 or relative)
@@ -131,6 +131,13 @@ pub struct Args {
     /// Maximum files changed per commit
     #[arg(short = 'L', long = "max-files-per-commit", value_name = "COUNT")]
     pub max_files_per_commit: Option<usize>,
+
+    /// List all discovered plugins and exit
+    #[arg(
+        long = "plugins",
+        help = "List all discovered plugins and their functions"
+    )]
+    pub plugins: bool,
 }
 
 impl Default for Args {
@@ -160,6 +167,7 @@ impl Default for Args {
             no_merge_commits: false,
             merge_commits: false,
             max_files_per_commit: None,
+            plugins: false,
         }
     }
 }
@@ -537,6 +545,12 @@ impl Args {
                     .value_name("NUM")
                     .value_parser(clap::value_parser!(usize))
                     .help("Maximum files changed per commit"),
+            )
+            .arg(
+                clap::Arg::new("plugins")
+                    .long("plugins")
+                    .action(ArgAction::SetTrue)
+                    .help("List all discovered plugins and their functions"),
             );
 
         // Add help/version args if requested (only in parse_from_args)

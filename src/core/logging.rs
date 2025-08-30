@@ -1,6 +1,5 @@
-// Removed old fern-style logger implementation - now using flexi_logger
+use colored::*;
 
-// Global static logger handle for flexi_logger
 static LOGGER_HANDLE: std::sync::OnceLock<std::sync::Mutex<flexi_logger::LoggerHandle>> =
     std::sync::OnceLock::new();
 
@@ -8,8 +7,7 @@ static DATE_FORMAT_LONG: &str = "%Y-%m-%d %H:%M:%S%.6f";
 static DATE_FORMAT_SHORT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 static DATE_FORMAT_ISO: &str = "%Y-%m-%dT%H:%M:%S%.3fZ";
 
-// New flexi_logger implementation
-pub fn init_logging_flexi(
+pub fn init_logging(
     log_level: Option<&str>,
     log_format: Option<&str>,
     log_file: Option<&str>,
@@ -76,7 +74,7 @@ pub fn init_logging_flexi(
 ///
 /// This is a limitation of flexi_logger's design where format and output configuration
 /// must be set during logger initialization.
-pub fn reconfigure_logging_flexi(
+pub fn reconfigure_logging(
     log_level: Option<&str>,
     _log_format: Option<&str>, // Format cannot be changed at runtime in flexi_logger
     _log_file: Option<&str>,   // File path cannot be changed at runtime easily
@@ -96,36 +94,15 @@ pub fn reconfigure_logging_flexi(
     }
 }
 
-pub fn init_logging(
-    log_level: Option<&str>,
-    log_format: Option<&str>,
-    log_file: Option<&str>,
-    color_enabled: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Use new flexi_logger implementation
-    init_logging_flexi(log_level, log_format, log_file, color_enabled)
-}
-
-pub fn reconfigure_logging(
-    log_level: Option<&str>,
-    log_format: Option<&str>,
-    log_file: Option<&str>,
-    color_enabled: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Use new flexi_logger implementation
-    reconfigure_logging_flexi(log_level, log_format, log_file, color_enabled)
-}
-
 // Simple text format without target info
 
-fn level_to_color(level: log::Level) -> String {
+fn level_to_color(level: log::Level) -> ColoredString {
     match level {
-        log::Level::Error => "red".to_string(),
-        log::Level::Warn => "yellow".to_string(),
-        log::Level::Info => "green".to_string(),
-        log::Level::Debug => "blue".to_string(),
-        log::Level::Trace => "magenta".to_string(),
-        _ => "white".to_string(),
+        log::Level::Error => "ERR".red().bold(),
+        log::Level::Warn => "WRN".yellow(),
+        log::Level::Info => "INF".green(),
+        log::Level::Debug => "DBG".blue(),
+        log::Level::Trace => "TRC".magenta(),
     }
 }
 
@@ -136,7 +113,6 @@ fn level_to_abbr(level: log::Level) -> &'static str {
         log::Level::Info => "INF",
         log::Level::Debug => "DBG",
         log::Level::Trace => "TRC",
-        _ => "???",
     }
 }
 
@@ -181,7 +157,7 @@ fn standard_color_format(
 
 fn simple_format(
     w: &mut dyn std::io::Write,
-    now: &mut flexi_logger::DeferredNow,
+    _now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
 ) -> Result<(), std::io::Error> {
     let level_abbr = level_to_abbr(record.level());
@@ -193,7 +169,7 @@ fn simple_format(
 // Simple color format without target info
 fn simple_color_format(
     w: &mut dyn std::io::Write,
-    now: &mut flexi_logger::DeferredNow,
+    _now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
 ) -> Result<(), std::io::Error> {
     let level_colored = level_to_color(record.level());
@@ -309,7 +285,7 @@ mod tests {
     fn init_test_logging() {
         INIT.call_once(|| {
             // Only call this once to avoid "logger already initialized" error
-            let _ = init_logging_flexi(Some("debug"), None, None, false);
+            let _ = init_logging(Some("debug"), None, None, false);
         });
     }
 
@@ -481,7 +457,7 @@ mod tests {
 
                 // Check if log file was created and contains our message
                 if expected_log_file.exists() {
-                    let content = std::fs::read_to_string(&expected_log_file).unwrap_or_default();
+                    let content = fs::read_to_string(&expected_log_file).unwrap_or_default();
                     assert!(
                         content.contains("Test message for file content verification"),
                         "Log file should contain our test message, got: {}",

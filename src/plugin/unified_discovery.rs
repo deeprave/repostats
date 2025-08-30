@@ -104,22 +104,36 @@ impl PluginDiscovery {
 
         // 1. Discover external plugins (main focus) - create on demand
         if self.config.include_externals {
+            log::debug!(
+                "Discovering external plugins from path: {:?}",
+                self.config.search_path
+            );
             let external_discovery = ExternalPluginDiscovery::new();
             let external_plugins = external_discovery
                 .discover_external_plugins(&self.config)
                 .await?;
+            log::debug!("Found {} external plugins", external_plugins.len());
             plugins.extend(external_plugins);
         }
 
         // 2. Discover builtin plugins (small part) - create on demand
         if self.config.include_builtins {
+            log::debug!("Discovering builtin plugins");
             let builtin_discovery = BuiltinPluginDiscovery::new();
             let builtin_plugins = builtin_discovery.discover_builtin_plugins().await?;
+            log::debug!("Found {} builtin plugins", builtin_plugins.len());
             plugins.extend(builtin_plugins);
         }
 
         // 3. Apply exclusions
+        log::debug!("Applying exclusions: {:?}", self.config.excluded_plugins);
+        let before_exclusions = plugins.len();
         plugins.retain(|plugin| !self.config.excluded_plugins.contains(&plugin.info.name));
+        log::debug!(
+            "After exclusions: {} plugins (was {})",
+            plugins.len(),
+            before_exclusions
+        );
 
         Ok(plugins)
     }
@@ -180,7 +194,7 @@ impl BuiltinPluginDiscovery {
                 author: "RepoStats".to_string(),
                 api_version: crate::get_plugin_api_version(),
             },
-            source: PluginSource::Builtin {
+            source: PluginSource::BuiltinConsumer {
                 factory: || Box::new(DumpPlugin::new()),
             },
             manifest_path: None,
