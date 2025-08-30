@@ -123,7 +123,6 @@ pub async fn startup(
         });
 
     // Stage 5: Plugin configuration (validate service dependencies first)
-    validate_service_dependencies().await;
     configure_plugins(&command_segments, toml_config.as_ref()).await;
 
     // Stage 6: Build query parameters from TOML config and CLI arguments
@@ -532,40 +531,6 @@ async fn configure_scanner(
 
     // Return the configured scanner manager
     Some(scanner_manager)
-}
-
-/// Validate that all required services are available and properly initialized
-/// This ensures service startup dependencies are met before proceeding with configuration
-async fn validate_service_dependencies() {
-    use std::process::exit;
-
-    let services = get_services();
-
-    // Validate PluginManager service
-    {
-        let plugin_manager = services.plugin_manager().await;
-
-        // Test basic plugin manager functionality
-        // let plugin_count = plugin_manager.list_plugins_with_filter(false).await.len();
-    }
-
-    {
-        let queue_manager = services.queue_manager();
-
-        // Test basic queue manager functionality by creating a test consumer
-        match queue_manager.create_consumer("startup_dependency_test".to_string()) {
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("FATAL: QueueManager service validation failed");
-                log::debug!("Cannot create test consumer: {e}");
-                exit(1);
-            }
-        }
-    }
-
-    {
-        let _notification_manager = services.notification_manager().await;
-    }
 }
 
 /// Publish system startup event to notify all components that system is ready

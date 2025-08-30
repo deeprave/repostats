@@ -35,12 +35,20 @@ pub fn init_logging_flexi(
                 logger = logger.format(extended_format);
             }
         }
-        _ => {
-            // Default "text" format without target info
+        "min" | "simple" => {
+            // Extended format with target info
             if color_enabled {
                 logger = logger.format(simple_color_format);
             } else {
                 logger = logger.format(simple_format);
+            }
+        }
+        _ => {
+            // Default "text" format without target info
+            if color_enabled {
+                logger = logger.format(standard_color_format);
+            } else {
+                logger = logger.format(standard_format);
             }
         }
     }
@@ -109,20 +117,35 @@ pub fn reconfigure_logging(
 }
 
 // Simple text format without target info
-fn simple_format(
-    w: &mut dyn std::io::Write,
-    now: &mut flexi_logger::DeferredNow,
-    record: &log::Record,
-) -> Result<(), std::io::Error> {
-    let level_abbr = match record.level() {
+
+fn level_to_color(level: log::Level) -> String {
+    match level {
+        log::Level::Error => "red".to_string(),
+        log::Level::Warn => "yellow".to_string(),
+        log::Level::Info => "green".to_string(),
+        log::Level::Debug => "blue".to_string(),
+        log::Level::Trace => "magenta".to_string(),
+        _ => "white".to_string(),
+    }
+}
+
+fn level_to_abbr(level: log::Level) -> &'static str {
+    match level {
         log::Level::Error => "ERR",
         log::Level::Warn => "WRN",
         log::Level::Info => "INF",
         log::Level::Debug => "DBG",
         log::Level::Trace => "TRC",
-    };
+        _ => "???",
+    }
+}
 
-    // Format target as path-like: module::submodule -> module/submodule.rs
+fn standard_format(
+    w: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> Result<(), std::io::Error> {
+    let level_abbr = level_to_abbr(record.level());
     let target_formatted = format_target_as_path(record.target(), record.line());
 
     // Format: "YYYY-MM-DD HH:mm:ss.fff INF message (app/startup.rs:42)"
@@ -137,20 +160,14 @@ fn simple_format(
 }
 
 // Simple color format without target info
-fn simple_color_format(
+fn standard_color_format(
     w: &mut dyn std::io::Write,
     now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
 ) -> Result<(), std::io::Error> {
     use colored::*;
 
-    let level_colored = match record.level() {
-        log::Level::Error => "ERR".red().bold(),
-        log::Level::Warn => "WRN".yellow(),
-        log::Level::Info => "INF".green(),
-        log::Level::Debug => "DBG".blue(),
-        log::Level::Trace => "TRC".magenta(),
-    };
+    let level_colored = level_to_color(record.level());
 
     // Format: "YYYY-MM-DD HH:mm:ss.fff INF message" with colors
     write!(
@@ -162,19 +179,35 @@ fn simple_color_format(
     )
 }
 
+fn simple_format(
+    w: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> Result<(), std::io::Error> {
+    let level_abbr = level_to_abbr(record.level());
+
+    // Format: "YYYY-MM-DD HH:mm:ss.fff INF message (app/startup.rs:42)"
+    write!(w, "{} {}", level_abbr, record.args())
+}
+
+// Simple color format without target info
+fn simple_color_format(
+    w: &mut dyn std::io::Write,
+    now: &mut flexi_logger::DeferredNow,
+    record: &log::Record,
+) -> Result<(), std::io::Error> {
+    let level_colored = level_to_color(record.level());
+
+    write!(w, "{} {}", level_colored, record.args())
+}
+
 // Extended format with target info, no colors
 fn extended_format(
     w: &mut dyn std::io::Write,
     now: &mut flexi_logger::DeferredNow,
     record: &log::Record,
 ) -> Result<(), std::io::Error> {
-    let level_abbr = match record.level() {
-        log::Level::Error => "ERR",
-        log::Level::Warn => "WRN",
-        log::Level::Info => "INF",
-        log::Level::Debug => "DBG",
-        log::Level::Trace => "TRC",
-    };
+    let level_abbr = level_to_abbr(record.level());
 
     // Format target as path-like: module::submodule -> module/submodule.rs
     let target_formatted = format_target_as_path(record.target(), record.line());
@@ -198,13 +231,7 @@ fn extended_color_format(
 ) -> Result<(), std::io::Error> {
     use colored::*;
 
-    let level_colored = match record.level() {
-        log::Level::Error => "ERR".red().bold(),
-        log::Level::Warn => "WRN".yellow(),
-        log::Level::Info => "INF".green(),
-        log::Level::Debug => "DBG".blue(),
-        log::Level::Trace => "TRC".magenta(),
-    };
+    let level_colored = level_to_color(record.level());
 
     // Format target as path-like: module::submodule -> module/submodule.rs
     let target_formatted = format_target_as_path(record.target(), record.line());
@@ -228,14 +255,7 @@ fn json_format(
 ) -> Result<(), std::io::Error> {
     use serde_json::{json, to_string};
 
-    let level_abbr = match record.level() {
-        log::Level::Error => "ERR",
-        log::Level::Warn => "WRN",
-        log::Level::Info => "INF",
-        log::Level::Debug => "DBG",
-        log::Level::Trace => "TRC",
-    };
-
+    let level_abbr = record.level().as_str();
     let target_formatted = format_target_as_path(record.target(), record.line());
 
     // Ordered: timestamp, level, message, metadata
