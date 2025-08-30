@@ -875,6 +875,31 @@ impl Args {
         }
     }
 
+    /// Apply string array field from TOML config (handles both single string and array formats)
+    fn apply_string_array_field(
+        config: &toml::Table,
+        key: &str,
+        target: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if let Some(value) = config.get(key) {
+            let mut temp_strings = Vec::new();
+
+            if let Some(str_val) = value.as_str() {
+                temp_strings.push(str_val.to_string());
+            } else if let Some(array_val) = value.as_array() {
+                for item in array_val {
+                    if let Some(item_str) = item.as_str() {
+                        temp_strings.push(item_str.to_string());
+                    }
+                }
+            }
+
+            let deduplicated = Self::parse_comma_separated_strings(&temp_strings);
+            target.extend(deduplicated);
+        }
+        Ok(())
+    }
+
     /// Apply TOML configuration values to Args
     fn apply_toml_values(args: &mut Self, config: &toml::Table) -> Result<(), String> {
         if let Some(repo_value) = config.get("repository") {
@@ -945,39 +970,8 @@ impl Args {
         }
 
         // Handle author fields (support both single string and array formats)
-        if let Some(author_value) = config.get("author") {
-            let mut author_strings = Vec::new();
-
-            if let Some(author_str) = author_value.as_str() {
-                author_strings.push(author_str.to_string());
-            } else if let Some(author_array) = author_value.as_array() {
-                for item in author_array {
-                    if let Some(author_str) = item.as_str() {
-                        author_strings.push(author_str.to_string());
-                    }
-                }
-            }
-
-            let deduplicated = Self::parse_comma_separated_strings(&author_strings);
-            args.author.extend(deduplicated);
-        }
-
-        if let Some(exclude_author_value) = config.get("exclude-author") {
-            let mut author_strings = Vec::new();
-
-            if let Some(author_str) = exclude_author_value.as_str() {
-                author_strings.push(author_str.to_string());
-            } else if let Some(author_array) = exclude_author_value.as_array() {
-                for item in author_array {
-                    if let Some(author_str) = item.as_str() {
-                        author_strings.push(author_str.to_string());
-                    }
-                }
-            }
-
-            let deduplicated = Self::parse_comma_separated_strings(&author_strings);
-            args.exclude_author.extend(deduplicated);
-        }
+        Self::apply_string_array_field(config, "author", &mut args.author)?;
+        Self::apply_string_array_field(config, "exclude-author", &mut args.exclude_author)?;
 
         // Handle file filtering fields
         Self::apply_array_field(config, "files", &mut args.files)?;

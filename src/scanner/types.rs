@@ -4,6 +4,155 @@
 
 use std::time::SystemTime;
 
+/// Bitflags for scanner requirements from plugins
+///
+/// These flags indicate what data the scanner needs to provide based on
+/// plugin requirements. Flags automatically include their dependencies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanRequires(u64);
+
+impl ScanRequires {
+    /// No requirements
+    pub const NONE: Self = Self(0);
+
+    /// Repository information (metadata)
+    pub const REPOSITORY_INFO: Self = Self(1 << 0);
+
+    /// Commit information
+    pub const COMMITS: Self = Self(1 << 1);
+
+    /// File change information (includes commits)
+    pub const FILE_CHANGES: Self = Self((1 << 2) | Self::COMMITS.0);
+
+    /// File content at HEAD/tag/commit (includes file changes)
+    pub const FILE_CONTENT: Self = Self((1 << 3) | Self::FILE_CHANGES.0);
+
+    /// Full history traversal (includes commits)
+    pub const HISTORY: Self = Self((1 << 4) | Self::COMMITS.0);
+
+    /// Create from raw bits
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    /// Get raw bits
+    pub const fn bits(&self) -> u64 {
+        self.0
+    }
+
+    /// Check if no requirements are set
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
+    /// Check if a specific requirement is set
+    pub const fn contains(&self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    /// Combine requirements with bitwise OR
+    pub const fn union(&self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Get requirements that are in both sets
+    pub const fn intersection(&self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    /// Remove requirements
+    pub const fn difference(&self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    /// Check if repository info is required
+    pub const fn requires_repository_info(&self) -> bool {
+        self.contains(Self::REPOSITORY_INFO)
+    }
+
+    /// Check if commits are required
+    pub const fn requires_commits(&self) -> bool {
+        self.contains(Self::COMMITS)
+    }
+
+    /// Check if file changes are required
+    pub const fn requires_file_changes(&self) -> bool {
+        self.contains(Self::FILE_CHANGES)
+    }
+
+    /// Check if file content is required
+    pub const fn requires_file_content(&self) -> bool {
+        self.contains(Self::FILE_CONTENT)
+    }
+
+    /// Check if history traversal is required
+    pub const fn requires_history(&self) -> bool {
+        self.contains(Self::HISTORY)
+    }
+}
+
+impl Default for ScanRequires {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl std::ops::BitOr for ScanRequires {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        self.union(rhs)
+    }
+}
+
+impl std::ops::BitOrAssign for ScanRequires {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = self.union(rhs);
+    }
+}
+
+impl std::ops::BitAnd for ScanRequires {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        self.intersection(rhs)
+    }
+}
+
+impl std::ops::BitAndAssign for ScanRequires {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = self.intersection(rhs);
+    }
+}
+
+impl std::fmt::Display for ScanRequires {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut requirements = Vec::new();
+
+        // Only show the highest-level requirements to avoid redundancy
+        if self.requires_repository_info() {
+            requirements.push("RepositoryInfo");
+        }
+
+        // For file-related requirements, show only the highest level
+        if self.requires_file_content() {
+            requirements.push("FileContent");
+        } else if self.requires_file_changes() {
+            requirements.push("FileChanges");
+        } else if self.requires_history() {
+            requirements.push("History");
+        } else if self.requires_commits() {
+            requirements.push("Commits");
+        }
+
+        if requirements.is_empty() {
+            write!(f, "None")
+        } else {
+            write!(f, "{}", requirements.join(" | "))
+        }
+    }
+}
+
 /// Type of file change
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ChangeType {
@@ -280,4 +429,91 @@ pub struct ScanStats {
     pub total_insertions: usize,
     pub total_deletions: usize,
     pub scan_duration: std::time::Duration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scan_requires_basic_operations() {
+        let none = ScanRequires::NONE;
+        let repo_info = ScanRequires::REPOSITORY_INFO;
+        let commits = ScanRequires::COMMITS;
+
+        assert!(none.is_empty());
+        assert!(!repo_info.is_empty());
+        assert!(repo_info.requires_repository_info());
+        assert!(!repo_info.requires_commits());
+        assert!(commits.requires_commits());
+    }
+
+    #[test]
+    fn test_scan_requires_automatic_dependencies() {
+        // FILE_CHANGES should include COMMITS
+        let file_changes = ScanRequires::FILE_CHANGES;
+        assert!(file_changes.requires_file_changes());
+        assert!(file_changes.requires_commits()); // Should automatically include commits
+
+        // FILE_CONTENT should include FILE_CHANGES and COMMITS
+        let file_content = ScanRequires::FILE_CONTENT;
+        assert!(file_content.requires_file_content());
+        assert!(file_content.requires_file_changes()); // Should automatically include file changes
+        assert!(file_content.requires_commits()); // Should automatically include commits
+
+        // HISTORY should include COMMITS
+        let history = ScanRequires::HISTORY;
+        assert!(history.requires_history());
+        assert!(history.requires_commits()); // Should automatically include commits
+    }
+
+    #[test]
+    fn test_scan_requires_bitwise_operations() {
+        let repo_info = ScanRequires::REPOSITORY_INFO;
+        let commits = ScanRequires::COMMITS;
+
+        let combined = repo_info | commits;
+        assert!(combined.requires_repository_info());
+        assert!(combined.requires_commits());
+
+        let intersection = combined & repo_info;
+        assert!(intersection.requires_repository_info());
+        assert!(!intersection.requires_commits());
+    }
+
+    #[test]
+    fn test_scan_requires_display() {
+        let none = ScanRequires::NONE;
+        assert_eq!(format!("{}", none), "None");
+
+        let repo_info = ScanRequires::REPOSITORY_INFO;
+        assert_eq!(format!("{}", repo_info), "RepositoryInfo");
+
+        let combined = ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS;
+        assert_eq!(format!("{}", combined), "RepositoryInfo | Commits");
+
+        let file_content = ScanRequires::FILE_CONTENT;
+        // FILE_CONTENT includes FILE_CHANGES which includes COMMITS
+        // Display should show FileContent (the highest level requirement)
+        assert_eq!(format!("{}", file_content), "FileContent");
+    }
+
+    #[test]
+    fn test_scan_requires_complex_combinations() {
+        let everything =
+            ScanRequires::REPOSITORY_INFO | ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
+
+        assert!(everything.requires_repository_info());
+        assert!(everything.requires_file_content());
+        assert!(everything.requires_file_changes()); // included by FILE_CONTENT
+        assert!(everything.requires_commits()); // included by both FILE_CONTENT and HISTORY
+        assert!(everything.requires_history());
+    }
+
+    #[test]
+    fn test_scan_requires_default() {
+        let default = ScanRequires::default();
+        assert!(default.is_empty());
+        assert_eq!(default, ScanRequires::NONE);
+    }
 }

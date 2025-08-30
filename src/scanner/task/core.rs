@@ -3,6 +3,7 @@
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
 use crate::core::query::QueryParams;
+use crate::scanner::api::ScanRequires;
 use crate::scanner::error::ScanResult;
 use gix;
 
@@ -17,6 +18,10 @@ pub struct ScannerTask {
     repository: gix::Repository,
     /// Flag indicating if this is a remote repository
     is_remote: bool,
+    /// Combined requirements from all active plugins
+    requirements: ScanRequires,
+    /// Query parameters for filtering and customizing the scan
+    query_params: Option<QueryParams>,
 }
 
 impl ScannerTask {
@@ -26,11 +31,40 @@ impl ScannerTask {
         repository_path: String,
         repository: gix::Repository,
     ) -> Self {
+        Self::new_with_all_options(
+            scanner_id,
+            repository_path,
+            repository,
+            ScanRequires::NONE,
+            None,
+        )
+    }
+
+    /// Create a new ScannerTask with repository instance and requirements
+    pub fn new_with_requirements(
+        scanner_id: String,
+        repository_path: String,
+        repository: gix::Repository,
+        requirements: ScanRequires,
+    ) -> Self {
+        Self::new_with_all_options(scanner_id, repository_path, repository, requirements, None)
+    }
+
+    /// Create a new ScannerTask with all options
+    pub fn new_with_all_options(
+        scanner_id: String,
+        repository_path: String,
+        repository: gix::Repository,
+        requirements: ScanRequires,
+        query_params: Option<QueryParams>,
+    ) -> Self {
         Self {
             scanner_id,
             repository_path: repository_path.clone(),
             repository,
             is_remote: repository_path.contains("://") || !repository_path.starts_with('/'),
+            requirements,
+            query_params,
         }
     }
 
@@ -52,6 +86,16 @@ impl ScannerTask {
     /// Check if this is a remote repository
     pub fn is_remote(&self) -> bool {
         self.is_remote
+    }
+
+    /// Get the scanner requirements
+    pub fn requirements(&self) -> ScanRequires {
+        self.requirements
+    }
+
+    /// Get the query parameters
+    pub fn query_params(&self) -> Option<&QueryParams> {
+        self.query_params.as_ref()
     }
 
     // Phase 7: Scanner Filters and Query Parameters

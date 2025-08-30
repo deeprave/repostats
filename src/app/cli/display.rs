@@ -9,6 +9,11 @@ use tabled::{
     Table, Tabled,
 };
 
+/// Table formatting constants
+const PLUGIN_COLUMN_WIDTH: usize = 8;
+const TABLE_SEPARATOR: &str = "--------";
+const SEPARATOR_SUFFIX: &str = "--";
+
 /// Table row data structure for tabled
 #[derive(Tabled)]
 struct DisplayRow {
@@ -26,22 +31,35 @@ pub fn display_plugin_table(plugins: Vec<PluginMetadata>, use_color: bool) -> Re
         return Ok(());
     }
 
-    // Validate plugin data before processing
+    // Enhanced validation for table safety
     for plugin in &plugins {
         if plugin.name.is_empty() {
             return Err("Invalid plugin: empty name".to_string());
         }
-        if plugin.name.contains('\n') {
+        if plugin.name.chars().any(|c| c.is_control() || c == '\t') {
             return Err(format!(
-                "Invalid plugin '{}': name contains newlines",
+                "Invalid plugin '{}': name contains control characters",
                 plugin.name
             ));
         }
-        if plugin.description.contains('\n') {
+        if plugin
+            .description
+            .chars()
+            .any(|c| c.is_control() && c != ' ')
+        {
             return Err(format!(
-                "Invalid plugin '{}': description contains newlines",
+                "Invalid plugin '{}': description contains control characters",
                 plugin.name
             ));
+        }
+        // Validate function names as well
+        for func in &plugin.functions {
+            if func.name.chars().any(|c| c.is_control() || c == '\t') {
+                return Err(format!(
+                    "Invalid function '{}' in plugin '{}': contains control characters",
+                    func.name, plugin.name
+                ));
+            }
         }
     }
 
@@ -74,7 +92,7 @@ pub fn display_plugin_table(plugins: Vec<PluginMetadata>, use_color: bool) -> Re
     let mut table = Table::new(table_data);
     table
         .with(Style::empty())
-        .with(Modify::new(Columns::single(0)).with(Width::wrap(8)))
+        .with(Modify::new(Columns::single(0)).with(Width::wrap(PLUGIN_COLUMN_WIDTH)))
         .with(Modify::new(Columns::single(0)).with(Alignment::left()));
 
     // Apply colors if requested
@@ -100,7 +118,12 @@ fn print_table_with_separator(table: &Table) {
         println!("{}", header);
 
         // Print custom separator
-        println!("{:<8} {}", "--------", "--");
+        println!(
+            "{:<width$} {}",
+            TABLE_SEPARATOR,
+            SEPARATOR_SUFFIX,
+            width = PLUGIN_COLUMN_WIDTH
+        );
 
         // Print remaining data lines
         for line in lines {
@@ -220,7 +243,9 @@ mod tests {
 
         let result = display_plugin_table(plugins, false);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("name contains newlines"));
+        assert!(result
+            .unwrap_err()
+            .contains("name contains control characters"));
     }
 
     #[test]
@@ -233,6 +258,6 @@ mod tests {
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
-            .contains("description contains newlines"));
+            .contains("description contains control characters"));
     }
 }

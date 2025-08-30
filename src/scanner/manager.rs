@@ -3,6 +3,8 @@
 //! Central coordination component for managing multiple repository scanner tasks,
 //! each with unique SHA256-based identification to prevent duplicate scanning.
 
+use crate::core::query::QueryParams;
+use crate::core::services::get_services;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
 use log::trace;
@@ -202,7 +204,11 @@ impl ScannerManager {
     }
 
     /// Create a scanner for a repository with queue integration
-    pub async fn create_scanner(&self, repository_path: &str) -> ScanResult<Arc<ScannerTask>> {
+    pub async fn create_scanner(
+        &self,
+        repository_path: &str,
+        query_params: Option<&QueryParams>,
+    ) -> ScanResult<Arc<ScannerTask>> {
         // First normalize the path
         let normalized_path = self.normalise_repository_path(repository_path)?;
 
@@ -238,9 +244,19 @@ impl ScannerManager {
             }
         };
 
-        // Create scanner task with the repository directly
-        let scanner_task =
-            ScannerTask::new_with_repository(scanner_id.clone(), normalized_path.clone(), repo);
+        // Query all active plugins for their requirements
+        let services = get_services();
+        let plugin_manager = services.plugin_manager().await;
+        let requirements = plugin_manager.get_combined_requirements().await;
+
+        // Create scanner task with the repository, requirements, and query params
+        let scanner_task = ScannerTask::new_with_all_options(
+            scanner_id.clone(),
+            normalized_path.clone(),
+            repo,
+            requirements,
+            query_params.cloned(),
+        );
         let scanner_task = Arc::new(scanner_task);
 
         // Store the scanner task in the manager for later use
@@ -331,6 +347,98 @@ impl ScannerManager {
         }
 
         Ok(scanner_task.clone())
+    }
+
+    /// Create scanners for multiple repositories with all-or-nothing semantics
+    ///
+    /// This method takes a list of repository paths and query parameters, and creates
+    /// scanners for all of them. If ANY repository fails validation or scanner creation,
+    /// all successfully created scanners are cleaned up and an error is returned.
+    ///
+    /// This ensures that startup either succeeds completely or fails completely,
+    /// avoiding partial initialization states.
+    pub async fn create_scanners(
+        &self,
+        repository_paths: &[PathBuf],
+        query_params: Option<&QueryParams>,
+    ) -> ScanResult<Vec<Arc<ScannerTask>>> {
+        if repository_paths.is_empty() {
+            return Err(ScanError::Configuration {
+                message: "No repositories provided for scanning".to_string(),
+            });
+        }
+
+        let mut created_scanners = Vec::new();
+        let mut failed_repositories = Vec::new();
+
+        // Try to create scanners for all repositories
+        for (index, repo_path) in repository_paths.iter().enumerate() {
+            let repo_path_str = repo_path.to_string_lossy();
+
+            match self.create_scanner(&repo_path_str, query_params).await {
+                Ok(scanner) => {
+                    log::info!(
+                        "Successfully created scanner for repository '{}' (#{}/{})",
+                        repo_path_str,
+                        index + 1,
+                        repository_paths.len()
+                    );
+                    created_scanners.push(scanner);
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to create scanner for repository '{}' (#{}/{}): {}",
+                        repo_path_str,
+                        index + 1,
+                        repository_paths.len(),
+                        e
+                    );
+                    failed_repositories.push((repo_path_str.to_string(), e));
+                    break; // Stop on first failure for all-or-nothing semantics
+                }
+            }
+        }
+
+        // If any repository failed, clean up all successfully created scanners
+        if !failed_repositories.is_empty() {
+            log::warn!(
+                "Scanner creation failed - cleaning up {} successfully created scanners",
+                created_scanners.len()
+            );
+
+            // Clean up successfully created scanners
+            for scanner in &created_scanners {
+                let scanner_id = scanner.scanner_id();
+
+                // Remove from active scanners map
+                self._scanner_tasks.lock().unwrap().remove(scanner_id);
+
+                // Cancel repository reservation if applicable
+                if let Ok(repo_id) = self.get_unique_repo_id(scanner.repository()) {
+                    self.cancel_reservation(&repo_id);
+                }
+
+                log::debug!("Cleaned up scanner: {}", scanner_id);
+            }
+
+            // Return detailed error about the failure
+            let (failed_repo, failed_error) = &failed_repositories[0];
+            return Err(ScanError::Configuration {
+                message: format!(
+                    "Repository scanning initialization failed: '{}' - {}. {} scanners cleaned up.",
+                    failed_repo,
+                    failed_error,
+                    created_scanners.len()
+                ),
+            });
+        }
+
+        log::info!(
+            "Successfully created {} scanners for all repositories",
+            created_scanners.len()
+        );
+
+        Ok(created_scanners)
     }
 
     /// Start scanning all configured repositories
