@@ -70,14 +70,21 @@ impl PluginArgParser {
             .about(description.to_string())
             .version(version.to_string())
             .disable_help_flag(true)
+            .disable_version_flag(true)
             .arg(
                 Arg::new("help")
                     .long("help")
                     .short('h')
                     .action(clap::ArgAction::Help)
                     .help("Show help information"),
+            )
+            .arg(
+                Arg::new("version")
+                    .long("version")
+                    .short('v')
+                    .action(clap::ArgAction::Version)
+                    .help("Print version"),
             );
-        // Note: clap automatically adds --version when .version() is set
 
         Self {
             command,
@@ -106,15 +113,28 @@ impl PluginArgParser {
         match self.command.clone().try_get_matches_from(full_args) {
             Ok(matches) => Ok(matches),
             Err(e) => match e.kind() {
-                clap::error::ErrorKind::DisplayHelp => Err(PluginError::Generic {
-                    message: e.to_string(),
-                }),
-                clap::error::ErrorKind::DisplayVersion => Err(PluginError::Generic {
-                    message: format!("{} version information", self.plugin_name),
-                }),
-                _ => Err(PluginError::Generic {
-                    message: format!("Argument parsing error: {}", e),
-                }),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+                    // Print help or version directly and exit successfully
+                    // This is what clap normally does for the main program
+                    print!("{}", e);
+                    std::process::exit(0);
+                }
+                _ => {
+                    // Extract just the core error message and simplify it
+                    let error_msg = e.to_string();
+                    let clean_msg = if let Some(msg) = error_msg.strip_prefix("error: ") {
+                        // Simplify clap's verbose "unexpected argument 'X' found" to "Unknown argument 'X'"
+                        if msg.starts_with("unexpected argument") && msg.contains("found") {
+                            msg.replace("unexpected argument", "Unknown argument")
+                                .replace(" found", "")
+                        } else {
+                            msg.to_string()
+                        }
+                    } else {
+                        error_msg
+                    };
+                    Err(PluginError::Generic { message: clean_msg })
+                }
             },
         }
     }

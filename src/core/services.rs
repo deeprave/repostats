@@ -3,8 +3,8 @@
 //! See docs/service_registry.md for complete documentation.
 
 use crate::notifications::api::AsyncNotificationManager;
-use crate::plugin::PluginManager;
-use crate::queue::QueueManager;
+use crate::plugin::api::PluginManager;
+use crate::queue::api::QueueManager;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 

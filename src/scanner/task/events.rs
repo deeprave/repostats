@@ -2,15 +2,14 @@
 //!
 //! Event and notification-related operations for scanner lifecycle management.
 
+use super::core::ScannerTask;
 use crate::core::services::get_services;
-use crate::notifications::api::EventReceiver;
-use crate::notifications::event::{
-    Event, EventFilter, QueueEventType, ScanEvent, ScanEventType, SystemEvent, SystemEventType,
+use crate::notifications::api::{
+    Event, EventFilter, EventReceiver, QueueEventType, ScanEvent, ScanEventType, SystemEvent,
+    SystemEventType,
 };
 use crate::scanner::error::{ScanError, ScanResult};
 use std::time::SystemTime;
-
-use super::core::ScannerTask;
 
 impl ScannerTask {
     /// Create a notification subscriber for this scanner task

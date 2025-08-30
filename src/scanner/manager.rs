@@ -5,7 +5,7 @@
 
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
-use gix_url;
+use log::trace;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,92 +36,6 @@ impl ScannerManager {
             _scanner_tasks: Mutex::new(HashMap::new()),
             repo_states: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// Redact sensitive information from repository paths for secure logging
-    fn redact_repo_path(&self, path: &str) -> String {
-        // Handle Windows UNC paths first (e.g., \\server\share\path\to\repo)
-        if path.starts_with(r"\\") {
-            let parts: Vec<&str> = path[2..]
-                .split(['\\', '/'].as_ref())
-                .filter(|s| !s.is_empty())
-                .collect();
-            return if parts.len() >= 2 {
-                format!(r"\\{}\{}\REDACTED", parts[0], parts[1])
-            } else if parts.len() == 1 {
-                format!(r"\\{}\REDACTED", parts[0])
-            } else {
-                r"\\REDACTED".to_string()
-            };
-        }
-
-        // Handle Windows drive paths first (before URL parsing) - e.g., C:\path\to\repo
-        if path.len() >= 3
-            && path.chars().nth(1) == Some(':')
-            && (path.chars().nth(2) == Some('\\') || path.chars().nth(2) == Some('/'))
-        {
-            let drive = &path[..3];
-            return format!("{}REDACTED", drive);
-        }
-
-        // Try to parse as a git URL using gix-url only if it looks like a URL
-        // (contains scheme or starts with protocol patterns)
-        if path.contains("://") || path.starts_with("file:") {
-            if let Ok(url) = gix_url::Url::from_bytes(path.as_bytes().into()) {
-                // Build redacted URL with scheme and host only
-                let scheme = url.scheme.as_str();
-                let host = url
-                    .host()
-                    .map(|h| h.to_string())
-                    .unwrap_or_else(|| "unknown-host".to_string());
-
-                // Handle different schemes appropriately
-                return match url.scheme {
-                    gix_url::Scheme::Http | gix_url::Scheme::Https => {
-                        format!("{}://{}/REDACTED", scheme, host)
-                    }
-                    gix_url::Scheme::Ssh => {
-                        format!("ssh://{}/REDACTED", host)
-                    }
-                    gix_url::Scheme::Git => {
-                        format!("git://{}/REDACTED", host)
-                    }
-                    gix_url::Scheme::File => "file://REDACTED".to_string(),
-                    _ => {
-                        format!("{}://REDACTED", scheme)
-                    }
-                };
-            }
-        }
-
-        // Handle SSH URLs without explicit scheme (e.g., git@github.com:user/repo.git)
-        // Only match if it has @ and : but doesn't look like a Windows path
-        if path.contains('@') && path.contains(':') && !path.contains("://") {
-            let after_at = path.split('@').last().unwrap_or(path);
-            let host = after_at.split(':').next().unwrap_or(after_at);
-            return format!("ssh://{}/REDACTED", host);
-        }
-
-        // Handle absolute paths by keeping root and redacting the rest
-        if path.starts_with('/') {
-            return "/REDACTED".to_string();
-        }
-
-        // For relative paths, show only the last component to avoid exposing directory structure
-        if let Some(last_separator_pos) = path.rfind('/').or_else(|| path.rfind('\\')) {
-            let filename = &path[last_separator_pos + 1..];
-            if !filename.is_empty() {
-                let separator = if path.contains('\\') && !path.contains('/') {
-                    '\\'
-                } else {
-                    '/'
-                };
-                return format!("REDACTED{}{}", separator, filename);
-            }
-        }
-
-        // Fallback: completely redact anything we don't recognize
-        "REDACTED".to_string()
     }
 
     /// Create a ScannerManager and integrate with services
@@ -350,12 +264,6 @@ impl ScannerManager {
                 Err(e) => {
                     last_publisher_err = Some(e);
                     if attempt < max_retries - 1 {
-                        log::debug!(
-                            "Queue publisher creation attempt {} failed for '{}', retrying in {}ms",
-                            attempt + 1,
-                            self.redact_repo_path(repository_path),
-                            retry_delay.as_millis()
-                        );
                         tokio::time::sleep(retry_delay).await;
                     }
                 }
@@ -390,12 +298,6 @@ impl ScannerManager {
                 Err(e) => {
                     last_subscriber_err = Some(e);
                     if attempt < max_retries - 1 {
-                        log::debug!(
-                            "Notification subscriber creation attempt {} failed for '{}', retrying in {}ms",
-                            attempt + 1,
-                            self.redact_repo_path(repository_path),
-                            retry_delay.as_millis()
-                        );
                         tokio::time::sleep(retry_delay).await;
                     }
                 }
@@ -428,29 +330,25 @@ impl ScannerManager {
             });
         }
 
-        log::debug!(
-            "Scanner created successfully for repository: {} (Scanner: {})",
-            self.redact_repo_path(repository_path),
-            scanner_task.scanner_id()
-        );
         Ok(scanner_task.clone())
     }
 
     /// Start scanning all configured repositories
     /// This triggers scan_commits() on all scanner tasks and waits for completion
     pub async fn start_scanning(&self) -> Result<(), ScanError> {
-        use log::{debug, info, warn};
+        use log::{debug, info};
 
         // Collect all scanner tasks first, then drop the lock
         let scanner_tasks_vec = {
             let scanner_tasks = self._scanner_tasks.lock().unwrap();
 
             if scanner_tasks.is_empty() {
-                warn!("No scanner tasks configured - nothing to scan");
-                return Ok(());
+                return Err(ScanError::Repository {
+                    message: "No active repository scanner".to_string(),
+                });
             }
 
-            info!(
+            debug!(
                 "Starting repository scanning for {} repositories",
                 scanner_tasks.len()
             );
@@ -467,22 +365,14 @@ impl ScannerManager {
         let mut failure_count = 0;
 
         for (scanner_id, scanner_task) in scanner_tasks_vec {
-            debug!("Starting scan for scanner: {}", scanner_id);
+            trace!("Starting scan for scanner: {}", scanner_id);
 
             match scanner_task.scan_commits().await {
                 Ok(messages) => {
-                    debug!(
-                        "Scan completed for repository, {} messages generated",
-                        messages.len()
-                    );
                     // Publish the scan messages to the queue
                     match scanner_task.publish_messages(messages).await {
                         Ok(()) => {
                             success_count += 1;
-                            debug!(
-                                "Repository scan completed successfully for scanner: {}",
-                                scanner_id
-                            );
                         }
                         Err(e) => {
                             failure_count += 1;
@@ -514,9 +404,9 @@ impl ScannerManager {
 
         Ok(())
     }
-}
 
-// Tests are in manager_tests.rs
-#[cfg(test)]
-#[path = "manager_tests.rs"]
-mod tests;
+    /// Get the current number of active scanners (for testing)
+    pub fn scanner_count(&self) -> usize {
+        self._scanner_tasks.lock().unwrap().len()
+    }
+}

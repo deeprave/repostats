@@ -5,11 +5,12 @@
 //! read from, with each consumer maintaining its own independent position.
 
 use crate::core::services::get_services;
-use crate::notifications::event::{Event, QueueEvent, QueueEventType};
-use crate::queue::{
-    LagStats, MemoryStats, MultiConsumerQueue, QueueConsumer, QueuePublisher, QueueResult,
-    StaleConsumerInfo,
-};
+use crate::notifications::api::{Event, QueueEvent, QueueEventType};
+use crate::queue::consumer::QueueConsumer;
+use crate::queue::error::QueueResult;
+use crate::queue::internal::MultiConsumerQueue;
+use crate::queue::publisher::QueuePublisher;
+use crate::queue::types::{LagStats, MemoryStats, StaleConsumerInfo};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;

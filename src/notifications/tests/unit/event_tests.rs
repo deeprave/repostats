@@ -1,8 +1,8 @@
 //! Unit tests for Event enum and EventFilter
 
-use crate::notifications::event::{
-    Event, PluginEvent, PluginEventType, QueueEvent, QueueEventType, ScanEvent, ScanEventType,
-    SystemEvent, SystemEventType,
+use crate::notifications::api::{
+    Event, EventFilter, PluginEvent, PluginEventType, QueueEvent, QueueEventType, ScanEvent,
+    ScanEventType, SystemEvent, SystemEventType,
 };
 
 #[cfg(test)]
@@ -58,8 +58,6 @@ mod tests {
 
     #[test]
     fn test_event_filter_enum_variants() {
-        use crate::notifications::event::EventFilter;
-
         // Test EventFilter enum construction
         let _scan_only = EventFilter::ScanOnly;
         let _queue_only = EventFilter::QueueOnly;
@@ -72,8 +70,6 @@ mod tests {
 
     #[test]
     fn test_event_filter_accepts_logic() {
-        use crate::notifications::event::EventFilter;
-
         let scan_event = Event::Scan(ScanEvent::with_message(
             ScanEventType::Started,
             "test_scan".to_string(),

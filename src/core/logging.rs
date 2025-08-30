@@ -4,6 +4,10 @@
 static LOGGER_HANDLE: std::sync::OnceLock<std::sync::Mutex<flexi_logger::LoggerHandle>> =
     std::sync::OnceLock::new();
 
+static DATE_FORMAT_LONG: &str = "%Y-%m-%d %H:%M:%S%.6f";
+static DATE_FORMAT_SHORT: &str = "%Y-%m-%d %H:%M:%S%.3f";
+static DATE_FORMAT_ISO: &str = "%Y-%m-%dT%H:%M:%S%.3fZ";
+
 // New flexi_logger implementation
 pub fn init_logging_flexi(
     log_level: Option<&str>,
@@ -13,7 +17,7 @@ pub fn init_logging_flexi(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use flexi_logger::{FileSpec, Logger};
 
-    let level_str = log_level.unwrap_or("info");
+    let level_str = log_level.unwrap_or("warn");
     let format_type = log_format.map_or("text", |f| f);
 
     let mut logger = Logger::try_with_str(level_str)?;
@@ -121,11 +125,11 @@ fn simple_format(
     // Format target as path-like: module::submodule -> module/submodule.rs
     let target_formatted = format_target_as_path(record.target(), record.line());
 
-    // Format: "YYYY-MM-DD HH:mm:ss.ffff INF message (app/startup.rs:42)"
+    // Format: "YYYY-MM-DD HH:mm:ss.fff INF message (app/startup.rs:42)"
     write!(
         w,
         "{} {} {} ({})",
-        now.format("%Y-%m-%d %H:%M:%S%.3f"),
+        now.format(DATE_FORMAT_SHORT),
         level_abbr,
         record.args(),
         target_formatted
@@ -148,11 +152,11 @@ fn simple_color_format(
         log::Level::Trace => "TRC".magenta(),
     };
 
-    // Format: "YYYY-MM-DD HH:mm:ss.ffff INF message" with colors
+    // Format: "YYYY-MM-DD HH:mm:ss.fff INF message" with colors
     write!(
         w,
         "{} {} {}",
-        now.format("%Y-%m-%d %H:%M:%S%.3f").to_string().dimmed(),
+        now.format(DATE_FORMAT_SHORT).to_string().dimmed(),
         level_colored,
         record.args()
     )
@@ -179,7 +183,7 @@ fn extended_format(
     write!(
         w,
         "{} {} {} ({})",
-        now.format("%Y-%m-%d %H:%M:%S%.3f"),
+        now.format(DATE_FORMAT_LONG),
         level_abbr,
         record.args(),
         target_formatted
@@ -209,7 +213,7 @@ fn extended_color_format(
     write!(
         w,
         "{} {} {} ({})",
-        now.format("%Y-%m-%d %H:%M:%S%.3f").to_string().dimmed(),
+        now.format(DATE_FORMAT_LONG).to_string().dimmed(),
         level_colored,
         record.args(),
         target_formatted.dimmed()
@@ -236,7 +240,7 @@ fn json_format(
 
     // Ordered: timestamp, level, message, metadata
     let json_obj = json!({
-        "timestamp": now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        "timestamp": now.format(DATE_FORMAT_ISO).to_string(),
         "level": level_abbr,
         "message": record.args().to_string(),
         "target": target_formatted

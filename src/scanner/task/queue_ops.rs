@@ -3,7 +3,7 @@
 //! Queue-related operations including publishers and message publishing.
 
 use crate::core::services::get_services;
-use crate::queue::{Message, QueuePublisher};
+use crate::queue::api::{Message, QueuePublisher};
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::ScanMessage;
 use serde_json;

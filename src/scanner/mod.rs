@@ -14,15 +14,14 @@
 //! - **Plugin Integration**: Conditional file checkout with temporary directory management
 //! - **Event Coordination**: Lifecycle events via notification system
 
-pub mod error;
-pub mod manager;
-pub mod task;
-pub mod types;
+// Internal modules - all access should go through api module
+pub(crate) mod error;
+pub(crate) mod manager;
+pub(crate) mod task;
+pub(crate) mod types;
 
-pub use error::{ScanError, ScanResult};
-pub use manager::ScannerManager;
-pub use task::ScannerTask;
-pub use types::{
-    ChangeType, CommitInfo, FileChangeData, RepositoryData, RepositoryDataBuilder, ScanMessage,
-    ScanStats,
-};
+// Public API module - the only public interface for the scanner system
+pub mod api;
+
+#[cfg(test)]
+mod tests;

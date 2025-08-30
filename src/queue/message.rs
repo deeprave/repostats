@@ -4,6 +4,7 @@
 //! Messages are designed to be generic and extensible, supporting various use cases
 //! through the optional GroupedMessage trait.
 
+use crate::queue::traits::GroupedMessage;
 use std::time::SystemTime;
 
 /// Header information for all messages in the queue
@@ -59,59 +60,6 @@ impl Message {
             data,
         }
     }
-}
-
-/// Trait for messages that support logical grouping
-///
-/// This trait allows messages to be grouped for batch processing or
-/// coordinated event publishing. Groups are scoped by both producer_id
-/// and group_id to prevent conflicts between different producers.
-///
-/// # Example
-///
-/// ```rust
-/// use repostats::queue::{Message, GroupedMessage};
-///
-/// struct BatchMessage {
-///     message: Message,
-///     batch_id: String,
-///     batch_size: Option<usize>,
-///     is_last: bool,
-/// }
-///
-/// impl GroupedMessage for BatchMessage {
-///     fn group_id(&self) -> Option<String> {
-///         Some(self.batch_id.clone())
-///     }
-///
-///     fn starts_group(&self) -> Option<(String, usize)> {
-///         self.batch_size.map(|size| (self.batch_id.clone(), size))
-///     }
-///
-///     fn completes_group(&self) -> Option<String> {
-///         if self.is_last { Some(self.batch_id.clone()) } else { None }
-///     }
-/// }
-/// ```
-pub trait GroupedMessage {
-    /// Get the group identifier for this message
-    ///
-    /// Returns `Some(group_id)` if this message belongs to a group,
-    /// or `None` for standalone messages.
-    fn group_id(&self) -> Option<String>;
-
-    /// Check if this message starts a new group
-    ///
-    /// Returns `Some((group_id, expected_count))` if this message
-    /// starts a new group with a known message count. This enables
-    /// precise batching without waiting for completion signals.
-    fn starts_group(&self) -> Option<(String, usize)>;
-
-    /// Check if this message completes a group
-    ///
-    /// Returns `Some(group_id)` if this message completes a group.
-    /// This is a fallback mechanism for groups without known counts.
-    fn completes_group(&self) -> Option<String>;
 }
 
 impl GroupedMessage for Message {

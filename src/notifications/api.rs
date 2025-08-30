@@ -1,6 +1,16 @@
 //! Public API for the notification system
 //!
+//! This module provides the complete public API for the notification system.
+//! External modules should import from here rather than directly from internal modules.
 //! See docs/notification_system.md for complete documentation.
 
-pub use crate::notifications::event::{Event, SystemEvent, SystemEventType};
+// Core event types and enums
+pub use crate::notifications::event::{
+    Event, EventFilter, PluginEvent, PluginEventType, QueueEvent, QueueEventType, ScanEvent,
+    ScanEventType, SystemEvent, SystemEventType,
+};
+
+// Manager and utilities
+pub use crate::notifications::error::NotificationError;
 pub use crate::notifications::manager::{AsyncNotificationManager, EventReceiver};
+pub use crate::notifications::traits::{Subscriber, SubscriberStatistics};

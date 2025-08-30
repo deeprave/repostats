@@ -11,35 +11,13 @@
 //! ## Built-in Plugins
 //! Built-in plugins are compiled into the application and provide baseline functionality.
 
-use crate::plugin::{PluginInfo, PluginResult};
+use crate::plugin::error::PluginResult;
+use crate::plugin::types::{DiscoveredPlugin, PluginInfo, PluginSource};
 use std::path::{Path, PathBuf};
 
 /// Plugin discovery that handles all plugin types
-pub(crate) struct PluginDiscovery {
+pub struct PluginDiscovery {
     config: DiscoveryConfig,
-}
-
-/// Discovery result with plugin metadata and loading mechanism
-#[derive(Debug, Clone)]
-pub struct DiscoveredPlugin {
-    pub info: PluginInfo,
-    pub source: PluginSource,
-    pub manifest_path: Option<PathBuf>,
-}
-
-/// Source of a discovered plugin
-#[derive(Debug, Clone)]
-pub enum PluginSource {
-    /// External shared library plugin
-    External { library_path: PathBuf },
-    /// Built-in plugin factory
-    Builtin {
-        factory: fn() -> Box<dyn crate::plugin::Plugin>,
-    },
-    /// Consumer plugin factory
-    BuiltinConsumer {
-        factory: fn() -> Box<dyn crate::plugin::ConsumerPlugin>,
-    },
 }
 
 /// Configuration for plugin discovery
