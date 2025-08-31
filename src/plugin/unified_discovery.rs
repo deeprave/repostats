@@ -12,7 +12,8 @@
 //! Built-in plugins are compiled into the application and provide baseline functionality.
 
 use crate::plugin::error::PluginResult;
-use crate::plugin::types::{DiscoveredPlugin, PluginInfo, PluginSource};
+use crate::plugin::traits::Plugin;
+use crate::plugin::types::{DiscoveredPlugin, PluginSource};
 use std::path::{Path, PathBuf};
 
 /// Plugin discovery that handles all plugin types
@@ -186,14 +187,12 @@ impl BuiltinPluginDiscovery {
     pub(crate) async fn discover_builtin_plugins(&self) -> PluginResult<Vec<DiscoveredPlugin>> {
         use crate::plugin::builtin::dump::DumpPlugin;
 
+        // Create temporary plugin instance to get actual metadata
+        let dump_plugin = DumpPlugin::new();
+        let plugin_info = dump_plugin.plugin_info();
+
         let plugins = vec![DiscoveredPlugin {
-            info: PluginInfo {
-                name: "dump".to_string(),
-                version: "1.0.0".to_string(),
-                description: "Output queue messages to stdout for debugging".to_string(),
-                author: "RepoStats".to_string(),
-                api_version: crate::get_plugin_api_version(),
-            },
+            info: plugin_info, // Use actual plugin metadata
             source: PluginSource::BuiltinConsumer {
                 factory: || Box::new(DumpPlugin::new()),
             },
@@ -255,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_discovery_includes_builtins() {
-        let mut discovery = PluginDiscovery::with_inclusion_config(
+        let discovery = PluginDiscovery::with_inclusion_config(
             None,
             vec![],
             true,  // include_builtins
@@ -297,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_exclusions_filter_plugins() {
-        let mut discovery = PluginDiscovery::with_excludes(vec!["dump"]);
+        let discovery = PluginDiscovery::with_excludes(vec!["dump"]);
 
         let plugins = discovery.discover_plugins().await.unwrap();
         assert!(plugins.is_empty()); // dump should be filtered out

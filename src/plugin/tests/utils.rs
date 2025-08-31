@@ -41,6 +41,14 @@ impl MockPlugin {
                 description: "Mock plugin for testing".to_string(),
                 author: "Test Author".to_string(),
                 api_version: 20250101,
+                plugin_type: crate::plugin::types::PluginType::Processing,
+                functions: vec![crate::plugin::types::PluginFunction {
+                    name: "test".to_string(),
+                    description: "Test function".to_string(),
+                    aliases: vec![],
+                }],
+                required: 0, // ScanRequires::NONE
+                auto_active: false,
             },
             initialized: false,
             executed: false,

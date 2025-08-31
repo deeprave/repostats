@@ -236,11 +236,15 @@ impl Plugin for DumpPlugin {
             description: "Dump repository data for debugging purposes".to_string(),
             author: "RepoStats".to_string(),
             api_version: 20250101,
+            plugin_type: self.plugin_type(),
+            functions: self.advertised_functions(),
+            required: self.requirements().bits(),
+            auto_active: false, // Dump is activated explicitly
         }
     }
 
     fn plugin_type(&self) -> PluginType {
-        PluginType::Output
+        PluginType::Processing
     }
 
     fn advertised_functions(&self) -> Vec<PluginFunction> {
@@ -432,7 +436,7 @@ mod tests {
         assert!(!plugin.initialized);
         assert_eq!(plugin.plugin_info().name, "dump");
         assert_eq!(plugin.plugin_info().version, "1.0.0");
-        assert_eq!(plugin.plugin_type(), PluginType::Output);
+        assert_eq!(plugin.plugin_type(), PluginType::Processing);
     }
 
     #[tokio::test]

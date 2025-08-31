@@ -7,9 +7,7 @@ use crate::app::cli::command_segmenter::CommandSegment;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::SharedPluginRegistry;
 use crate::plugin::types::PluginSource;
-use crate::plugin::types::{
-    ActivePluginInfo, PluginFunction, PluginId, PluginInfo, PluginMetadata, PluginProxy,
-};
+use crate::plugin::types::{ActivePluginInfo, PluginFunction, PluginId, PluginInfo};
 use crate::plugin::unified_discovery::PluginDiscovery;
 use crate::queue::api::{QueueConsumer, QueueManager};
 use log::{info, warn};
@@ -110,8 +108,8 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Get plugin metadata by ID (internal)
-    async fn get_plugin_metadata(&self, plugin_id: PluginId) -> PluginResult<PluginMetadata> {
+    /// Get plugin info by ID (internal)
+    async fn get_plugin_info(&self, plugin_id: PluginId) -> PluginResult<PluginInfo> {
         let plugin_name =
             self.plugin_ids
                 .get(&plugin_id)
@@ -121,23 +119,7 @@ impl PluginManager {
 
         let registry = self.registry.inner().read().await;
         if let Some(plugin) = registry.get_plugin(plugin_name) {
-            let info = plugin.plugin_info();
-            let functions = plugin.advertised_functions();
-
-            // Use actual plugin requirements instead of hardcoded values
-            let requirements = plugin.requirements();
-            let requires_file_content = requirements.requires_file_content();
-            let requires_historical_content = requirements.requires_history();
-
-            Ok(PluginMetadata {
-                name: info.name.clone(),
-                version: info.version.clone(),
-                description: info.description.clone(),
-                author: info.author.clone(),
-                functions,
-                requires_file_content,
-                requires_historical_content,
-            })
+            Ok(plugin.plugin_info())
         } else {
             Err(PluginError::PluginNotFound {
                 plugin_name: plugin_name.clone(),
@@ -152,35 +134,23 @@ impl PluginManager {
         id
     }
 
-    /// Create a proxy for a plugin by name (internal use only)
-    async fn create_proxy(&mut self, plugin_name: &str) -> PluginResult<PluginProxy> {
-        // Check if plugin exists in registry
-        let exists = {
-            let registry = self.registry.inner().read().await;
-            registry.has_plugin(plugin_name)
-        };
-
-        if !exists {
-            return Err(PluginError::PluginNotFound {
+    /// Get plugin info by name (internal use only)
+    async fn get_plugin_info_by_name(&self, plugin_name: &str) -> PluginResult<PluginInfo> {
+        let registry = self.registry.inner().read().await;
+        if let Some(plugin) = registry.get_plugin(plugin_name) {
+            Ok(plugin.plugin_info())
+        } else {
+            Err(PluginError::PluginNotFound {
                 plugin_name: plugin_name.to_string(),
-            });
+            })
         }
-
-        // Generate ID and register mapping
-        let plugin_id = self.next_plugin_id();
-        self.plugin_ids.insert(plugin_id, plugin_name.to_string());
-
-        // Create metadata for the proxy
-        let metadata = self.get_plugin_metadata(plugin_id).await?;
-
-        Ok(PluginProxy { metadata })
     }
 
-    /// Resolve command to plugin and create proxy
-    pub async fn resolve_command(&mut self, command: &str) -> PluginResult<PluginProxy> {
+    /// Resolve command to plugin info
+    pub async fn resolve_command(&mut self, command: &str) -> PluginResult<PluginInfo> {
         // For now, assume command == plugin name (simplified)
         self.active_command = Some(command.to_string());
-        self.create_proxy(command).await
+        self.get_plugin_info_by_name(command).await
     }
 
     /// Discover and initialize plugins with simplified interface
@@ -205,11 +175,18 @@ impl PluginManager {
             discovered_plugins.len()
         );
 
-        // Register discovered plugins
+        // Register discovered plugins and collect auto-active plugins
+        let mut auto_active_plugins = Vec::new();
         let mut registry = self.registry.inner().write().await;
+
         for discovered in discovered_plugins {
             // Validate compatibility
             self.validate_plugin_compatibility(&discovered.info)?;
+
+            // Track auto-active plugins for later activation
+            if discovered.info.auto_active {
+                auto_active_plugins.push(discovered.info.name.clone());
+            }
 
             // Create plugin instance and register
             match discovered.source {
@@ -232,6 +209,56 @@ impl PluginManager {
                     });
                 }
             }
+        }
+
+        // Auto-activate plugins marked as auto_active
+        for plugin_name in &auto_active_plugins {
+            info!("Auto-activating plugin: {}", plugin_name);
+
+            // Get plugin info before activating
+            let (function_name, plugin_exists) =
+                if let Some(plugin) = registry.get_plugin(plugin_name) {
+                    let functions = plugin.advertised_functions();
+                    let function_name = if let Some(first_function) = functions.first() {
+                        first_function.name.clone()
+                    } else {
+                        "auto".to_string() // Fallback for plugins with no functions
+                    };
+                    (function_name, true)
+                } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
+                    let functions = consumer_plugin.advertised_functions();
+                    let function_name = if let Some(first_function) = functions.first() {
+                        first_function.name.clone()
+                    } else {
+                        "auto".to_string()
+                    };
+                    (function_name, true)
+                } else {
+                    (String::new(), false)
+                };
+
+            if !plugin_exists {
+                warn!("Auto-active plugin '{}' not found in registry", plugin_name);
+                continue;
+            }
+
+            // Activate the plugin in registry
+            if let Err(e) = registry.activate_plugin(plugin_name) {
+                warn!("Failed to auto-activate plugin '{}': {:?}", plugin_name, e);
+                continue;
+            }
+
+            // Add to active plugins list
+            self.active_plugins.push(ActivePluginInfo {
+                plugin_name: plugin_name.clone(),
+                function_name,
+                args: Vec::new(), // Auto-active plugins have no command line args
+            });
+
+            info!(
+                "Auto-active plugin '{}' successfully activated",
+                plugin_name
+            );
         }
 
         Ok(())
@@ -501,6 +528,7 @@ impl PluginManager {
     }
 
     /// Setup plugin consumers for queue processing (internal)
+    /// Only creates queue consumers for Processing plugins
     pub async fn setup_plugin_consumers(
         &mut self,
         queue: &std::sync::Arc<QueueManager>,
@@ -508,17 +536,59 @@ impl PluginManager {
         plugin_args: &[String],
     ) -> PluginResult<()> {
         for plugin_name in plugin_names {
-            // Create consumer but don't activate it yet
-            let consumer = queue.create_consumer(plugin_name.clone()).map_err(|e| {
-                PluginError::AsyncError {
-                    message: e.to_string(),
+            // Check plugin type first - only Processing plugins get queue subscribers
+            let should_create_consumer = {
+                let registry = self.registry.inner().read().await;
+                if let Some(plugin) = registry.get_plugin(plugin_name) {
+                    let plugin_info = plugin.plugin_info();
+                    match plugin_info.plugin_type {
+                        crate::plugin::types::PluginType::Processing => true,
+                        _ => {
+                            info!(
+                                "Skipping queue consumer for plugin '{}' (type: {:?}) - only Processing plugins get queue subscribers",
+                                plugin_name, plugin_info.plugin_type
+                            );
+                            false
+                        }
+                    }
+                } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
+                    let plugin_info = consumer_plugin.plugin_info();
+                    match plugin_info.plugin_type {
+                        crate::plugin::types::PluginType::Processing => true,
+                        _ => {
+                            info!(
+                                "Skipping queue consumer for consumer plugin '{}' (type: {:?}) - only Processing plugins get queue subscribers",
+                                plugin_name, plugin_info.plugin_type
+                            );
+                            false
+                        }
+                    }
+                } else {
+                    warn!(
+                        "Plugin '{}' not found in registry, skipping consumer creation",
+                        plugin_name
+                    );
+                    false
                 }
-            })?;
+            };
 
-            // Store the consumer for later activation
-            self.pending_consumers.insert(plugin_name.clone(), consumer);
+            if should_create_consumer {
+                // Create consumer but don't activate it yet
+                let consumer = queue.create_consumer(plugin_name.clone()).map_err(|e| {
+                    PluginError::AsyncError {
+                        message: e.to_string(),
+                    }
+                })?;
 
-            // Parse plugin arguments while we have the registry lock
+                // Store the consumer for later activation
+                self.pending_consumers.insert(plugin_name.clone(), consumer);
+                info!(
+                    "Created queue consumer for Processing plugin '{}'",
+                    plugin_name
+                );
+            }
+
+            // Parse plugin arguments while we have the registry lock (for all plugin types)
             let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
                 crate::plugin::args::PluginConfig::from_toml(
                     self.get_use_colors_setting(),
@@ -678,87 +748,12 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Resolve a command to a PluginProxy
-    pub async fn resolve_command_to_proxy(&mut self, input: &str) -> PluginResult<PluginProxy> {
-        // Check for explicit plugin:function syntax
-        if let Some(colon_pos) = input.find(':') {
-            let plugin_name = &input[..colon_pos];
-            let function_name = &input[colon_pos + 1..];
-
-            // Create proxy and check if function exists
-            let proxy = self.create_proxy(plugin_name).await?;
-            let metadata = proxy.get_metadata()?;
-
-            let has_function = metadata
-                .functions
-                .iter()
-                .any(|f| f.name == function_name || f.aliases.contains(&function_name.to_string()));
-
-            if !has_function {
-                let available: Vec<String> =
-                    metadata.functions.iter().map(|f| f.name.clone()).collect();
-                return Err(PluginError::Generic {
-                    message: format!(
-                        "Plugin '{}' does not provide function '{}'. Available functions: {:?}",
-                        plugin_name, function_name, available
-                    ),
-                });
-            }
-
-            return Ok(proxy);
-        }
-
-        // Check if command matches a plugin name directly
-        let all_plugins = self.list_plugins_with_filter(false).await;
-
-        for plugin_meta in &all_plugins {
-            if plugin_meta.name == input {
-                // Command matches plugin name - return its proxy
-                return self.create_proxy(&plugin_meta.name).await;
-            }
-        }
-
-        // Check if command matches a function name (with possible ambiguity)
-        let mut matches: Vec<String> = Vec::new(); // plugin names that have this function
-
-        for plugin_meta in all_plugins {
-            for func in &plugin_meta.functions {
-                // Check if command matches function name or alias
-                if func.name == input || func.aliases.contains(&input.to_string()) {
-                    matches.push(plugin_meta.name.clone());
-                    break; // Only need to record plugin once
-                }
-            }
-        }
-
-        // Handle matches
-        match matches.len() {
-            0 => Err(PluginError::PluginNotFound {
-                plugin_name: format!("Unknown command: '{}'", input),
-            }),
-            1 => {
-                // Single match - return proxy for that plugin
-                let plugin_name = matches.into_iter().next().unwrap();
-                self.create_proxy(&plugin_name).await
-            }
-            _ => {
-                // Ambiguous - multiple plugins provide this function
-                Err(PluginError::Generic {
-                    message: format!(
-                        "Ambiguous function '{}' found in multiple plugins: {}. Use explicit 'plugin:function' syntax.",
-                        input, matches.join(", ")
-                    )
-                })
-            }
-        }
-    }
-
     /// List plugins with option to include all plugins or just active ones
-    pub async fn list_plugins_with_filter(&self, active_only: bool) -> Vec<PluginMetadata> {
+    pub async fn list_plugins_with_filter(&self, active_only: bool) -> Vec<PluginInfo> {
         let registry = self.registry.inner().read().await;
         let mut plugins = Vec::new();
 
-        // Get metadata for plugins based on filter
+        // Get plugin info for plugins based on filter
         let plugin_names = if active_only {
             registry.get_active_plugins()
         } else {
@@ -767,39 +762,13 @@ impl PluginManager {
 
         for plugin_name in &plugin_names {
             // Try regular plugin first, then consumer plugin
-            let plugin_metadata = if let Some(plugin) = registry.get_plugin(plugin_name) {
-                let info = plugin.plugin_info();
-                let functions = plugin.advertised_functions();
-                let requirements = plugin.requirements();
-
-                PluginMetadata {
-                    name: info.name.clone(),
-                    version: info.version.clone(),
-                    description: info.description.clone(),
-                    author: info.author.clone(),
-                    functions,
-                    requires_file_content: requirements.requires_file_content(),
-                    requires_historical_content: requirements.requires_history(),
-                }
+            if let Some(plugin) = registry.get_plugin(plugin_name) {
+                plugins.push(plugin.plugin_info());
             } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
-                let info = consumer_plugin.plugin_info();
-                let functions = consumer_plugin.advertised_functions();
-                let requirements = consumer_plugin.requirements();
-
-                PluginMetadata {
-                    name: info.name.clone(),
-                    version: info.version.clone(),
-                    description: info.description.clone(),
-                    author: info.author.clone(),
-                    functions,
-                    requires_file_content: requirements.requires_file_content(),
-                    requires_historical_content: requirements.requires_history(),
-                }
+                plugins.push(consumer_plugin.plugin_info());
             } else {
                 continue; // Plugin not found in either registry
             };
-
-            plugins.push(plugin_metadata);
         }
 
         plugins
@@ -838,6 +807,10 @@ mod tests {
                 description: "Mock plugin".to_string(),
                 author: "Test".to_string(),
                 api_version: crate::get_plugin_api_version(),
+                plugin_type: self.plugin_type(),
+                functions: self.advertised_functions(),
+                required: self.requirements().bits(),
+                auto_active: false,
             }
         }
 
@@ -919,6 +892,10 @@ mod tests {
             description: "Compatible plugin".to_string(),
             author: "Test".to_string(),
             api_version: 20250215,
+            plugin_type: PluginType::Processing,
+            functions: vec![],
+            required: 0,
+            auto_active: false,
         };
 
         assert!(manager
@@ -932,6 +909,10 @@ mod tests {
             description: "Incompatible plugin".to_string(),
             author: "Test".to_string(),
             api_version: 20240101,
+            plugin_type: PluginType::Processing,
+            functions: vec![],
+            required: 0,
+            auto_active: false,
         };
 
         let result = manager.validate_plugin_compatibility(&incompatible_info);
@@ -1047,51 +1028,30 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_proxy_metadata() {
-        let metadata = PluginMetadata {
-            name: "test-proxy".to_string(),
+    fn test_plugin_info_structure() {
+        let info = PluginInfo {
+            name: "test-plugin".to_string(),
             version: "1.0.0".to_string(),
-            description: "Test proxy plugin".to_string(),
+            description: "Test plugin".to_string(),
             author: "Test Author".to_string(),
+            api_version: 20250101,
+            plugin_type: PluginType::Processing,
             functions: vec![PluginFunction {
                 name: "main".to_string(),
                 description: "Main function".to_string(),
                 aliases: vec!["m".to_string()],
             }],
-            requires_file_content: true,
-            requires_historical_content: false,
+            required: 0, // ScanRequires::NONE
+            auto_active: false,
         };
 
-        let proxy = PluginProxy {
-            metadata: metadata.clone(),
-        };
-
-        let retrieved_metadata = proxy.get_metadata().unwrap();
-        assert_eq!(retrieved_metadata.name, "test-proxy");
-        assert_eq!(retrieved_metadata.version, "1.0.0");
-        assert_eq!(retrieved_metadata.description, "Test proxy plugin");
-        assert_eq!(retrieved_metadata.author, "Test Author");
-        assert_eq!(retrieved_metadata.functions.len(), 1);
-        assert_eq!(retrieved_metadata.functions[0].name, "main");
-        assert_eq!(retrieved_metadata.requires_file_content, true);
-        assert_eq!(retrieved_metadata.requires_historical_content, false);
-    }
-
-    #[test]
-    fn test_plugin_proxy_parse_arguments() {
-        let metadata = PluginMetadata {
-            name: "test".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Test".to_string(),
-            author: "Test".to_string(),
-            functions: vec![],
-            requires_file_content: false,
-            requires_historical_content: false,
-        };
-
-        let proxy = PluginProxy { metadata };
-
-        // Should succeed (placeholder implementation)
-        assert!(proxy.parse_arguments(&["--arg".to_string()]).is_ok());
+        assert_eq!(info.name, "test-plugin");
+        assert_eq!(info.version, "1.0.0");
+        assert_eq!(info.description, "Test plugin");
+        assert_eq!(info.author, "Test Author");
+        assert_eq!(info.functions.len(), 1);
+        assert_eq!(info.functions[0].name, "main");
+        assert_eq!(info.required, 0);
+        assert!(!info.auto_active);
     }
 }
