@@ -328,8 +328,8 @@ impl PluginManager {
     }
 
     /// Get combined requirements from all active plugins
-    pub async fn get_combined_requirements(&self) -> crate::scanner::api::ScanRequires {
-        use crate::scanner::api::ScanRequires;
+    pub async fn get_combined_requirements(&self) -> crate::scanner::types::ScanRequires {
+        use crate::scanner::types::ScanRequires;
 
         let registry = self.registry.inner().read().await;
         let mut combined = ScanRequires::NONE;

@@ -11,7 +11,8 @@ use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::{Message, QueueConsumer};
-use crate::scanner::api::{ScanMessage, ScanRequires};
+use crate::scanner::api::ScanMessage;
+use crate::scanner::types::ScanRequires;
 use clap::Arg;
 use log::error;
 use serde_json::json;
@@ -352,7 +353,7 @@ impl ConsumerPlugin for DumpPlugin {
                                 // Track scanner lifecycle
                                 if let Ok(scan_message) = serde_json::from_str::<ScanMessage>(&msg.data) {
                                     match scan_message {
-                                        ScanMessage::ScanStarted { scanner_id, .. } => {
+                                        ScanMessage::RepositoryData { scanner_id, .. } => {
                                             active_scanners.insert(scanner_id.clone());
                                             log::debug!("DumpPlugin: Started tracking scanner: {}", scanner_id);
                                         }

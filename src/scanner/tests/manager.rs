@@ -379,7 +379,7 @@ async fn test_commit_traversal_and_message_creation() {
         let repo_id = manager.get_unique_repo_id(&repo).unwrap();
         let scanner_id = manager.generate_scanner_id(&repo_id).unwrap();
 
-        use crate::scanner::api::ScanRequires;
+        use crate::scanner::types::ScanRequires;
         crate::scanner::task::ScannerTask::builder(scanner_id, current_path.to_string(), repo)
             .with_requirements(
                 ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
@@ -760,7 +760,7 @@ async fn test_merge_commit_filtering() {
     // Create scanner for the test repository
     let manager = ScannerManager::create().await;
     let scanner_task = manager
-        .create_scanner(repo_path.to_string_lossy().as_ref())
+        .create_scanner(repo_path.to_string_lossy().as_ref(), None)
         .await
         .unwrap();
 

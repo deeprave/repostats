@@ -3,9 +3,9 @@
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
 use crate::core::query::QueryParams;
-use crate::scanner::api::ScanRequires;
 #[cfg(test)]
 use crate::scanner::error::ScanResult;
+use crate::scanner::types::ScanRequires;
 
 /// Individual scanner task for a specific repository
 #[derive(Debug)]
@@ -84,6 +84,16 @@ impl ScannerTask {
         ScannerTaskBuilder::new(scanner_id, repository_path, repository)
     }
 
+    /// Create a new ScannerTask with repository (for test compatibility)
+    #[cfg(test)]
+    pub fn new_with_repository(
+        scanner_id: String,
+        repository_path: String,
+        repository: gix::Repository,
+    ) -> Self {
+        Self::builder(scanner_id, repository_path, repository).build()
+    }
+
     /// Determine if a repository path represents a remote repository
     fn is_remote_path(path: &str) -> bool {
         // Check for explicit URL schemes (git, http, ssh, etc.)
@@ -126,6 +136,12 @@ impl ScannerTask {
     /// Get reference to the repository instance
     pub fn repository(&self) -> &gix::Repository {
         &self.repository
+    }
+
+    /// Get the requirements for this scanner task
+    #[cfg(test)]
+    pub fn requirements(&self) -> ScanRequires {
+        self.requirements
     }
 
     /// Check if this is a remote repository

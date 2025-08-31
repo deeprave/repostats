@@ -4,7 +4,6 @@
 
 use crate::core::pattern_parser::AuthorPatternMatcher;
 use crate::core::query::QueryParams;
-#[cfg(not(test))]
 use crate::notifications::api::ScanEventType;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::{
@@ -90,7 +89,20 @@ impl ScannerTask {
         let repo = self.repository();
 
         // Start timing the actual scanning work
-        let scan_start_time = SystemTime::now();
+        let _scan_start_time = SystemTime::now();
+
+        // Create repository data for the message
+        let mut builder = crate::scanner::types::RepositoryData::builder()
+            .with_repository(self.repository_path())
+            .with_repository_info(repo);
+
+        if let Some(params) = query_params {
+            builder = builder.with_query(params);
+        }
+
+        let repository_data = builder.build().map_err(|e| ScanError::Configuration {
+            message: format!("Failed to build repository data: {}", e),
+        })?;
 
         message_handler(ScanMessage::RepositoryData {
             scanner_id: self.scanner_id().to_string(),
@@ -454,7 +466,10 @@ impl ScannerTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::api::ScanRequires;
+    use crate::core::query::QueryParams;
+    use crate::scanner::tests::helpers::{collect_scan_messages, count_commit_messages};
+    use crate::scanner::types::ScanRequires;
+    use std::process::Command;
     use tempfile::TempDir;
 
     /// Helper to create a test git repository
@@ -650,16 +665,6 @@ mod tests {
         assert!(ScanRequires::REPOSITORY_INFO.requires_repository_info());
         assert!(!ScanRequires::REPOSITORY_INFO.requires_commits());
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::query::QueryParams;
-    use crate::scanner::tests::helpers::{collect_scan_messages, count_commit_messages};
-    use std::process::Command;
-    use tempfile::TempDir;
-
     fn create_test_repository() -> (TempDir, gix::Repository) {
         let temp_dir = TempDir::new().unwrap();
         let repo_path = temp_dir.path();

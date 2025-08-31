@@ -20,7 +20,7 @@ use crate::plugin::args::PluginConfig;
 use crate::plugin::error::PluginResult;
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
-use crate::scanner::api::ScanRequires;
+use crate::scanner::types::ScanRequires;
 
 /// Base plugin trait that all plugins must implement
 ///
