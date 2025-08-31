@@ -168,7 +168,7 @@ async fn test_scanner_task_initialization() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let result = manager.create_scanner(&current_path).await;
+    let result = manager.create_scanner(&current_path, None).await;
     assert!(
         result.is_ok(),
         "ScannerTask creation should succeed for valid repository"
@@ -197,7 +197,7 @@ async fn test_scanner_task_initialization() {
     );
 
     // Test that duplicate detection works - second attempt should fail
-    let second_result = manager.create_scanner(&current_path).await;
+    let second_result = manager.create_scanner(&current_path, None).await;
     assert!(
         second_result.is_err(),
         "Second scanner creation should fail due to duplicate detection"
@@ -210,7 +210,7 @@ async fn test_scanner_task_initialization() {
     ];
 
     for repository_path in remote_test_cases {
-        let result = manager.create_scanner(repository_path).await;
+        let result = manager.create_scanner(repository_path, None).await;
         // Remote repositories should fail with current implementation
         assert!(
             result.is_err(),
@@ -247,7 +247,7 @@ async fn test_queue_publisher_creation() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Create queue publisher - should succeed now
     let result = scanner_task.create_queue_publisher().await;
@@ -279,7 +279,7 @@ async fn test_notification_subscriber_creation() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Create notification subscriber - should succeed now
     let result = scanner_task.create_notification_subscriber().await;
@@ -310,7 +310,7 @@ async fn test_local_repository_opening() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Repository is already available - test that we can access it
     let repo = scanner_task.repository();
@@ -324,7 +324,7 @@ async fn test_local_repository_opening() {
     // Test with remote URL - should fail until remote support is added
     // Remote repositories are not supported by create_scanner, so we expect an error
     let remote_result = manager
-        .create_scanner("https://github.com/user/repo.git")
+        .create_scanner("https://github.com/user/repo.git", None)
         .await;
     assert!(
         remote_result.is_err(),
@@ -346,7 +346,7 @@ async fn test_remote_repository_support_placeholder() {
     ];
 
     for url in remote_urls {
-        let scanner_result = manager.create_scanner(url).await;
+        let scanner_result = manager.create_scanner(url, None).await;
         // Remote repositories should fail during creation
         assert!(
             scanner_result.is_err(),
@@ -373,7 +373,19 @@ async fn test_commit_traversal_and_message_creation() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    // Create scanner with explicit requirements to test comprehensive data collection
+    let scanner_task = {
+        let (repo, _) = manager.validate_repository(&current_dir).unwrap();
+        let repo_id = manager.get_unique_repo_id(&repo).unwrap();
+        let scanner_id = manager.generate_scanner_id(&repo_id).unwrap();
+
+        use crate::scanner::api::ScanRequires;
+        crate::scanner::task::ScannerTask::builder(scanner_id, current_path.to_string(), repo)
+            .with_requirements(
+                ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
+            )
+            .build()
+    };
 
     // Scan commits and capture messages for testing
     let messages = crate::scanner::tests::helpers::scan_and_capture_messages(&scanner_task)
@@ -427,7 +439,7 @@ async fn test_queue_message_publishing() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Create test messages
     let messages = vec![ScanMessage::ScanCompleted {
@@ -466,7 +478,7 @@ async fn test_scanner_event_publishing() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Publish scanner started event - should succeed now
     let result = scanner_task
@@ -501,7 +513,7 @@ async fn test_scanner_queue_event_subscription() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Test that scanner can subscribe to queue started events
     let _receiver = scanner_task.subscribe_to_queue_events().await;
@@ -520,7 +532,7 @@ async fn test_scanner_shutdown_via_events() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Test that scanner correctly handles shutdown event timeout
     let shutdown_handled = scanner_task
@@ -540,7 +552,7 @@ async fn test_start_point_resolution() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Test resolving HEAD commit
     match scanner_task.resolve_start_point("HEAD").await {
@@ -627,7 +639,7 @@ async fn test_content_reconstruction_api() {
     let current_dir = std::env::current_dir().unwrap();
     let current_path = current_dir.to_string_lossy();
 
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
+    let scanner_task = manager.create_scanner(&current_path, None).await.unwrap();
 
     // Get HEAD commit for testing
     let head_sha = scanner_task.resolve_start_point("HEAD").await.unwrap();

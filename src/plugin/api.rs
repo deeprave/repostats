@@ -11,8 +11,6 @@ pub use crate::plugin::manager::PluginManager;
 // Error handling
 pub use crate::plugin::error::{PluginError, PluginResult};
 
-// Plugin traits and core interfaces
-
 // Plugin metadata and information
 pub use crate::plugin::types::{PluginInfo, PluginMetadata};
 
