@@ -108,6 +108,58 @@ impl PluginManager {
         Ok(())
     }
 
+    // MARK: Helper methods to DRY up registry lookup patterns
+
+    /// Helper: Execute a closure on a plugin if found in either registry
+    async fn with_plugin<F, R>(&self, plugin_name: &str, f: F) -> Option<R>
+    where
+        F: FnOnce(&dyn crate::plugin::traits::Plugin) -> R,
+    {
+        let registry = self.registry.inner().read().await;
+        if let Some(plugin) = registry.get_plugin(plugin_name) {
+            Some(f(plugin))
+        } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
+            Some(f(consumer_plugin))
+        } else {
+            None
+        }
+    }
+
+    /// Helper: Get first advertised function name from a plugin (either type)
+    async fn get_first_function_name(&self, plugin_name: &str) -> Option<String> {
+        self.with_plugin(plugin_name, |plugin| {
+            plugin
+                .advertised_functions()
+                .first()
+                .map(|f| f.name.clone())
+        })
+        .await
+        .flatten()
+    }
+
+    /// Helper: Get plugin info from either registry (by name)
+    async fn get_plugin_info_by_name(&self, plugin_name: &str) -> Option<PluginInfo> {
+        self.with_plugin(plugin_name, |plugin| plugin.plugin_info())
+            .await
+    }
+
+    /// Helper: Get advertised functions from either registry
+    async fn get_advertised_functions(&self, plugin_name: &str) -> Option<Vec<PluginFunction>> {
+        self.with_plugin(plugin_name, |plugin| plugin.advertised_functions())
+            .await
+    }
+
+    /// Helper: Get requirements from either registry
+    async fn get_plugin_requirements(
+        &self,
+        plugin_name: &str,
+    ) -> Option<crate::scanner::types::ScanRequires> {
+        self.with_plugin(plugin_name, |plugin| plugin.requirements())
+            .await
+    }
+
+    // MARK: End of helper methods
+
     /// Get plugin info by ID (internal)
     async fn get_plugin_info(&self, plugin_id: PluginId) -> PluginResult<PluginInfo> {
         let plugin_name =
@@ -117,14 +169,11 @@ impl PluginManager {
                     plugin_name: format!("ID:{:?}", plugin_id),
                 })?;
 
-        let registry = self.registry.inner().read().await;
-        if let Some(plugin) = registry.get_plugin(plugin_name) {
-            Ok(plugin.plugin_info())
-        } else {
-            Err(PluginError::PluginNotFound {
+        self.get_plugin_info_by_name(plugin_name)
+            .await
+            .ok_or_else(|| PluginError::PluginNotFound {
                 plugin_name: plugin_name.clone(),
             })
-        }
     }
 
     /// Generate next plugin ID
@@ -134,23 +183,15 @@ impl PluginManager {
         id
     }
 
-    /// Get plugin info by name (internal use only)
-    async fn get_plugin_info_by_name(&self, plugin_name: &str) -> PluginResult<PluginInfo> {
-        let registry = self.registry.inner().read().await;
-        if let Some(plugin) = registry.get_plugin(plugin_name) {
-            Ok(plugin.plugin_info())
-        } else {
-            Err(PluginError::PluginNotFound {
-                plugin_name: plugin_name.to_string(),
-            })
-        }
-    }
-
     /// Resolve command to plugin info
     pub async fn resolve_command(&mut self, command: &str) -> PluginResult<PluginInfo> {
         // For now, assume command == plugin name (simplified)
         self.active_command = Some(command.to_string());
-        self.get_plugin_info_by_name(command).await
+        self.get_plugin_info_by_name(command)
+            .await
+            .ok_or_else(|| PluginError::PluginNotFound {
+                plugin_name: command.to_string(),
+            })
     }
 
     /// Discover and initialize plugins with simplified interface
@@ -215,27 +256,11 @@ impl PluginManager {
         for plugin_name in &auto_active_plugins {
             info!("Auto-activating plugin: {}", plugin_name);
 
-            // Get plugin info before activating
-            let (function_name, plugin_exists) =
-                if let Some(plugin) = registry.get_plugin(plugin_name) {
-                    let functions = plugin.advertised_functions();
-                    let function_name = if let Some(first_function) = functions.first() {
-                        first_function.name.clone()
-                    } else {
-                        "auto".to_string() // Fallback for plugins with no functions
-                    };
-                    (function_name, true)
-                } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
-                    let functions = consumer_plugin.advertised_functions();
-                    let function_name = if let Some(first_function) = functions.first() {
-                        first_function.name.clone()
-                    } else {
-                        "auto".to_string()
-                    };
-                    (function_name, true)
-                } else {
-                    (String::new(), false)
-                };
+            // Get plugin info using helper method
+            let function_name_opt = self.get_first_function_name(plugin_name).await;
+            let plugin_exists = self.get_plugin_info_by_name(plugin_name).await.is_some();
+
+            let function_name = function_name_opt.unwrap_or_else(|| "unknown".to_string());
 
             if !plugin_exists {
                 warn!("Auto-active plugin '{}' not found in registry", plugin_name);
@@ -330,18 +355,11 @@ impl PluginManager {
         let registry = self.registry.inner().read().await;
         let mut plugin_functions = Vec::new();
 
-        // Get all plugin names and retrieve their functions
+        // Get all plugin names and retrieve their functions using helper method
         let plugin_names = registry.get_plugin_names();
 
         for plugin_name in plugin_names {
-            // Try to get as standard plugin first
-            if let Some(plugin) = registry.get_plugin(&plugin_name) {
-                let functions = plugin.advertised_functions();
-                plugin_functions.push((plugin_name, functions));
-            }
-            // Then try as consumer plugin
-            else if let Some(plugin) = registry.get_consumer_plugin(&plugin_name) {
-                let functions = plugin.advertised_functions();
+            if let Some(functions) = self.get_advertised_functions(&plugin_name).await {
                 plugin_functions.push((plugin_name, functions));
             }
         }
@@ -364,14 +382,11 @@ impl PluginManager {
         // Only get requirements from active plugins, not all plugins
         let active_plugin_names = registry.get_active_plugins();
 
+        drop(registry); // Release the lock early
+
         for plugin_name in active_plugin_names {
-            // Try to get as standard plugin first
-            if let Some(plugin) = registry.get_plugin(&plugin_name) {
-                combined |= plugin.requirements();
-            }
-            // Then try as consumer plugin
-            else if let Some(plugin) = registry.get_consumer_plugin(&plugin_name) {
-                combined |= plugin.requirements();
+            if let Some(requirements) = self.get_plugin_requirements(&plugin_name).await {
+                combined |= requirements;
             }
         }
 
@@ -760,15 +775,12 @@ impl PluginManager {
             registry.get_plugin_names()
         };
 
+        drop(registry); // Release the lock early
+
         for plugin_name in &plugin_names {
-            // Try regular plugin first, then consumer plugin
-            if let Some(plugin) = registry.get_plugin(plugin_name) {
-                plugins.push(plugin.plugin_info());
-            } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
-                plugins.push(consumer_plugin.plugin_info());
-            } else {
-                continue; // Plugin not found in either registry
-            };
+            if let Some(plugin_info) = self.get_plugin_info_by_name(plugin_name).await {
+                plugins.push(plugin_info);
+            }
         }
 
         plugins
@@ -781,6 +793,7 @@ mod tests {
     use crate::plugin::args::PluginConfig;
     use crate::plugin::traits::*;
     use crate::plugin::types::PluginType;
+    use crate::scanner::types::ScanRequires;
 
     // Mock plugin for testing
     #[derive(Debug)]
@@ -809,7 +822,7 @@ mod tests {
                 api_version: crate::get_plugin_api_version(),
                 plugin_type: self.plugin_type(),
                 functions: self.advertised_functions(),
-                required: self.requirements().bits(),
+                required: self.requirements(),
                 auto_active: false,
             }
         }
@@ -894,7 +907,7 @@ mod tests {
             api_version: 20250215,
             plugin_type: PluginType::Processing,
             functions: vec![],
-            required: 0,
+            required: ScanRequires::NONE,
             auto_active: false,
         };
 
@@ -911,7 +924,7 @@ mod tests {
             api_version: 20240101,
             plugin_type: PluginType::Processing,
             functions: vec![],
-            required: 0,
+            required: ScanRequires::NONE,
             auto_active: false,
         };
 
@@ -1041,7 +1054,7 @@ mod tests {
                 description: "Main function".to_string(),
                 aliases: vec!["m".to_string()],
             }],
-            required: 0, // ScanRequires::NONE
+            required: ScanRequires::NONE, // ScanRequires::NONE
             auto_active: false,
         };
 
@@ -1051,7 +1064,7 @@ mod tests {
         assert_eq!(info.author, "Test Author");
         assert_eq!(info.functions.len(), 1);
         assert_eq!(info.functions[0].name, "main");
-        assert_eq!(info.required, 0);
+        assert_eq!(info.required, ScanRequires::NONE);
         assert!(!info.auto_active);
     }
 }

@@ -295,7 +295,7 @@ mod tests {
                 api_version: 20250101,
                 plugin_type: self.plugin_type(),
                 functions: self.advertised_functions(),
-                required: self.requirements().bits(),
+                required: self.requirements(),
                 auto_active: false,
             }
         }
