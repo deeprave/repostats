@@ -671,3 +671,119 @@ async fn test_content_reconstruction_api() {
         Err(e) => panic!("Unexpected error type: {:?}", e),
     }
 }
+
+#[tokio::test]
+async fn test_merge_commit_filtering() {
+    // GREEN: Test that merge commit filtering works correctly with QueryParams
+    use crate::core::query::QueryParams;
+    use crate::scanner::tests::helpers::collect_scan_messages;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path();
+
+    // Initialize repository
+    Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Create initial commit on main branch
+    std::fs::write(repo_path.join("main.txt"), "main content").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Initial commit"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Create feature branch and add commit
+    Command::new("git")
+        .args(["checkout", "-b", "feature"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    std::fs::write(repo_path.join("feature.txt"), "feature content").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Feature commit"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Merge back to main with a merge commit
+    Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["merge", "feature", "--no-ff", "-m", "Merge feature branch"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Create scanner for the test repository
+    let manager = ScannerManager::create().await;
+    let scanner_task = manager
+        .create_scanner(repo_path.to_string_lossy().as_ref())
+        .await
+        .unwrap();
+
+    // Test including merge commits (default behavior)
+    let messages_with_merge = collect_scan_messages(&scanner_task, None).await.unwrap();
+    let commit_count_with_merge = messages_with_merge
+        .iter()
+        .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
+        .count();
+    assert_eq!(
+        commit_count_with_merge, 3,
+        "Should include all 3 commits (initial + feature + merge)"
+    );
+
+    // Test excluding merge commits
+    let query_params = QueryParams::default().with_merge_commits(Some(false));
+    let messages_without_merge = collect_scan_messages(&scanner_task, Some(&query_params))
+        .await
+        .unwrap();
+    let commit_count_without_merge = messages_without_merge
+        .iter()
+        .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
+        .count();
+    assert_eq!(
+        commit_count_without_merge, 2,
+        "Should exclude merge commit, leaving 2 regular commits"
+    );
+
+    // Verify that all messages still have proper structure
+    assert!(matches!(
+        messages_without_merge[0],
+        ScanMessage::RepositoryData { .. }
+    ));
+    assert!(matches!(
+        messages_without_merge.last().unwrap(),
+        ScanMessage::ScanCompleted { .. }
+    ));
+}

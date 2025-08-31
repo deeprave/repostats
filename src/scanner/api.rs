@@ -10,7 +10,7 @@
 pub use crate::scanner::manager::ScannerManager;
 
 // Error handling
-pub use crate::scanner::error::ScanError;
+pub use crate::scanner::error::{ScanError, ScanResult};
 
 // Scanner task functionality
 

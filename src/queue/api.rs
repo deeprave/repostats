@@ -15,6 +15,7 @@ pub use crate::queue::message::Message;
 // Internal queue implementation (may be needed by some components)
 
 // Error handling
+pub use crate::queue::error::{QueueError, QueueResult};
 
 // Type definitions and statistics
 

@@ -25,9 +25,8 @@ where
 Messages are emitted in a predictable sequence:
 
 1. **RepositoryData** - Repository metadata (first message)
-2. **ScanStarted** - Scan initiation marker (second message)
-3. **CommitData** - Individual commit information (one per matching commit)
-4. **ScanCompleted** - Successful scan completion marker (final message)
+2. **CommitData** - Individual commit information (one per matching commit)
+3. **ScanCompleted** - Successful scan completion marker (final message)
 
 ### Error Handling
 
