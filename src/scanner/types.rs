@@ -222,38 +222,45 @@ fn format_system_time(time: &std::time::SystemTime) -> String {
 pub enum ScanMessage {
     RepositoryData {
         scanner_id: String,
+        timestamp: SystemTime,
         repository_data: RepositoryData,
-        timestamp: SystemTime,
-    },
-    ScanStarted {
-        scanner_id: String,
-        repository_path: String,
-        timestamp: SystemTime,
     },
     CommitData {
         scanner_id: String,
-        commit_info: CommitInfo,
         timestamp: SystemTime,
+        commit_info: CommitInfo,
     },
     FileChange {
         scanner_id: String,
+        timestamp: SystemTime,
         file_path: String,
         change_data: FileChangeData,
         commit_context: CommitInfo,
-        timestamp: SystemTime,
     },
     ScanCompleted {
         scanner_id: String,
-        repository_path: String,
-        stats: ScanStats,
         timestamp: SystemTime,
+        stats: ScanStats,
     },
     ScanError {
         scanner_id: String,
+        timestamp: SystemTime,
         error: String,
         context: String,
-        timestamp: SystemTime,
     },
+}
+
+impl ScanMessage {
+    /// Get the message type string for queue publishing
+    pub fn message_type(&self) -> &'static str {
+        match self {
+            ScanMessage::RepositoryData { .. } => "repository_data",
+            ScanMessage::CommitData { .. } => "commit_data",
+            ScanMessage::FileChange { .. } => "file_change",
+            ScanMessage::ScanCompleted { .. } => "scan_completed",
+            ScanMessage::ScanError { .. } => "scan_error",
+        }
+    }
 }
 
 /// Commit information structure

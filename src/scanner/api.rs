@@ -10,13 +10,9 @@
 pub use crate::scanner::manager::ScannerManager;
 
 // Error handling
-pub use crate::scanner::error::{ScanError, ScanResult};
+pub use crate::scanner::error::ScanError;
 
 // Scanner task functionality
-pub use crate::scanner::task::ScannerTask;
 
 // Core data types and structures
-pub use crate::scanner::types::{
-    ChangeType, CommitInfo, FileChangeData, RepositoryData, RepositoryDataBuilder, ScanMessage,
-    ScanStats,
-};
+pub use crate::scanner::types::ScanMessage;

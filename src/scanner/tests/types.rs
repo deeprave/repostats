@@ -35,7 +35,8 @@ fn test_repository_data_builder_with_non_restrictive_query() {
             include: vec![], // No author restrictions
             exclude: vec![],
         },
-        max_commits: None, // Unlimited commits
+        max_commits: None,   // Unlimited commits
+        merge_commits: None, // Default - include merge commits
     };
 
     let mut builder = RepositoryData::builder()
@@ -71,6 +72,7 @@ fn test_repository_data_builder_with_specified_query() {
             exclude: vec![],
         },
         max_commits: Some(100),
+        merge_commits: None, // Default - include merge commits
     };
 
     let mut builder = RepositoryData::builder()

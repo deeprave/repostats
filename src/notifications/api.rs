@@ -13,4 +13,6 @@ pub use crate::notifications::event::{
 // Manager and utilities
 pub use crate::notifications::error::NotificationError;
 pub use crate::notifications::manager::{AsyncNotificationManager, EventReceiver};
+
+// Traits and statistics
 pub use crate::notifications::traits::{Subscriber, SubscriberStatistics};

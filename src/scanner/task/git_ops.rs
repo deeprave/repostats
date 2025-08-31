@@ -14,6 +14,15 @@ use std::time::SystemTime;
 use super::core::ScannerTask;
 
 impl ScannerTask {
+    /// Convert git time to SystemTime (helper to avoid duplication)
+    fn git_time_to_system_time(time: &gix::date::Time) -> SystemTime {
+        if time.seconds >= 0 {
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds as u64)
+        } else {
+            let abs_seconds = (-time.seconds) as u64;
+            SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(abs_seconds)
+        }
+    }
     /// Extract repository metadata from the git repository
     pub async fn extract_repository_data(
         &self,
@@ -37,22 +46,34 @@ impl ScannerTask {
             .map_err(|e| ScanError::Repository { message: e })
     }
 
-    /// Scan commits in the repository and generate scan messages
-    pub async fn scan_commits<F>(&self, message_handler: F) -> ScanResult<()>
-    where
-        F: FnMut(ScanMessage) -> ScanResult<()>,
-    {
-        self.scan_commits_with_query(None, message_handler).await
+    /// Scan commits and publish messages incrementally to avoid memory buildup
+    pub async fn scan_commits_and_publish_incrementally(&self) -> ScanResult<()> {
+        self.scan_commits_and_publish_incrementally_with_query(None)
+            .await
     }
 
-    /// Scan commits in the repository with query parameters using streaming approach for large repos
-    pub async fn scan_commits_with_query<F>(
+    /// Scan commits with query parameters and publish messages with per-commit batching
+    pub async fn scan_commits_and_publish_incrementally_with_query(
+        &self,
+        query_params: Option<&QueryParams>,
+    ) -> ScanResult<()> {
+        // Better separation: git_ops only handles domain objects, queue_ops handles serialization
+        self.scan_commits_with_query(query_params, |msg| async move {
+            // Just pass the domain object - no serialization in git_ops
+            self.publish_message(msg).await
+        })
+        .await
+    }
+
+    /// Scan commits in the repository with query parameters using streaming callback pattern
+    pub async fn scan_commits_with_query<F, Fut>(
         &self,
         query_params: Option<&QueryParams>,
         mut message_handler: F,
     ) -> ScanResult<()>
     where
-        F: FnMut(ScanMessage) -> ScanResult<()>,
+        F: FnMut(ScanMessage) -> Fut,
+        Fut: std::future::Future<Output = ScanResult<()>>,
     {
         // Publish scanner started event
         log::trace!("Publishing scanner started event");
@@ -80,16 +101,10 @@ impl ScannerTask {
 
         message_handler(ScanMessage::RepositoryData {
             scanner_id: self.scanner_id().to_string(),
+            timestamp: SystemTime::now(),
             repository_data,
-            timestamp: SystemTime::now(),
-        })?;
-
-        // Add scan started message
-        message_handler(ScanMessage::ScanStarted {
-            scanner_id: self.scanner_id().to_string(),
-            repository_path: self.repository_path().to_string(),
-            timestamp: SystemTime::now(),
-        })?;
+        })
+        .await?;
 
         // Process commits directly into messages to avoid memory duplication
 
@@ -208,15 +223,21 @@ impl ScannerTask {
             // Apply date range filtering
             if let Some(ref params) = query_params {
                 if let Some(ref date_range) = params.date_range {
-                    let commit_time = if time.seconds >= 0 {
-                        SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds as u64)
-                    } else {
-                        let abs_seconds = (-time.seconds) as u64;
-                        SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(abs_seconds)
-                    };
+                    let commit_time = Self::git_time_to_system_time(&time);
 
                     if !date_range.contains(commit_time) {
                         continue; // Skip this commit
+                    }
+                }
+            }
+
+            // Apply merge commit filtering
+            if let Some(ref params) = query_params {
+                if !params.should_include_merge_commits() {
+                    // Check if this is a merge commit (has more than one parent)
+                    let parent_count = commit.parent_ids().count();
+                    if parent_count > 1 {
+                        continue; // Skip this merge commit
                     }
                 }
             }
@@ -231,12 +252,7 @@ impl ScannerTask {
                 author_email: author.email.to_string(),
                 committer_name: committer.name.to_string(),
                 committer_email: committer.email.to_string(),
-                timestamp: if time.seconds >= 0 {
-                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time.seconds as u64)
-                } else {
-                    let abs_seconds = (-time.seconds) as u64;
-                    SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(abs_seconds)
-                },
+                timestamp: Self::git_time_to_system_time(&time),
                 message: message
                     .body()
                     .map(|b| b.to_string())
@@ -248,9 +264,10 @@ impl ScannerTask {
 
             message_handler(ScanMessage::CommitData {
                 scanner_id: self.scanner_id().to_string(),
-                commit_info,
                 timestamp: SystemTime::now(),
-            })?;
+                commit_info,
+            })
+            .await?;
 
             commit_count += 1;
         }
@@ -258,7 +275,7 @@ impl ScannerTask {
         // Add scan completed message
         message_handler(ScanMessage::ScanCompleted {
             scanner_id: self.scanner_id().to_string(),
-            repository_path: self.repository_path().to_string(),
+            timestamp: SystemTime::now(),
             stats: ScanStats {
                 total_commits: commit_count,
                 total_files_changed: 0, // TODO: Implement with file diff parsing in future issue
@@ -266,8 +283,8 @@ impl ScannerTask {
                 total_deletions: 0,     // TODO: Implement with file diff parsing in future issue
                 scan_duration: std::time::Duration::from_millis(0), // TODO: Add timing in future optimization
             },
-            timestamp: SystemTime::now(),
-        })?;
+        })
+        .await?;
 
         // Publish scanner completed event
         self.publish_scanner_event(
@@ -286,14 +303,14 @@ impl ScannerTask {
 
         // Use spawn_blocking for potentially blocking git operations
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repository_path).map_err(|e| ScanError::Git {
+            let repo = gix::open(&repository_path).map_err(|e| ScanError::Repository {
                 message: format!("Failed to open repository: {}", e),
             })?;
 
             // Try to resolve the reference
             let resolved =
                 repo.rev_parse_single(start_point.as_str())
-                    .map_err(|e| ScanError::Git {
+                    .map_err(|e| ScanError::Repository {
                         message: format!("Failed to resolve reference '{}': {}", start_point, e),
                     })?;
 
@@ -319,13 +336,13 @@ impl ScannerTask {
 
         // Use spawn_blocking for potentially blocking git operations
         tokio::task::spawn_blocking(move || {
-            let repo = gix::open(&repository_path).map_err(|e| ScanError::Git {
+            let repo = gix::open(&repository_path).map_err(|e| ScanError::Repository {
                 message: format!("Failed to open repository: {}", e),
             })?;
 
             // Validate that the commit exists
             repo.rev_parse_single(commit_sha.as_str())
-                .map_err(|e| ScanError::Git {
+                .map_err(|e| ScanError::Repository {
                     message: format!("Failed to resolve commit '{}': {}", commit_sha, e),
                 })?;
 
@@ -335,14 +352,15 @@ impl ScannerTask {
             let file_full_path = std::path::Path::new(&repository_path).join(&file_path);
 
             if !file_full_path.exists() {
-                return Err(ScanError::Git {
+                return Err(ScanError::Repository {
                     message: format!("File '{}' not found in commit '{}'", file_path, commit_sha),
                 });
             }
 
-            let content = std::fs::read_to_string(&file_full_path).map_err(|e| ScanError::Git {
-                message: format!("Failed to read file '{}': {}", file_path, e),
-            })?;
+            let content =
+                std::fs::read_to_string(&file_full_path).map_err(|e| ScanError::Repository {
+                    message: format!("Failed to read file '{}': {}", file_path, e),
+                })?;
 
             Ok(content)
         })
@@ -469,12 +487,7 @@ mod tests {
 
         // Test 3: Email wildcard - broader domain pattern
         let query_params = QueryParams::new().with_authors(vec!["*@*.org".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -485,12 +498,7 @@ mod tests {
 
         // Test 4: Name wildcard pattern - case insensitive
         let query_params = QueryParams::new().with_authors(vec!["test*".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -504,12 +512,7 @@ mod tests {
 
         // Test 5: Name wildcard - partial word match (matches both "Test User" and "Another User")
         let query_params = QueryParams::new().with_authors(vec!["*User".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -523,12 +526,7 @@ mod tests {
 
         // Test 6: Case insensitive name matching
         let query_params = QueryParams::new().with_authors(vec!["ANOTHER*".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -597,12 +595,7 @@ mod tests {
 
         // Test 1: Complex email domain pattern - should match aws.amazon.com and amazon.com
         let query_params = QueryParams::new().with_authors(vec!["*@*amazon.com".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -616,12 +609,7 @@ mod tests {
 
         // Test 2: Specific domain pattern
         let query_params = QueryParams::new().with_authors(vec!["*@amazon.com".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -632,12 +620,7 @@ mod tests {
 
         // Test 3: Case-insensitive name pattern with complex names
         let query_params = QueryParams::new().with_authors(vec!["david*".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -651,12 +634,7 @@ mod tests {
 
         // Test 4: Pattern with special characters
         let query_params = QueryParams::new().with_authors(vec!["*\"the*\"*".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -721,12 +699,7 @@ mod tests {
 
         // Test 1: @example.com should auto-complete to *@example.com (match both users at example.com)
         let query_params = QueryParams::new().with_authors(vec!["@example.com".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -740,12 +713,7 @@ mod tests {
 
         // Test 2: user@ should auto-complete to user@* (match user at any domain)
         let query_params = QueryParams::new().with_authors(vec!["user@".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -759,12 +727,7 @@ mod tests {
 
         // Test 3: @ should auto-complete to *@* (match all email addresses)
         let query_params = QueryParams::new().with_authors(vec!["@".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -778,12 +741,7 @@ mod tests {
 
         // Test 4: Explicit wildcards should still work (no auto-completion needed)
         let query_params = QueryParams::new().with_authors(vec!["*@*.org".to_string()]);
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
         let commit_count = messages
@@ -809,12 +767,7 @@ mod tests {
         // Limit to 2 commits
         let query_params = QueryParams::new().with_max_commits(Some(2));
 
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
 
@@ -848,12 +801,7 @@ mod tests {
         // Start from test-branch (should have 2 commits)
         let query_params = QueryParams::new().with_git_ref(Some("test-branch".to_string()));
 
-        let mut messages = Vec::new();
-        scanner_task
-            .scan_commits_with_query(Some(&query_params), |msg| {
-                messages.push(msg);
-                Ok(())
-            })
+        let messages = collect_scan_messages(&scanner_task, Some(&query_params))
             .await
             .unwrap();
 

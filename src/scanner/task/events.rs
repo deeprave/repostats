@@ -95,8 +95,8 @@ impl ScannerTask {
                 match event_result {
                     Some(Event::Queue(queue_event)) => {
                         if queue_event.event_type == QueueEventType::Started {
-                            // Queue started - trigger scanning operation
-                            self.scan_commits(|_msg| Ok(())).await?;
+                            // Queue started - trigger scanning operation with incremental publishing
+                            self.scan_commits_and_publish_incrementally().await?;
                             return Ok(true);
                         }
                         Ok(false)

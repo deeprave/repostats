@@ -11,8 +11,6 @@ pub enum ScanError {
     Io { message: String },
     /// Invalid configuration
     Configuration { message: String },
-    /// Git operation failed
-    Git { message: String },
 }
 
 impl fmt::Display for ScanError {
@@ -21,7 +19,6 @@ impl fmt::Display for ScanError {
             ScanError::Repository { message } => write!(f, "Repository error: {}", message),
             ScanError::Io { message } => write!(f, "IO error: {}", message),
             ScanError::Configuration { message } => write!(f, "Configuration error: {}", message),
-            ScanError::Git { message } => write!(f, "Git error: {}", message),
         }
     }
 }

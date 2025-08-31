@@ -207,9 +207,13 @@ impl AuthorPatternMatcher {
     /// even if they also match an include pattern.
     /// This means exclusion takes precedence over inclusion.
     pub fn matches(&self, author_name: &str, author_email: &str) -> bool {
+        // Convert to lowercase once to avoid repeated allocations
+        let author_name_lower = author_name.to_lowercase();
+        let author_email_lower = author_email.to_lowercase();
+
         // Check excluded patterns first
         for pattern in &self.exclude_patterns {
-            if self.matches_single_pattern(pattern, author_name, author_email) {
+            if self.matches_single_pattern(pattern, &author_name_lower, &author_email_lower) {
                 return false;
             }
         }
@@ -221,7 +225,7 @@ impl AuthorPatternMatcher {
 
         // Check include patterns
         for pattern in &self.include_patterns {
-            if self.matches_single_pattern(pattern, author_name, author_email) {
+            if self.matches_single_pattern(pattern, &author_name_lower, &author_email_lower) {
                 return true;
             }
         }
@@ -233,17 +237,17 @@ impl AuthorPatternMatcher {
     fn matches_single_pattern(
         &self,
         pattern: &Pattern,
-        author_name: &str,
-        author_email: &str,
+        author_name_lower: &str,
+        author_email_lower: &str,
     ) -> bool {
         let pattern_str = pattern.as_str();
 
         if pattern_str.contains('@') {
-            // Email matching - case insensitive (patterns are already lowercase)
-            pattern.matches(&author_email.to_lowercase())
+            // Email matching - case insensitive (patterns and input are already lowercase)
+            pattern.matches(author_email_lower)
         } else {
-            // Name matching - case insensitive (patterns are already lowercase)
-            pattern.matches(&author_name.to_lowercase())
+            // Name matching - case insensitive (patterns and input are already lowercase)
+            pattern.matches(author_name_lower)
         }
     }
 

@@ -203,16 +203,8 @@ impl ScannerManager {
         let hash_result = hasher.finalize();
 
         // Convert to hex string and truncate to configured length for readability
+        // SHA256 always produces 64 hex characters, so truncation is always safe
         let hash_hex = format!("{:x}", hash_result);
-        if hash_hex.len() < Self::SCANNER_ID_HASH_LENGTH {
-            return Err(ScanError::Configuration {
-                message: format!(
-                    "SHA256 hash too short: {} characters (need at least {} for scanner ID generation)",
-                    hash_hex.len(),
-                    Self::SCANNER_ID_HASH_LENGTH
-                ),
-            });
-        }
         let truncated_hash = &hash_hex[..Self::SCANNER_ID_HASH_LENGTH];
         Ok(format!("scan-{}", truncated_hash))
     }
@@ -350,7 +342,7 @@ impl ScannerManager {
     }
 
     /// Start scanning all configured repositories
-    /// This triggers scan_commits() on all scanner tasks and waits for completion
+    /// This triggers scan_commits_and_publish_incrementally() on all scanner tasks and waits for completion
     pub async fn start_scanning(&self) -> Result<(), ScanError> {
         use log::{debug, info};
 
@@ -383,28 +375,22 @@ impl ScannerManager {
         for (scanner_id, scanner_task) in scanner_tasks_vec {
             trace!("Starting scan for scanner: {}", scanner_id);
 
-            let mut messages = Vec::new();
-            match scanner_task
-                .scan_commits(|msg| {
-                    messages.push(msg);
-                    Ok(())
-                })
-                .await
-            {
-                Ok(()) => match scanner_task.publish_messages(messages).await {
-                    Ok(()) => success_count += 1,
-                    Err(e) => {
-                        failure_count += 1;
-                        log::error!(
-                            "Failed to publish scan results for scanner '{}': {}",
-                            scanner_id,
-                            e
-                        );
-                    }
-                },
+            // Use incremental publishing to avoid memory buildup for large repositories
+            match scanner_task.scan_commits_and_publish_incrementally().await {
+                Ok(()) => {
+                    success_count += 1;
+                    trace!(
+                        "Successfully scanned and published messages for scanner: {}",
+                        scanner_id
+                    );
+                }
                 Err(e) => {
                     failure_count += 1;
-                    log::error!("Repository scan failed for scanner '{}': {}", scanner_id, e);
+                    log::error!(
+                        "Failed to scan and publish for scanner '{}': {}",
+                        scanner_id,
+                        e
+                    );
                 }
             }
         }

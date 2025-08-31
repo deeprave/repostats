@@ -2,8 +2,6 @@
 //!
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
-use crate::core::query::QueryParams;
-use crate::scanner::error::ScanResult;
 use gix;
 
 /// Individual scanner task for a specific repository
@@ -55,26 +53,5 @@ impl ScannerTask {
     /// Check if this is a remote repository
     pub fn is_remote(&self) -> bool {
         self.is_remote
-    }
-
-    // Phase 7: Scanner Filters and Query Parameters
-    /// Apply scanning filters based on query parameters
-    pub async fn apply_scan_filters(&self, _query_params: QueryParams) -> ScanResult<()> {
-        // Phase 7 placeholder - will implement filtering logic
-        Ok(())
-    }
-
-    // Phase 8: Advanced Git Operations
-    /// Perform advanced git operations for comprehensive scanning
-    pub async fn perform_advanced_git_operations(&self) -> ScanResult<Vec<String>> {
-        // Phase 8 placeholder - will implement advanced git operations
-        Ok(vec!["advanced-operation-1".to_string()])
-    }
-
-    // Phase 9: Integration Testing and Polish
-    /// Run integration tests for scanner functionality
-    pub async fn run_integration_tests(&self) -> ScanResult<bool> {
-        // Phase 9 placeholder - will implement integration testing
-        Ok(true)
     }
 }

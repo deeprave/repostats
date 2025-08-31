@@ -20,6 +20,8 @@ pub struct QueryParams {
     pub authors: AuthorFilter,
     /// Git reference to scan (branch, tag, commit SHA, or HEAD)
     pub git_ref: Option<String>,
+    /// Whether to include merge commits (None means include, Some(true) means include, Some(false) means exclude)
+    pub merge_commits: Option<bool>,
 }
 
 /// Date range specification
@@ -208,6 +210,12 @@ impl QueryParams {
         self
     }
 
+    /// Builder method to set merge commits filter
+    pub fn with_merge_commits(mut self, merge_commits: Option<bool>) -> Self {
+        self.merge_commits = merge_commits;
+        self
+    }
+
     /// Check if this query has any date constraints
     pub fn has_date_filter(&self) -> bool {
         self.date_range.is_some()
@@ -231,6 +239,16 @@ impl QueryParams {
     /// Get the effective git reference, returning None if not set
     pub fn effective_git_ref(&self) -> Option<&str> {
         self.git_ref.as_deref()
+    }
+
+    /// Check if merge commits should be included (None means include, Some(true) means include, Some(false) means exclude)
+    pub fn should_include_merge_commits(&self) -> bool {
+        self.merge_commits.unwrap_or(true)
+    }
+
+    /// Check if merge commits filtering is explicitly set
+    pub fn has_merge_commits_filter(&self) -> bool {
+        self.merge_commits.is_some()
     }
 
     /// Validate query parameters for consistency
@@ -301,6 +319,10 @@ mod tests {
         assert!(params.authors.include.is_empty());
         assert!(params.authors.exclude.is_empty());
         assert!(params.git_ref.is_none());
+        assert!(params.merge_commits.is_none());
+        // Default behavior should include merge commits
+        assert!(params.should_include_merge_commits());
+        assert!(!params.has_merge_commits_filter());
     }
 
     #[test]
@@ -384,5 +406,28 @@ mod tests {
         };
         assert!(params_with_ref.has_git_ref());
         assert_eq!(params_with_ref.effective_git_ref(), Some("main"));
+    }
+
+    #[test]
+    fn test_merge_commits_functionality() {
+        // Test default behavior (None means include)
+        let default_params = QueryParams::default();
+        assert!(default_params.should_include_merge_commits());
+        assert!(!default_params.has_merge_commits_filter());
+
+        // Test explicitly including merge commits
+        let include_params = QueryParams::default().with_merge_commits(Some(true));
+        assert!(include_params.should_include_merge_commits());
+        assert!(include_params.has_merge_commits_filter());
+
+        // Test explicitly excluding merge commits
+        let exclude_params = QueryParams::default().with_merge_commits(Some(false));
+        assert!(!exclude_params.should_include_merge_commits());
+        assert!(exclude_params.has_merge_commits_filter());
+
+        // Test setting to None explicitly
+        let none_params = QueryParams::default().with_merge_commits(None);
+        assert!(none_params.should_include_merge_commits());
+        assert!(!none_params.has_merge_commits_filter());
     }
 }

@@ -10,16 +10,13 @@ pub use crate::queue::manager::QueueManager;
 pub use crate::queue::publisher::QueuePublisher;
 
 // Message types and utilities
-pub use crate::queue::message::{Message, MessageHeader};
+pub use crate::queue::message::Message;
 
 // Internal queue implementation (may be needed by some components)
-pub use crate::queue::internal::MultiConsumerQueue;
 
 // Error handling
-pub use crate::queue::error::{QueueError, QueueResult};
 
 // Type definitions and statistics
-pub use crate::queue::types::{LagStats, MemoryStats, StaleConsumerInfo};
 
 // Traits
 pub use crate::queue::traits::GroupedMessage;

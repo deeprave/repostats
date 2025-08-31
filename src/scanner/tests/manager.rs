@@ -3,11 +3,9 @@
 //! Comprehensive test suite for the scanner manager functionality including
 //! repository validation, scanner creation, and path redaction.
 
-use crate::core::query::QueryParams;
 use crate::notifications::api::ScanEventType;
 use crate::scanner::manager::ScannerManager;
 use crate::scanner::types::{ScanMessage, ScanStats};
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 #[tokio::test]
@@ -377,19 +375,13 @@ async fn test_commit_traversal_and_message_creation() {
 
     let scanner_task = manager.create_scanner(&current_path).await.unwrap();
 
-    // Scan commits - should succeed now
-    let mut messages = Vec::new();
-    let result = scanner_task
-        .scan_commits(|msg| {
-            messages.push(msg);
-            Ok(())
-        })
-        .await;
+    // Scan commits and capture messages for testing
+    let messages = crate::scanner::tests::helpers::scan_and_capture_messages(&scanner_task)
+        .await
+        .expect("Should capture messages for testing");
 
-    assert!(result.is_ok(), "Commit scanning should succeed");
-
-    // Should have at least 4 messages: RepositoryData, ScanStarted, CommitData, ScanCompleted
-    assert!(messages.len() >= 4, "Should have at least 4 messages");
+    // Should have at least 3 messages: RepositoryData, CommitData(s), ScanCompleted
+    assert!(messages.len() >= 3, "Should have at least 3 messages");
 
     // Verify message types - first should be RepositoryData
     match &messages[0] {
@@ -398,23 +390,10 @@ async fn test_commit_traversal_and_message_creation() {
             repository_data,
             ..
         } => {
-            assert_eq!(scanner_id, &scanner_task.scanner_id());
+            assert_eq!(scanner_id, scanner_task.scanner_id());
             assert_eq!(&repository_data.path, &scanner_task.repository_path());
         }
         _ => panic!("First message should be RepositoryData"),
-    }
-
-    // Second message should be ScanStarted
-    match &messages[1] {
-        ScanMessage::ScanStarted {
-            scanner_id,
-            repository_path,
-            ..
-        } => {
-            assert_eq!(scanner_id, &scanner_task.scanner_id());
-            assert_eq!(repository_path, &scanner_task.repository_path());
-        }
-        _ => panic!("Second message should be ScanStarted"),
     }
 
     // Should have at least one CommitData message
@@ -429,13 +408,9 @@ async fn test_commit_traversal_and_message_creation() {
     // Last message should be ScanCompleted
     match messages.last().unwrap() {
         ScanMessage::ScanCompleted {
-            scanner_id,
-            repository_path,
-            stats,
-            ..
+            scanner_id, stats, ..
         } => {
-            assert_eq!(scanner_id, &scanner_task.scanner_id());
-            assert_eq!(repository_path, &scanner_task.repository_path());
+            assert_eq!(scanner_id, scanner_task.scanner_id());
             assert!(
                 stats.total_commits > 0,
                 "Should have scanned at least one commit"
@@ -455,25 +430,17 @@ async fn test_queue_message_publishing() {
     let scanner_task = manager.create_scanner(&current_path).await.unwrap();
 
     // Create test messages
-    let messages = vec![
-        ScanMessage::ScanStarted {
-            scanner_id: scanner_task.scanner_id().to_string(),
-            repository_path: scanner_task.repository_path().to_string(),
-            timestamp: SystemTime::now(),
+    let messages = vec![ScanMessage::ScanCompleted {
+        scanner_id: scanner_task.scanner_id().to_string(),
+        timestamp: SystemTime::now(),
+        stats: ScanStats {
+            total_commits: 1,
+            total_files_changed: 0,
+            total_insertions: 0,
+            total_deletions: 0,
+            scan_duration: std::time::Duration::from_secs(1),
         },
-        ScanMessage::ScanCompleted {
-            scanner_id: scanner_task.scanner_id().to_string(),
-            repository_path: scanner_task.repository_path().to_string(),
-            stats: ScanStats {
-                total_commits: 1,
-                total_files_changed: 0,
-                total_insertions: 0,
-                total_deletions: 0,
-                scan_duration: std::time::Duration::from_secs(1),
-            },
-            timestamp: SystemTime::now(),
-        },
-    ];
+    }];
 
     // Publish messages - should succeed now
     let result = scanner_task.publish_messages(messages).await;
@@ -481,14 +448,9 @@ async fn test_queue_message_publishing() {
     assert!(result.is_ok(), "Message publishing should succeed");
 
     // Test with actual scan results
-    let mut scan_messages = Vec::new();
-    scanner_task
-        .scan_commits(|msg| {
-            scan_messages.push(msg);
-            Ok(())
-        })
+    let scan_messages = crate::scanner::tests::helpers::scan_and_capture_messages(&scanner_task)
         .await
-        .unwrap();
+        .expect("Should capture scan messages for testing");
     let publish_result = scanner_task.publish_messages(scan_messages).await;
 
     assert!(
@@ -645,7 +607,7 @@ async fn test_start_point_resolution() {
     // Test resolving invalid reference
     match scanner_task.resolve_start_point("invalid-ref-12345").await {
         Ok(_) => panic!("Should not resolve invalid reference"),
-        Err(crate::scanner::error::ScanError::Git { message }) => {
+        Err(crate::scanner::error::ScanError::Repository { message }) => {
             assert!(
                 message.contains("reference not found")
                     || message.contains("invalid")
@@ -677,7 +639,7 @@ async fn test_content_reconstruction_api() {
         .await
     {
         Ok(_) => panic!("Should not work with invalid commit SHA"),
-        Err(crate::scanner::error::ScanError::Git { message }) => {
+        Err(crate::scanner::error::ScanError::Repository { message }) => {
             assert!(
                 message.contains("not found")
                     || message.contains("invalid")
@@ -698,7 +660,7 @@ async fn test_content_reconstruction_api() {
         Ok(_) => {
             // API works - content reconstruction succeeded
         }
-        Err(crate::scanner::error::ScanError::Git { message }) => {
+        Err(crate::scanner::error::ScanError::Repository { message }) => {
             // Expected for files that don't exist in current working directory
             assert!(
                 message.contains("not found"),
@@ -708,73 +670,4 @@ async fn test_content_reconstruction_api() {
         }
         Err(e) => panic!("Unexpected error type: {:?}", e),
     }
-}
-
-#[tokio::test]
-async fn test_phase_7_scan_filters() {
-    // GREEN: Test Phase 7 scan filters API
-    let manager = ScannerManager::create().await;
-    let current_dir = std::env::current_dir().unwrap();
-    let current_path = current_dir.to_string_lossy();
-
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
-
-    let query_params = QueryParams {
-        date_range: Some(crate::core::query::DateRange::new(
-            SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 60 * 60), // 30 days ago
-            SystemTime::now(),
-        )),
-        file_paths: crate::core::query::FilePathFilter {
-            include: vec![PathBuf::from("*.rs")],
-            exclude: vec![PathBuf::from("*.tmp")],
-        },
-        max_commits: None,
-        authors: crate::core::query::AuthorFilter {
-            include: vec!["test_author".to_string()],
-            exclude: vec![],
-        },
-        git_ref: None,
-    };
-
-    let result = scanner_task.apply_scan_filters(query_params).await;
-    assert!(
-        result.is_ok(),
-        "Scan filters should be applied successfully"
-    );
-}
-
-#[tokio::test]
-async fn test_phase_8_advanced_git_operations() {
-    // GREEN: Test Phase 8 advanced git operations API
-    let manager = ScannerManager::create().await;
-    let current_dir = std::env::current_dir().unwrap();
-    let current_path = current_dir.to_string_lossy();
-
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
-
-    let result = scanner_task
-        .perform_advanced_git_operations()
-        .await
-        .unwrap();
-    assert!(
-        !result.is_empty(),
-        "Should return advanced operations results"
-    );
-    assert_eq!(
-        result[0], "advanced-operation-1",
-        "Should return expected operation"
-    );
-}
-
-#[tokio::test]
-async fn test_phase_9_integration_testing() {
-    // GREEN: Test Phase 9 integration testing API
-    let manager = ScannerManager::create().await;
-    let current_dir = std::env::current_dir().unwrap();
-    let current_path = current_dir.to_string_lossy();
-
-    let scanner_task = manager.create_scanner(&current_path).await.unwrap();
-
-    let result = scanner_task.run_integration_tests().await.unwrap();
-    assert!(result, "Integration tests should pass");
 }

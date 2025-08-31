@@ -9,25 +9,16 @@
 pub use crate::plugin::manager::PluginManager;
 
 // Error handling
-pub use crate::plugin::error::{PluginError, PluginResult};
+pub use crate::plugin::error::PluginError;
 
 // Plugin traits and core interfaces
-pub use crate::plugin::traits::{ConsumerPlugin, Plugin, PluginDataRequirements};
 
 // Plugin metadata and information
-pub use crate::plugin::types::{
-    PluginFunction, PluginInfo, PluginMetadata, PluginProxy, PluginType,
-};
 
 // Plugin configuration and arguments
-pub use crate::plugin::args::{OutputFormat, PluginArgParser, PluginConfig};
 
 // Plugin registry for management
-pub use crate::plugin::registry::{PluginRegistry, SharedPluginRegistry};
 
 // Plugin discovery and loading
-pub use crate::plugin::discovery::{DiscoveredPlugin, PluginSource};
 
 // Plugin context and settings
-pub use crate::plugin::context::PluginContext;
-pub use crate::plugin::settings::PluginSettings;
