@@ -126,12 +126,12 @@ async fn test_scanner_id_generation() {
             scanner_id
         );
 
-        // Should be a valid hex string after the prefix (64 chars for SHA256)
+        // Should be a valid hex string after the prefix (12 chars for truncated SHA256)
         let hash_part = &scanner_id[5..]; // Remove "scan-" prefix
         assert_eq!(
             hash_part.len(),
-            64,
-            "SHA256 hash should be 64 characters: {}",
+            12,
+            "Truncated SHA256 hash should be 12 characters: {}",
             hash_part
         );
         assert!(
@@ -186,8 +186,8 @@ async fn test_scanner_task_initialization() {
     );
     assert_eq!(
         scanner_task.scanner_id().len(),
-        69, // "scan-" + 64 char SHA256
-        "Scanner ID should be 69 characters total: {}",
+        17, // "scan-" + 12 char truncated SHA256
+        "Scanner ID should be 17 characters total: {}",
         scanner_task.scanner_id()
     );
 
@@ -378,11 +378,15 @@ async fn test_commit_traversal_and_message_creation() {
     let scanner_task = manager.create_scanner(&current_path).await.unwrap();
 
     // Scan commits - should succeed now
-    let result = scanner_task.scan_commits().await;
+    let mut messages = Vec::new();
+    let result = scanner_task
+        .scan_commits(|msg| {
+            messages.push(msg);
+            Ok(())
+        })
+        .await;
 
     assert!(result.is_ok(), "Commit scanning should succeed");
-
-    let messages = result.unwrap();
 
     // Should have at least 4 messages: RepositoryData, ScanStarted, CommitData, ScanCompleted
     assert!(messages.len() >= 4, "Should have at least 4 messages");
@@ -477,7 +481,14 @@ async fn test_queue_message_publishing() {
     assert!(result.is_ok(), "Message publishing should succeed");
 
     // Test with actual scan results
-    let scan_messages = scanner_task.scan_commits().await.unwrap();
+    let mut scan_messages = Vec::new();
+    scanner_task
+        .scan_commits(|msg| {
+            scan_messages.push(msg);
+            Ok(())
+        })
+        .await
+        .unwrap();
     let publish_result = scanner_task.publish_messages(scan_messages).await;
 
     assert!(

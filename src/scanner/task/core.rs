@@ -9,7 +9,10 @@ use gix;
 /// Individual scanner task for a specific repository
 #[derive(Debug)]
 pub struct ScannerTask {
-    /// Unique scanner ID (scan-<sha256>)
+    /// Unique scanner ID (scan-<12_char_sha256>)
+    /// Uses first 12 characters of SHA256 hash for readability while maintaining
+    /// sufficient uniqueness for typical repository scanning workflows.
+    /// Collision probability: ~1 in 16^12 (281 trillion) - acceptable for expected usage scale.
     scanner_id: String,
     /// Repository path (local or remote URL - normalized)
     repository_path: String,

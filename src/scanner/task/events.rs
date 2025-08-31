@@ -96,7 +96,7 @@ impl ScannerTask {
                     Some(Event::Queue(queue_event)) => {
                         if queue_event.event_type == QueueEventType::Started {
                             // Queue started - trigger scanning operation
-                            let _scan_messages = self.scan_commits().await?;
+                            self.scan_commits(|_msg| Ok(())).await?;
                             return Ok(true);
                         }
                         Ok(false)

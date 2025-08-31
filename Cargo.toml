@@ -35,3 +35,6 @@ tabled = "0.19"
 [build-dependencies]
 chrono = "0.4"
 toml = "0.9"
+
+[dev-dependencies]
+tempfile = "3.0"

@@ -30,6 +30,9 @@ pub struct ScannerManager {
 }
 
 impl ScannerManager {
+    /// Length of scanner ID hash portion (12 characters for balance of uniqueness and readability)
+    const SCANNER_ID_HASH_LENGTH: usize = 12;
+
     /// Create a new ScannerManager instance
     pub fn new() -> Self {
         Self {
@@ -190,15 +193,28 @@ impl ScannerManager {
     }
 
     /// Generate SHA256-based scanner ID for a repository (now using repo_id)
+    ///
+    /// Creates a 12-character truncated SHA256 hash providing sufficient uniqueness
+    /// (collision probability ~1 in 281 trillion) while maintaining readability.
     pub fn generate_scanner_id(&self, repo_id: &str) -> ScanResult<String> {
         // Generate SHA256 hash of the unique repo ID
         let mut hasher = Sha256::new();
         hasher.update(repo_id.as_bytes());
         let hash_result = hasher.finalize();
 
-        // Convert to hex string and create scanner ID with scan- prefix
+        // Convert to hex string and truncate to configured length for readability
         let hash_hex = format!("{:x}", hash_result);
-        Ok(format!("scan-{}", hash_hex))
+        if hash_hex.len() < Self::SCANNER_ID_HASH_LENGTH {
+            return Err(ScanError::Configuration {
+                message: format!(
+                    "SHA256 hash too short: {} characters (need at least {} for scanner ID generation)",
+                    hash_hex.len(),
+                    Self::SCANNER_ID_HASH_LENGTH
+                ),
+            });
+        }
+        let truncated_hash = &hash_hex[..Self::SCANNER_ID_HASH_LENGTH];
+        Ok(format!("scan-{}", truncated_hash))
     }
 
     /// Create a scanner for a repository with queue integration
@@ -367,23 +383,25 @@ impl ScannerManager {
         for (scanner_id, scanner_task) in scanner_tasks_vec {
             trace!("Starting scan for scanner: {}", scanner_id);
 
-            match scanner_task.scan_commits().await {
-                Ok(messages) => {
-                    // Publish the scan messages to the queue
-                    match scanner_task.publish_messages(messages).await {
-                        Ok(()) => {
-                            success_count += 1;
-                        }
-                        Err(e) => {
-                            failure_count += 1;
-                            log::error!(
-                                "Failed to publish scan results for scanner '{}': {}",
-                                scanner_id,
-                                e
-                            );
-                        }
+            let mut messages = Vec::new();
+            match scanner_task
+                .scan_commits(|msg| {
+                    messages.push(msg);
+                    Ok(())
+                })
+                .await
+            {
+                Ok(()) => match scanner_task.publish_messages(messages).await {
+                    Ok(()) => success_count += 1,
+                    Err(e) => {
+                        failure_count += 1;
+                        log::error!(
+                            "Failed to publish scan results for scanner '{}': {}",
+                            scanner_id,
+                            e
+                        );
                     }
-                }
+                },
                 Err(e) => {
                     failure_count += 1;
                     log::error!("Repository scan failed for scanner '{}': {}", scanner_id, e);

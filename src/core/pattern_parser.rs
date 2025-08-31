@@ -172,6 +172,112 @@ pub fn parse_extensions(extensions_str: &str) -> Vec<String> {
         .collect()
 }
 
+/// Author pattern matcher for filtering by name or email with glob patterns
+#[derive(Debug, Clone)]
+pub struct AuthorPatternMatcher {
+    include_patterns: Vec<Pattern>,
+    exclude_patterns: Vec<Pattern>,
+}
+
+impl AuthorPatternMatcher {
+    /// Create a new author pattern matcher from include/exclude lists
+    pub fn new(include_patterns: &[String], exclude_patterns: &[String]) -> Result<Self, String> {
+        // Auto-complete incomplete email patterns and convert to lowercase
+        let include_processed: Vec<String> = include_patterns
+            .iter()
+            .map(|p| Self::auto_complete_email_pattern(&p.to_lowercase()))
+            .collect();
+        let exclude_processed: Vec<String> = exclude_patterns
+            .iter()
+            .map(|p| Self::auto_complete_email_pattern(&p.to_lowercase()))
+            .collect();
+
+        let include_patterns = parse_patterns(&include_processed)?;
+        let exclude_patterns = parse_patterns(&exclude_processed)?;
+
+        Ok(Self {
+            include_patterns,
+            exclude_patterns,
+        })
+    }
+
+    /// Check if an author matches the filter criteria.
+    ///
+    /// Authors matching any exclude pattern are always excluded,
+    /// even if they also match an include pattern.
+    /// This means exclusion takes precedence over inclusion.
+    pub fn matches(&self, author_name: &str, author_email: &str) -> bool {
+        // Check excluded patterns first
+        for pattern in &self.exclude_patterns {
+            if self.matches_single_pattern(pattern, author_name, author_email) {
+                return false;
+            }
+        }
+
+        // If no include filters specified, include by default
+        if self.include_patterns.is_empty() {
+            return true;
+        }
+
+        // Check include patterns
+        for pattern in &self.include_patterns {
+            if self.matches_single_pattern(pattern, author_name, author_email) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Check if a single pattern matches either author name or email
+    fn matches_single_pattern(
+        &self,
+        pattern: &Pattern,
+        author_name: &str,
+        author_email: &str,
+    ) -> bool {
+        let pattern_str = pattern.as_str();
+
+        if pattern_str.contains('@') {
+            // Email matching - case insensitive (patterns are already lowercase)
+            pattern.matches(&author_email.to_lowercase())
+        } else {
+            // Name matching - case insensitive (patterns are already lowercase)
+            pattern.matches(&author_name.to_lowercase())
+        }
+    }
+
+    /// Auto-complete incomplete email patterns for improved user experience
+    ///
+    /// This function allows users to write simplified email patterns without explicit wildcards:
+    /// - `@amazon.com` matches any user at amazon.com (auto-expands to `*@amazon.com`)
+    /// - `user@` matches user at any domain (auto-expands to `user@*`)
+    /// - `@` matches any email address (auto-expands to `*@*`)
+    ///
+    /// Complete patterns with explicit wildcards are left unchanged.
+    /// Non-email patterns (no `@` symbol) are also left unchanged.
+    fn auto_complete_email_pattern(pattern: &str) -> String {
+        if !pattern.contains('@') {
+            // Name pattern, no changes needed
+            return pattern.to_string();
+        }
+
+        if pattern == "@" {
+            // Special case: bare @ means match any email
+            "*@*".to_string()
+        } else if pattern.starts_with('@') && !pattern.starts_with("*@") {
+            // Missing username part: @amazon.com → *@amazon.com
+            format!("*{}", pattern)
+        } else if pattern.ends_with('@') && !pattern.ends_with("@*") {
+            // Missing domain part: user@ → user@*
+            format!("{}*", pattern)
+        } else {
+            // Pattern is already complete or has explicit wildcards
+            pattern.to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,5 +525,118 @@ mod tests {
         .unwrap();
 
         assert!(!matcher.matches(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn test_author_pattern_matching() {
+        let matcher = AuthorPatternMatcher::new(
+            &["David*".to_string(), "*@*amazon.*".to_string()],
+            &["*@*test*".to_string()],
+        )
+        .unwrap();
+
+        // Name matching (case insensitive)
+        assert!(matcher.matches("David Nugent", "david@example.com"));
+        assert!(matcher.matches("David L Nugent", "david@example.com"));
+        assert!(matcher.matches("david nugent", "david@example.com"));
+        assert!(!matcher.matches("John Smith", "john@example.com"));
+
+        // Email matching (case insensitive) - using *@*amazon.* to match both amazon.com and aws.amazon.net
+        assert!(matcher.matches("John Smith", "john@amazon.com"));
+        assert!(matcher.matches("John Smith", "john@aws.amazon.net"));
+        assert!(matcher.matches("John Smith", "john@Amazon.com"));
+        assert!(!matcher.matches("John Smith", "john@google.com"));
+
+        // Exclude takes precedence
+        assert!(!matcher.matches("David Test", "david@test.com"));
+        assert!(!matcher.matches("John", "john@amazon.testnet.com"));
+    }
+
+    #[test]
+    fn test_author_pattern_no_include_filters() {
+        let matcher = AuthorPatternMatcher::new(&[], &["*@*test*".to_string()]).unwrap();
+
+        // No include filters means include all by default
+        assert!(matcher.matches("Anyone", "anyone@example.com"));
+        assert!(matcher.matches("John", "john@amazon.com"));
+
+        // But excludes still apply
+        assert!(!matcher.matches("David", "david@test.com"));
+    }
+
+    #[test]
+    fn test_author_pattern_email_vs_name_detection() {
+        let matcher =
+            AuthorPatternMatcher::new(&["*@*amazon.*".to_string(), "David*".to_string()], &[])
+                .unwrap();
+
+        // Email patterns (contain @) only match email
+        assert!(matcher.matches("John Smith", "john@amazon.com"));
+        assert!(!matcher.matches("john@amazon.com", "john@example.com")); // Name looks like email but pattern is for email
+
+        // Name patterns (no @) only match name
+        assert!(matcher.matches("David Nugent", "david@example.com"));
+        assert!(matcher.matches("John Smith", "david@amazon.com")); // Email matches (pattern is OR logic)
+
+        // Test a case where neither email nor name match
+        assert!(!matcher.matches("John Smith", "john@google.com")); // Neither email nor name match
+    }
+
+    #[test]
+    fn test_author_pattern_case_insensitive() {
+        let matcher =
+            AuthorPatternMatcher::new(&["DAVID*".to_string(), "*@AMAZON.*".to_string()], &[])
+                .unwrap();
+
+        assert!(matcher.matches("david nugent", "david@example.com"));
+        assert!(matcher.matches("David Nugent", "david@example.com"));
+        assert!(matcher.matches("DAVID NUGENT", "david@example.com"));
+
+        assert!(matcher.matches("John", "john@amazon.com"));
+        assert!(matcher.matches("John", "john@AMAZON.com"));
+        assert!(matcher.matches("John", "john@Amazon.Com"));
+    }
+
+    #[test]
+    fn test_email_pattern_auto_completion() {
+        // Test auto-completion of incomplete email patterns
+
+        // Test 1: @domain.com should auto-expand to *@domain.com
+        let matcher1 = AuthorPatternMatcher::new(&["@amazon.com".to_string()], &[]).unwrap();
+        assert!(matcher1.matches("anyone", "user@amazon.com"));
+        assert!(matcher1.matches("anyone", "admin@amazon.com"));
+        assert!(!matcher1.matches("anyone", "user@google.com"));
+
+        // Test 2: user@ should auto-expand to user@*
+        let matcher2 = AuthorPatternMatcher::new(&["john@".to_string()], &[]).unwrap();
+        assert!(matcher2.matches("anyone", "john@amazon.com"));
+        assert!(matcher2.matches("anyone", "john@google.com"));
+        assert!(!matcher2.matches("anyone", "jane@amazon.com"));
+
+        // Test 3: bare @ should auto-expand to *@* (match any email)
+        let matcher3 = AuthorPatternMatcher::new(&["@".to_string()], &[]).unwrap();
+        assert!(matcher3.matches("anyone", "user@amazon.com"));
+        assert!(matcher3.matches("anyone", "admin@google.com"));
+        assert!(matcher3.matches("anyone", "test@example.org"));
+
+        // Test 4: Existing complete patterns should be unchanged
+        let matcher4 = AuthorPatternMatcher::new(&["*@amazon.com".to_string()], &[]).unwrap();
+        assert!(matcher4.matches("anyone", "user@amazon.com"));
+        assert!(!matcher4.matches("anyone", "user@google.com"));
+
+        // Test 5: Mix of complete and incomplete patterns
+        let matcher5 = AuthorPatternMatcher::new(
+            &[
+                "@amazon.com".to_string(),
+                "john@".to_string(),
+                "*@*.edu".to_string(),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert!(matcher5.matches("anyone", "user@amazon.com")); // @amazon.com → *@amazon.com
+        assert!(matcher5.matches("anyone", "john@google.com")); // john@ → john@*
+        assert!(matcher5.matches("anyone", "student@mit.edu")); // *@*.edu (unchanged)
+        assert!(!matcher5.matches("anyone", "user@google.com")); // Doesn't match any pattern
     }
 }
