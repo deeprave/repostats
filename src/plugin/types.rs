@@ -3,6 +3,7 @@
 //! This module contains the core data structures used throughout
 //! the plugin system for metadata, configuration, and plugin management.
 
+use crate::scanner::types::ScanRequires;
 use std::path::PathBuf;
 
 /// Plugin metadata information
@@ -15,7 +16,7 @@ pub struct PluginInfo {
     pub api_version: u32,
     pub plugin_type: PluginType,
     pub functions: Vec<PluginFunction>,
-    pub required: u64, // ScanRequires value
+    pub required: ScanRequires,
     pub auto_active: bool,
 }
 

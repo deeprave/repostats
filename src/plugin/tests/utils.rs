@@ -47,7 +47,7 @@ impl MockPlugin {
                     description: "Test function".to_string(),
                     aliases: vec![],
                 }],
-                required: 0, // ScanRequires::NONE
+                required: ScanRequires::NONE,
                 auto_active: false,
             },
             initialized: false,

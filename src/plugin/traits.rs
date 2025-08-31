@@ -112,7 +112,7 @@ mod tests {
                         description: "Test function".to_string(),
                         aliases: vec![],
                     }],
-                    required: 0, // ScanRequires::NONE
+                    required: ScanRequires::NONE,
                     auto_active: false,
                 },
                 initialized: false,
@@ -400,7 +400,7 @@ mod tests {
             api_version: 20250101,
             plugin_type: crate::plugin::types::PluginType::Processing,
             functions: vec![],
-            required: 0,
+            required: ScanRequires::NONE,
             auto_active: false,
         };
 

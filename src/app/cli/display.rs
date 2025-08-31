@@ -1,6 +1,7 @@
 //! CLI display utilities for formatting output
 
 use crate::plugin::types::PluginInfo;
+use crate::scanner::types::ScanRequires;
 use tabled::{
     settings::{
         object::{Columns, Object, Rows},
@@ -153,7 +154,7 @@ mod tests {
                     aliases: vec![],
                 })
                 .collect(),
-            required: 0, // ScanRequires::NONE
+            required: ScanRequires::NONE,
             auto_active: false,
         }
     }
