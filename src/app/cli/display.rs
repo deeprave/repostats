@@ -1,6 +1,6 @@
 //! CLI display utilities for formatting output
 
-use crate::plugin::types::PluginMetadata;
+use crate::plugin::types::PluginInfo;
 use tabled::{
     settings::{
         object::{Columns, Object, Rows},
@@ -25,7 +25,7 @@ struct DisplayRow {
 
 /// Display plugin information in a simple formatted table using tabled
 /// Returns an error if plugin data is invalid or malformed
-pub fn display_plugin_table(plugins: Vec<PluginMetadata>, use_color: bool) -> Result<(), String> {
+pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result<(), String> {
     if plugins.is_empty() {
         eprintln!("No plugins discovered.");
         return Ok(());
@@ -135,14 +135,16 @@ fn print_table_with_separator(table: &Table) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::types::{PluginFunction, PluginMetadata};
+    use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 
-    fn create_test_plugin(name: &str, description: &str, functions: Vec<&str>) -> PluginMetadata {
-        PluginMetadata {
+    fn create_test_plugin(name: &str, description: &str, functions: Vec<&str>) -> PluginInfo {
+        PluginInfo {
             name: name.to_string(),
             version: "1.0.0".to_string(),
             description: description.to_string(),
             author: "Test Author".to_string(),
+            api_version: 20250101,
+            plugin_type: PluginType::Processing,
             functions: functions
                 .into_iter()
                 .map(|f| PluginFunction {
@@ -151,8 +153,8 @@ mod tests {
                     aliases: vec![],
                 })
                 .collect(),
-            requires_file_content: false,
-            requires_historical_content: false,
+            required: 0, // ScanRequires::NONE
+            auto_active: false,
         }
     }
 

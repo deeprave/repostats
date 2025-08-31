@@ -9,10 +9,10 @@
 pub use crate::plugin::manager::PluginManager;
 
 // Error handling
-pub use crate::plugin::error::{PluginError, PluginResult};
+pub use crate::plugin::error::PluginError;
 
 // Plugin metadata and information
-pub use crate::plugin::types::{PluginInfo, PluginMetadata};
+pub use crate::plugin::types::PluginInfo;
 
 // Plugin configuration and arguments
 

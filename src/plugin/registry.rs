@@ -293,6 +293,10 @@ mod tests {
                 description: "Mock plugin".to_string(),
                 author: "Test".to_string(),
                 api_version: 20250101,
+                plugin_type: self.plugin_type(),
+                functions: self.advertised_functions(),
+                required: self.requirements().bits(),
+                auto_active: false,
             }
         }
 
