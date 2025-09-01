@@ -93,6 +93,12 @@ pub async fn startup(
         no_color,
     );
 
+    // Validate CLI arguments before proceeding
+    if let Err(e) = final_args.validate() {
+        log::error!("Invalid CLI arguments: {}", e);
+        exit(1);
+    }
+
     // Stage 4: Command discovery and segmentation
     let _plugin_dir = plugin_dir.as_deref().or(final_args.plugin_dir.as_deref());
     let commands = match discover_commands(_plugin_dir, &args.plugin_exclusions).await {
