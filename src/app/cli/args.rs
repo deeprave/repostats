@@ -173,11 +173,7 @@ impl Args {
 
     /// Validate repository arguments
     fn validate_repositories(&self) -> Result<(), ValidationError> {
-        if self.repository.is_empty() {
-            return Err(ValidationError::new(
-                "At least one repository must be specified",
-            ));
-        }
+        // Empty repository list is valid - application defaults to current directory
 
         // Validate that all repository entries are non-empty and valid
         for (index, repo) in self.repository.iter().enumerate() {
@@ -2198,18 +2194,14 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_empty_repository_list_error() {
+    fn test_validate_empty_repository_list_success() {
         let args = Args::default(); // repository list is empty by default
 
         let result = args.validate();
         assert!(
-            result.is_err(),
-            "Empty repository list should fail validation"
+            result.is_ok(),
+            "Empty repository list should be valid (defaults to current directory)"
         );
-        let error = result.unwrap_err();
-        assert!(error
-            .details()
-            .contains("At least one repository must be specified"));
     }
 
     #[test]
@@ -2287,12 +2279,9 @@ mod tests {
         #[test]
         fn test_validation_prevents_invalid_startup_configs() {
             // Simulate different invalid configurations that would be caught at startup
+            // Note: Empty repository list is now valid (defaults to current directory)
 
-            // Case 1: Empty repository list
-            let args_empty = Args::default();
-            assert!(args_empty.validate().is_err(), "Empty repos should fail");
-
-            // Case 2: Checkout flags without checkout-dir
+            // Case 1: Checkout flags without checkout-dir
             let mut args_incomplete = Args::default();
             args_incomplete.repository = vec!["/repo".into()];
             args_incomplete.checkout_keep = true; // Missing checkout_dir
@@ -2301,7 +2290,7 @@ mod tests {
                 "Incomplete checkout config should fail"
             );
 
-            // Case 3: Invalid max commits
+            // Case 2: Invalid max commits
             let mut args_bad_commits = Args::default();
             args_bad_commits.repository = vec!["/repo".into()];
             args_bad_commits.max_commits = Some(0);
@@ -2342,6 +2331,13 @@ mod tests {
             assert!(
                 args_multi_url.validate().is_ok(),
                 "Multiple remote repos should be valid"
+            );
+
+            // Case 4: Empty repository list (should default to current directory)
+            let args_empty = Args::default();
+            assert!(
+                args_empty.validate().is_ok(),
+                "Empty repository list should be valid (defaults to current directory)"
             );
         }
 
