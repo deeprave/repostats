@@ -110,14 +110,14 @@ impl TemplateVars {
         .collect::<HashMap<_, _>>();
 
         // Use static regex to match whole variable names in curly braces and substitute
-        let mut unknown_vars = Vec::new();
+        let mut unknown_vars = std::collections::HashSet::new();
 
         let resolved = TEMPLATE_VAR_REGEX.replace_all(template, |caps: &regex::Captures| {
             let key = &caps[1];
             match substitutions.get(key) {
                 Some(value) => value.to_string(),
                 None => {
-                    unknown_vars.push(key.to_string());
+                    unknown_vars.insert(key.to_string());
                     caps[0].to_string() // Return original if unknown
                 }
             }
@@ -129,8 +129,16 @@ impl TemplateVars {
                  Unknown variables: {}\n\
                  Available variables: {}",
                 template,
-                unknown_vars.join(", "),
-                substitutions.keys().cloned().collect::<Vec<_>>().join(", ")
+                {
+                    let mut sorted_vars: Vec<_> = unknown_vars.iter().cloned().collect();
+                    sorted_vars.sort();
+                    sorted_vars.join(", ")
+                },
+                {
+                    let mut sorted_available: Vec<_> = substitutions.keys().cloned().collect();
+                    sorted_available.sort();
+                    sorted_available.join(", ")
+                }
             )));
         }
 

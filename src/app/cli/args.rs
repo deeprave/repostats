@@ -6,6 +6,7 @@
 use crate::core::validation::{split_and_collect, ValidationError};
 use crate::scanner::checkout::manager::TemplateVars;
 use clap::{ArgAction, Parser};
+use log;
 use std::path::PathBuf;
 
 // Global arguments structure with all command-line options
@@ -164,7 +165,14 @@ pub struct Args {
 impl Args {
     /// Validate CLI arguments for consistency and constraints
     pub fn validate(&self) -> Result<(), ValidationError> {
-        // Repository validation
+        self.validate_repositories()?;
+        self.validate_checkout_functionality()?;
+        self.validate_commit_limits()?;
+        Ok(())
+    }
+
+    /// Validate repository arguments
+    fn validate_repositories(&self) -> Result<(), ValidationError> {
         if self.repository.is_empty() {
             return Err(ValidationError::new(
                 "At least one repository must be specified",
@@ -229,15 +237,23 @@ impl Args {
             }
         }
 
-        // Checkout functionality validation
+        Ok(())
+    }
+
+    /// Validate checkout functionality arguments
+    fn validate_checkout_functionality(&self) -> Result<(), ValidationError> {
         let has_checkout_flags = self.checkout_dir.is_some()
             || self.checkout_keep
             || self.checkout_force
             || self.checkout_rev.is_some();
 
         if has_checkout_flags && self.repository.len() > 1 {
+            log::debug!(
+                "Checkout functionality error tracked in RS-29 (found {} repositories)",
+                self.repository.len()
+            );
             return Err(ValidationError::new(&format!(
-                "Checkout functionality currently supports single repository only (found {}, tracked in RS-29)",
+                "Checkout functionality currently supports only a single repository (found {})",
                 self.repository.len()
             )));
         }
@@ -268,6 +284,11 @@ impl Args {
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate commit limits and related arguments
+    fn validate_commit_limits(&self) -> Result<(), ValidationError> {
         // Max commits validation
         if let Some(max) = self.max_commits {
             if max == 0 {
@@ -349,7 +370,8 @@ impl Args {
 
     /// Parse comma-separated paths from a vector of PathBufs
     fn parse_comma_separated_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
-        // Known and accepted limitation: no support for paths containing a comma
+        // Known limitation: no support for paths containing a comma
+        // Use to_string_lossy() for filesystem paths as they may contain non-UTF-8 characters
         split_and_collect(paths, |path| path.to_string_lossy().to_string(), false)
             .into_iter()
             .map(PathBuf::from)
@@ -368,11 +390,13 @@ impl Args {
     ) -> Result<Vec<String>, ValidationError> {
         let parts = split_and_collect(strings, |s| s.clone(), true);
 
+        let mut normalized_parts = Vec::new();
         for part in &parts {
-            Self::normalize_path_pattern(part)?;
+            let normalized = Self::normalize_path_pattern(part)?;
+            normalized_parts.push(normalized);
         }
 
-        Ok(parts)
+        Ok(normalized_parts)
     }
 
     /// Normalize path patterns, rejecting absolute paths with a clear error
@@ -870,80 +894,14 @@ impl Args {
         }
     }
 
-    /// Apply configuration file values to Args (async version)
-    pub async fn parse_config_file_async(margs: &mut Self, config_file: Option<PathBuf>) {
-        Self::parse_config_file_impl(margs, config_file).await;
-    }
-
-    /// Parse config file and return both Args updates and raw TOML config (async version)
+    /// Load config file and return both updated Args and raw TOML config
     pub async fn parse_config_file_with_raw_config(
-        margs: &mut Self,
-        config_file: Option<PathBuf>,
-    ) -> Option<toml::Table> {
-        Self::parse_config_file_impl_with_raw(margs, config_file).await
-    }
-
-    /// Core implementation for config file parsing - now async
-    async fn parse_config_file_impl(margs: &mut Self, config_file: Option<PathBuf>) {
-        let config_path = match config_file {
-            Some(path) => {
-                // User specified a config file-it must exist
-                if !path.exists() {
-                    eprintln!(
-                        "Error: The specified configuration file does not exist: {}",
-                        path.display()
-                    );
-                    std::process::exit(1);
-                }
-                Some(path)
-            }
-            None => {
-                // Use default config path if it exists
-                let default_path =
-                    dirs::config_dir().map(|d| d.join("Repostats").join("repostats.toml"));
-
-                match default_path {
-                    Some(path) if path.exists() => Some(path),
-                    _ => None, // No config file to load
-                }
-            }
-        };
-
-        // If we have a config path, load and parse it
-        if let Some(path) = config_path {
-            match tokio::fs::read_to_string(&path).await {
-                Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
-                    Ok(config) => {
-                        if let Err(e) = Self::apply_toml_values(margs, &config) {
-                            eprintln!(
-                                "Error in configuration file validation {}: {}",
-                                path.display(),
-                                e
-                            );
-                            std::process::exit(1);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error parsing configuration file {}: {}", path.display(), e);
-                        std::process::exit(1);
-                    }
-                },
-                Err(e) => {
-                    eprintln!("Error reading configuration file {}: {}", path.display(), e);
-                    std::process::exit(1);
-                }
-            }
-        }
-    }
-
-    /// Core implementation for config file parsing with raw config return (async)
-    async fn parse_config_file_impl_with_raw(
-        margs: &mut Self,
+        args: &mut Self,
         config_file: Option<PathBuf>,
     ) -> Option<toml::Table> {
         let config_path = match config_file {
             Some(path) => {
-                // User specified a config file-it must exist
+                // User specified a config file - it must exist
                 if !path.exists() {
                     eprintln!(
                         "Error: The specified configuration file does not exist: {}",
@@ -969,7 +927,7 @@ impl Args {
             match tokio::fs::read_to_string(&path).await {
                 Ok(contents) => match toml::from_str::<toml::Table>(&contents) {
                     Ok(config) => {
-                        if let Err(e) = Self::apply_toml_values(margs, &config) {
+                        if let Err(e) = Self::apply_toml_values(args, &config) {
                             eprintln!(
                                 "Error in configuration file validation {}: {}",
                                 path.display(),
@@ -999,7 +957,7 @@ impl Args {
         config: &toml::Table,
         key: &str,
         target: &mut Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         if let Some(value) = config.get(key) {
             let mut temp_strings = Vec::new();
 
@@ -1020,7 +978,7 @@ impl Args {
     }
 
     /// Apply TOML configuration values to Args
-    fn apply_toml_values(args: &mut Self, config: &toml::Table) -> Result<(), String> {
+    fn apply_toml_values(args: &mut Self, config: &toml::Table) -> Result<(), ValidationError> {
         if let Some(repo_value) = config.get("repository") {
             let mut repo_paths = Vec::new();
 
@@ -1144,7 +1102,7 @@ impl Args {
         config: &toml::Table,
         key: &str,
         target: &mut Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         if let Some(value) = config.get(key) {
             let mut temp_strings = Vec::new();
 
@@ -2056,6 +2014,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
+            .details()
             .contains("Absolute paths are not supported"));
     }
 
@@ -2185,9 +2144,9 @@ mod tests {
         let error = result.unwrap_err();
         assert!(error
             .details()
-            .contains("Checkout functionality currently supports single repository only"));
+            .contains("Checkout functionality currently supports only a single repository"));
         assert!(error.details().contains("found 2"));
-        assert!(error.details().contains("RS-29"));
+        // RS-29 is now in debug logs only, not user-facing error message
     }
 
     #[test]
@@ -2319,13 +2278,10 @@ mod tests {
 
             let error = result.unwrap_err();
             assert!(
-                error.details().contains("single repository only"),
+                error.details().contains("only a single repository"),
                 "Error should mention single repo restriction"
             );
-            assert!(
-                error.details().contains("RS-29"),
-                "Error should reference RS-29"
-            );
+            // RS-29 is now in debug logs only, not user-facing error message
         }
 
         #[test]
