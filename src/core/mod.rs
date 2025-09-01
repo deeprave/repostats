@@ -1,5 +1,6 @@
 //! Core services and infrastructure
 
+pub mod error_handling;
 pub mod logging;
 pub mod pattern_parser;
 pub mod query;

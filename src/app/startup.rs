@@ -1,37 +1,105 @@
 use crate::app::cli::display::display_plugin_table;
+use crate::core::error_handling::ContextualError;
 use crate::core::services::get_services;
-use crate::plugin::api::PluginError;
+use crate::core::validation::ValidationError;
+use crate::plugin::api::{log_plugin_error_with_context, PluginError};
 use log;
-use std::process::exit;
+use std::fmt;
 use toml;
 
-/// Unified error handler for all plugin operations
-///
-/// Preserves specific error messages for user-actionable errors (like argument parsing)
-/// while maintaining generic error handling with debug details for system errors.
-fn handle_plugin_error(e: &PluginError, operation: &str) {
-    match e {
-        PluginError::Generic { message } => {
-            // For generic errors (like argument parsing), show the specific message
-            log::error!("FATAL: {}", message);
-        }
-        _ => {
-            // For other plugin errors, show generic message with debug details
-            log::error!("FATAL: {}", operation);
-            log::debug!("Error details: {}", e);
+/// Startup operation error types
+#[derive(Debug)]
+pub enum StartupError {
+    /// Logging system initialization failed
+    LoggingInitFailed { message: String },
+    /// CLI argument validation failed
+    ValidationFailed { error: ValidationError },
+    /// Plugin operation failed
+    PluginFailed { error: PluginError },
+    /// Command segmentation failed
+    CommandSegmentationFailed { message: String },
+    /// Query parameter validation failed
+    QueryValidationFailed { message: String },
+    /// Display operation failed
+    DisplayFailed { message: String },
+    /// Configuration error
+    ConfigurationError { message: String },
+}
+
+impl fmt::Display for StartupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StartupError::LoggingInitFailed { message } => {
+                write!(f, "Failed to initialize logging: {}", message)
+            }
+            StartupError::ValidationFailed { error } => {
+                write!(f, "Invalid CLI arguments: {}", error)
+            }
+            StartupError::PluginFailed { error } => {
+                write!(f, "Plugin operation failed: {}", error)
+            }
+            StartupError::CommandSegmentationFailed { message } => {
+                write!(f, "Command segmentation failed: {}", message)
+            }
+            StartupError::QueryValidationFailed { message } => {
+                write!(f, "Invalid query parameters: {}", message)
+            }
+            StartupError::DisplayFailed { message } => {
+                write!(f, "Display operation failed: {}", message)
+            }
+            StartupError::ConfigurationError { message } => {
+                write!(f, "Configuration error: {}", message)
+            }
         }
     }
 }
 
+impl std::error::Error for StartupError {}
+
+impl ContextualError for StartupError {
+    fn is_user_actionable(&self) -> bool {
+        match self {
+            // Clear user-actionable errors that users can fix
+            StartupError::ValidationFailed { .. } => true,
+            StartupError::QueryValidationFailed { .. } => true,
+            StartupError::CommandSegmentationFailed { .. } => true,
+            StartupError::ConfigurationError { .. } => true,
+
+            // System errors users cannot directly fix
+            StartupError::LoggingInitFailed { .. }
+            | StartupError::PluginFailed { .. }
+            | StartupError::DisplayFailed { .. } => false,
+        }
+    }
+
+    fn user_message(&self) -> Option<&str> {
+        match self {
+            StartupError::ValidationFailed { error } => Some(error.details()),
+            StartupError::QueryValidationFailed { message } => Some(message),
+            StartupError::CommandSegmentationFailed { message } => Some(message),
+            StartupError::ConfigurationError { message } => Some(message),
+            _ => None,
+        }
+    }
+}
+
+/// Result type for startup operations
+pub type StartupResult<T> = Result<T, StartupError>;
+
 /// Core startup implementation - returns configured ScannerManager
 ///
 /// # Error Handling
-/// This function implements fail-fast error handling - any critical configuration
-/// error will cause the process to exit with code 1. All resources are automatically
-/// cleaned up by the OS on process exit, so no manual cleanup is required.
+/// This function returns a Result to enable proper error handling and testing.
+/// All startup errors are wrapped in StartupError variants with appropriate context.
+/// The caller is responsible for handling errors, typically by logging and exiting.
+///
+/// # Returns
+/// - `Ok(Some(scanner_manager))` - Successfully configured scanner manager
+/// - `Ok(None)` - Successfully initialized but no repositories to scan
+/// - `Err(StartupError)` - Startup failed with detailed error information
 pub async fn startup(
     command_name: &str,
-) -> Option<std::sync::Arc<crate::scanner::api::ScannerManager>> {
+) -> StartupResult<Option<std::sync::Arc<crate::scanner::api::ScannerManager>>> {
     use super::cli::args::Args;
     use super::cli::command_segmenter::CommandSegmenter;
     use super::cli::initial_args;
@@ -61,9 +129,9 @@ pub async fn startup(
         log_file_str.as_deref(),
         use_color,
     ) {
-        eprintln!("FATAL: Failed to initialize logging: {e}");
-        exit(1);
-    } else {
+        return Err(StartupError::LoggingInitFailed {
+            message: e.to_string(),
+        });
     }
 
     // Stage 2: Command segmentation and config parsing
@@ -93,13 +161,12 @@ pub async fn startup(
         log_file.as_deref(),
         use_color,
     ) {
-        eprintln!("FATAL: Failed to reconfigure logging system with final configuration");
-        eprintln!("Error details: {e}");
-        eprintln!(
-            "Configuration: level={:?}, format={:?}, file={:?}, color={}",
-            log_level, log_format, log_file, use_color
-        );
-        exit(1);
+        return Err(StartupError::LoggingInitFailed {
+            message: format!(
+                "Failed to reconfigure logging system: {}. Configuration: level={:?}, format={:?}, file={:?}, color={}",
+                e, log_level, log_format, log_file, use_color
+            )
+        });
     }
 
     // Stage 3: Final global args parsing with collected arguments
@@ -113,22 +180,14 @@ pub async fn startup(
 
     // Validate CLI arguments before proceeding
     if let Err(e) = final_args.validate() {
-        log::error!("Invalid CLI arguments: {}", e);
-        exit(1);
+        return Err(StartupError::ValidationFailed { error: e });
     }
 
     // Stage 4: Command discovery and segmentation
     let _plugin_dir = plugin_dir.as_deref().or(final_args.plugin_dir.as_deref());
-    let commands = match discover_commands(_plugin_dir, &args.plugin_exclusions).await {
-        Ok(commands) => commands,
-        Err(e) => {
-            handle_plugin_error(
-                &e,
-                "Plugin discovery failed - cannot proceed without plugins",
-            );
-            exit(1);
-        }
-    };
+    let commands = discover_commands(_plugin_dir, &args.plugin_exclusions)
+        .await
+        .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     // Check if --plugins flag was provided (after plugin discovery, before segmentation)
     if args.plugins {
@@ -138,65 +197,68 @@ pub async fn startup(
         let plugins = plugin_manager.list_plugins_with_filter(false).await;
 
         if plugins.is_empty() {
-            log::error!("No plugins available after discovery");
-            exit(1);
+            return Err(StartupError::ConfigurationError {
+                message: "No plugins available after discovery".to_string(),
+            });
         }
 
-        if let Err(e) = display_plugin_table(plugins, use_color) {
-            log::error!("Failed to display plugin table: {}", e);
-            exit(1);
-        }
-        exit(0);
+        display_plugin_table(plugins, use_color).map_err(|e| StartupError::DisplayFailed {
+            message: e.to_string(),
+        })?;
+
+        // For --plugins flag, we return success with no scanner manager (indicating early exit)
+        return Ok(None);
     }
 
     let segmenter = CommandSegmenter::with_commands(commands);
     let all_args: Vec<String> = std::env::args().collect();
     let command_segments = segmenter
         .segment_commands_only(&all_args, &args.global_args)
-        .unwrap_or_else(|e| {
+        .map_err(|e| {
             let error_msg = e.to_string();
             if error_msg.contains("Unexpected argument") && error_msg.contains("found after global")
             {
-                // Extract the unknown command from the error message
+                // Extract the unknown command from the error message for better UX
                 if let Some(start) = error_msg.find("'") {
                     if let Some(end) = error_msg.rfind("'") {
                         if start < end {
                             let unknown_cmd = &error_msg[start + 1..end];
-                            log::error!("Unknown command '{}'", unknown_cmd);
-                            exit(1);
+                            return StartupError::CommandSegmentationFailed {
+                                message: format!("Unknown command '{}'", unknown_cmd),
+                            };
                         }
                     }
                 }
             }
 
             // Fallback for other segmentation errors
-            log::error!("FATAL: Command segmentation failed: {e}");
-            exit(1);
-        });
+            StartupError::CommandSegmentationFailed { message: error_msg }
+        })?;
 
     // Stage 5: Plugin configuration (validate service dependencies first)
     log::debug!("Starting plugin configuration and service validation");
-    configure_plugins(&command_segments, toml_config.as_ref()).await;
+    configure_plugins(&command_segments, toml_config.as_ref()).await?;
 
     // Stage 6: Build query parameters from TOML config and CLI arguments
-    let query_params = build_query_params(&final_args, toml_config.as_ref()).await;
+    let query_params = build_query_params(&final_args, toml_config.as_ref()).await?;
 
     // Stage 7: Scanner configuration and system integration
+    let normalized_repositories = final_args.normalized_repositories();
     log::debug!(
         "Starting scanner configuration with {} repositories",
-        final_args.repository.len()
+        normalized_repositories.len()
     );
-    let scanner_manager_opt = configure_scanner(&final_args.repository, query_params).await;
+    let scanner_manager_opt = configure_scanner(&normalized_repositories, query_params).await;
 
     // Return the configured scanner manager for main.rs to use, or None if no valid scanners
     match scanner_manager_opt {
         Some(scanner_manager) => {
             log::debug!("System startup completed successfully");
-            Some(scanner_manager)
+            Ok(Some(scanner_manager))
         }
         None => {
             log::warn!("No valid scanners found during configuration. Startup aborted.");
-            None
+            Ok(None)
         }
     }
 }
@@ -259,13 +321,14 @@ async fn discover_commands(
 async fn configure_plugins(
     command_segments: &[super::cli::command_segmenter::CommandSegment],
     toml_config: Option<&toml::Table>,
-) {
+) -> StartupResult<()> {
     use log;
 
     // Enhanced validation with detailed context
     if command_segments.is_empty() {
-        log::error!("FATAL: No processing plugins activated");
-        exit(1);
+        return Err(StartupError::ConfigurationError {
+            message: "No processing plugins activated".to_string(),
+        });
     }
 
     // Get plugin manager from services
@@ -275,35 +338,35 @@ async fn configure_plugins(
     // Step 1: Set plugin configurations from TOML config if available
     if let Some(config) = toml_config {
         if let Err(e) = plugin_manager.set_plugin_configs(config) {
-            handle_plugin_error(&e, "Failed to set plugin configurations from TOML config");
-            exit(1);
+            return Err(StartupError::PluginFailed { error: e });
         }
     }
 
     // Step 2: Activate plugins based on command segments
-    if let Err(e) = plugin_manager.activate_plugins(command_segments).await {
-        handle_plugin_error(&e, "Could not activate plugins");
-        exit(1);
-    }
+    plugin_manager
+        .activate_plugins(command_segments)
+        .await
+        .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     // Step 3: Initialise active plugins with their configurations
-    if let Err(e) = plugin_manager.initialize_active_plugins().await {
-        handle_plugin_error(&e, "Plugin initialization failed");
-        exit(1);
-    }
+    plugin_manager
+        .initialize_active_plugins()
+        .await
+        .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     // Step 4: Setup notification subscribers for plugins and plugin manager
-    if let Err(e) = plugin_manager.setup_plugin_notification_subscribers().await {
-        handle_plugin_error(&e, "Failed to setup plugins");
-        exit(1);
-    }
+    plugin_manager
+        .setup_plugin_notification_subscribers()
+        .await
+        .map_err(|e| StartupError::PluginFailed { error: e })?;
 
-    if let Err(e) = plugin_manager.setup_system_notification_subscriber().await {
-        handle_plugin_error(&e, "Failed to setup plugin manager");
-        exit(1);
-    }
+    plugin_manager
+        .setup_system_notification_subscriber()
+        .await
+        .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     log::debug!("Plugins loaded successfully");
+    Ok(())
 }
 
 /// Build query parameters from TOML config and CLI arguments with validation
@@ -311,10 +374,9 @@ async fn configure_plugins(
 async fn build_query_params(
     args: &super::cli::args::Args,
     toml_config: Option<&toml::Table>,
-) -> crate::core::query::QueryParams {
+) -> StartupResult<crate::core::query::QueryParams> {
     use crate::app::cli::date_parser;
     use crate::core::query::QueryParams;
-    use std::process::exit;
 
     // Start with base query parameters
     let mut query_params = QueryParams::new();
@@ -422,8 +484,9 @@ async fn build_query_params(
         Some(since_str) => match date_parser::parse_date(since_str) {
             Ok(date) => Some(date),
             Err(e) => {
-                log::error!("Invalid --since date '{}': {}", since_str, e);
-                exit(1);
+                return Err(StartupError::QueryValidationFailed {
+                    message: format!("Invalid --since date '{}': {}", since_str, e),
+                });
             }
         },
         None => None,
@@ -433,8 +496,9 @@ async fn build_query_params(
         Some(until_str) => match date_parser::parse_date(until_str) {
             Ok(date) => Some(date),
             Err(e) => {
-                log::error!("Invalid --until date '{}': {}", until_str, e);
-                exit(1);
+                return Err(StartupError::QueryValidationFailed {
+                    message: format!("Invalid --until date '{}': {}", until_str, e),
+                });
             }
         },
         None => None,
@@ -479,11 +543,12 @@ async fn build_query_params(
 
     // Validate query parameters
     if let Err(e) = query_params.validate() {
-        log::error!("Invalid query parameters: {}", e);
-        exit(1);
+        return Err(StartupError::QueryValidationFailed {
+            message: e.to_string(),
+        });
     }
 
-    query_params
+    Ok(query_params)
 }
 
 /// Configure scanner manager and integrate with plugins - returns configured ScannerManager
@@ -493,12 +558,8 @@ async fn configure_scanner(
 ) -> Option<std::sync::Arc<crate::scanner::api::ScannerManager>> {
     use crate::scanner::api::ScannerManager;
 
-    // Default to current directory if no repositories specified
-    let repositories_to_scan = if repositories.is_empty() {
-        vec![std::path::PathBuf::from(".")]
-    } else {
-        repositories.to_vec()
-    };
+    // Repository list is already normalized upstream to include default current directory
+    let repositories_to_scan = repositories.to_vec();
 
     // Step 1: Create ScannerManager
     let scanner_manager = ScannerManager::create().await;
@@ -534,7 +595,10 @@ async fn configure_scanner(
             .setup_plugin_consumers(&queue_manager, &plugin_names, &plugin_args)
             .await
         {
-            handle_plugin_error(&e, "Failed to setup plugin consumers for queue integration");
+            log_plugin_error_with_context(
+                &e,
+                "Failed to setup plugin consumers for queue integration",
+            );
             log::debug!("Plugin names: {plugin_names:?}");
             return None;
         }

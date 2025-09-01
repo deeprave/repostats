@@ -3,6 +3,7 @@
 //! Comprehensive error types for plugin operations including loading, execution,
 //! compatibility checking, and runtime failures.
 
+use crate::core::error_handling::ContextualError;
 use std::fmt;
 
 /// Result type alias for plugin operations
@@ -68,3 +69,37 @@ impl fmt::Display for PluginError {
 }
 
 impl std::error::Error for PluginError {}
+
+impl ContextualError for PluginError {
+    fn is_user_actionable(&self) -> bool {
+        match self {
+            // Clear user-actionable errors that users can fix
+            PluginError::Generic { .. } => true,
+            PluginError::VersionIncompatible { .. } => true,
+            PluginError::PluginNotFound { .. } => true,
+
+            // System/internal errors that users cannot directly fix
+            PluginError::LoadError { .. }
+            | PluginError::ExecutionError { .. }
+            | PluginError::AsyncError { .. } => false,
+        }
+    }
+
+    fn user_message(&self) -> Option<&str> {
+        match self {
+            // User-actionable errors with specific messages
+            PluginError::Generic { message } => Some(message),
+            PluginError::VersionIncompatible { message } => Some(message),
+
+            // PluginNotFound could show a helpful message
+            PluginError::PluginNotFound { plugin_name: _ } => {
+                // For now, let system context handle this
+                // Could be enhanced to show "Plugin 'xyz' not found. Check plugin directory."
+                None
+            }
+
+            // System errors - let generic context handle them
+            _ => None,
+        }
+    }
+}

@@ -33,6 +33,16 @@ impl fmt::Display for ValidationError {
 
 impl Error for ValidationError {}
 
+impl crate::core::error_handling::ContextualError for ValidationError {
+    fn is_user_actionable(&self) -> bool {
+        true // All validation errors are user-actionable
+    }
+
+    fn user_message(&self) -> Option<&str> {
+        Some(&self.details)
+    }
+}
+
 impl From<String> for ValidationError {
     fn from(msg: String) -> Self {
         ValidationError { details: msg }

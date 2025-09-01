@@ -9,6 +9,7 @@ pub(crate) mod builtin;
 pub(crate) mod context;
 pub(crate) mod discovery;
 pub(crate) mod error;
+pub(crate) mod error_handling;
 pub(crate) mod manager;
 pub(crate) mod registry;
 pub(crate) mod settings;
