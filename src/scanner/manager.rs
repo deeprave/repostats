@@ -371,11 +371,8 @@ impl ScannerManager {
         repository_paths: &[PathBuf],
         query_params: Option<&QueryParams>,
     ) -> ScanResult<Vec<Arc<ScannerTask>>> {
-        if repository_paths.is_empty() {
-            return Err(ScanError::Configuration {
-                message: "No repositories provided for scanning".to_string(),
-            });
-        }
+        // Note: Empty repository list is handled by startup layer which defaults to current directory
+        // so this method should never receive an empty list in normal operation
 
         let mut created_scanners = Vec::new();
         let mut failed_repositories = Vec::new();

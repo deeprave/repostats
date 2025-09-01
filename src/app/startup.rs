@@ -5,6 +5,24 @@ use log;
 use std::process::exit;
 use toml;
 
+/// Unified error handler for all plugin operations
+///
+/// Preserves specific error messages for user-actionable errors (like argument parsing)
+/// while maintaining generic error handling with debug details for system errors.
+fn handle_plugin_error(e: &PluginError, operation: &str) {
+    match e {
+        PluginError::Generic { message } => {
+            // For generic errors (like argument parsing), show the specific message
+            log::error!("FATAL: {}", message);
+        }
+        _ => {
+            // For other plugin errors, show generic message with debug details
+            log::error!("FATAL: {}", operation);
+            log::debug!("Error details: {}", e);
+        }
+    }
+}
+
 /// Core startup implementation - returns configured ScannerManager
 ///
 /// # Error Handling
@@ -104,7 +122,10 @@ pub async fn startup(
     let commands = match discover_commands(_plugin_dir, &args.plugin_exclusions).await {
         Ok(commands) => commands,
         Err(e) => {
-            log::error!("FATAL: Plugin discovery failed - cannot proceed without plugins: {e}");
+            handle_plugin_error(
+                &e,
+                "Plugin discovery failed - cannot proceed without plugins",
+            );
             exit(1);
         }
     };
@@ -254,36 +275,31 @@ async fn configure_plugins(
     // Step 1: Set plugin configurations from TOML config if available
     if let Some(config) = toml_config {
         if let Err(e) = plugin_manager.set_plugin_configs(config) {
-            log::error!("FATAL: Failed to set plugin configurations from TOML config");
-            log::debug!("Error details: {}", e);
+            handle_plugin_error(&e, "Failed to set plugin configurations from TOML config");
             exit(1);
         }
     }
 
     // Step 2: Activate plugins based on command segments
     if let Err(e) = plugin_manager.activate_plugins(command_segments).await {
-        log::error!("FATAL: Could not activate plugins");
-        log::debug!("Error details: {}", e);
+        handle_plugin_error(&e, "Could not activate plugins");
         exit(1);
     }
 
     // Step 3: Initialise active plugins with their configurations
     if let Err(e) = plugin_manager.initialize_active_plugins().await {
-        log::error!("FATAL: Plugin initialization failed");
-        log::debug!("Error details: {}", e);
+        handle_plugin_error(&e, "Plugin initialization failed");
         exit(1);
     }
 
     // Step 4: Setup notification subscribers for plugins and plugin manager
     if let Err(e) = plugin_manager.setup_plugin_notification_subscribers().await {
-        log::error!("FATAL: Failed to setup plugins");
-        log::debug!("Error details: {}", e);
+        handle_plugin_error(&e, "Failed to setup plugins");
         exit(1);
     }
 
     if let Err(e) = plugin_manager.setup_system_notification_subscriber().await {
-        log::error!("FATAL: Failed to setup plugin manager");
-        log::debug!("Error details: {}", e);
+        handle_plugin_error(&e, "Failed to setup plugin manager");
         exit(1);
     }
 
@@ -518,8 +534,8 @@ async fn configure_scanner(
             .setup_plugin_consumers(&queue_manager, &plugin_names, &plugin_args)
             .await
         {
-            log::error!("Failed to setup plugin consumers for queue integration");
-            log::debug!("Error details: {e} - Plugin names: {plugin_names:?}");
+            handle_plugin_error(&e, "Failed to setup plugin consumers for queue integration");
+            log::debug!("Plugin names: {plugin_names:?}");
             return None;
         }
     }
