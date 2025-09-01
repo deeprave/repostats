@@ -7,6 +7,9 @@ pub mod command_segmenter;
 pub mod date_parser;
 pub mod display;
 
+// Re-export commonly used types
+pub use args::CheckoutSettings;
+
 pub struct RequiredArgs {
     pub global_args: Vec<String>,
     pub config_file: Option<PathBuf>,
