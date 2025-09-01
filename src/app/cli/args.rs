@@ -7,6 +7,7 @@ use crate::core::validation::{split_and_collect, ValidationError};
 use crate::scanner::checkout::manager::TemplateVars;
 use clap::{ArgAction, Parser};
 use log;
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 // Global arguments structure with all command-line options
@@ -168,11 +169,13 @@ impl Args {
     /// This method makes the default behavior explicit by converting empty repository
     /// lists to vec![PathBuf::from(".")] instead of relying on downstream defaulting.
     /// This eliminates hidden invariants and makes the behavior predictable.
-    pub fn normalized_repositories(&self) -> Vec<PathBuf> {
+    ///
+    /// Returns a Cow to avoid cloning when the repository list is already populated.
+    pub fn normalized_repositories(&self) -> Cow<'_, [PathBuf]> {
         if self.repository.is_empty() {
-            vec![PathBuf::from(".")]
+            Cow::Owned(vec![PathBuf::from(".")])
         } else {
-            self.repository.clone()
+            Cow::Borrowed(&self.repository)
         }
     }
 

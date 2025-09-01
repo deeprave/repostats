@@ -12,6 +12,12 @@
 /// - User-actionable errors (like validation failures) should show specific messages
 /// - System errors (like IO failures) should show generic context to avoid overwhelming users
 /// - All errors should provide debug details for system administrators
+///
+/// # Implementation Consistency
+/// **IMPORTANT**: When `is_user_actionable()` returns `true`, `user_message()` should return
+/// `Some(message)` with a helpful, actionable message. When `is_user_actionable()` returns
+/// `false`, `user_message()` should return `None`. This ensures consistent error handling
+/// behavior across the application.
 pub trait ContextualError: std::error::Error {
     /// Returns true if this error contains a specific, user-actionable message
     /// that should be displayed directly to the user
