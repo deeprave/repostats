@@ -471,6 +471,7 @@ impl ScannerTask {
             insertions: 0,
             deletions: 0,
             is_binary: false,
+            checkout_path: None,
         };
 
         Ok(vec![ScanMessage::FileChange {
@@ -582,6 +583,7 @@ impl ScannerTask {
             insertions: 10,
             deletions: 5,
             is_binary: false,
+            checkout_path: None,
         };
 
         file_change_messages.push(ScanMessage::FileChange {

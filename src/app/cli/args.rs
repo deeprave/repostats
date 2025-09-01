@@ -163,7 +163,30 @@ pub struct Args {
     pub checkout_rev: Option<String>,
 }
 
+/// Settings for file checkout functionality
+#[derive(Debug, Clone)]
+pub struct CheckoutSettings {
+    pub checkout_template: Option<String>,
+    pub keep_checkouts: bool,
+    pub force_overwrite: bool,
+    pub default_revision: Option<String>,
+}
+
 impl Args {
+    /// Extract checkout settings from CLI arguments
+    pub fn checkout_settings(&self) -> Option<CheckoutSettings> {
+        if self.checkout_dir.is_none() {
+            return None;
+        }
+
+        Some(CheckoutSettings {
+            checkout_template: self.checkout_dir.clone(),
+            keep_checkouts: self.checkout_keep && !self.no_checkout_keep,
+            force_overwrite: self.checkout_force,
+            default_revision: self.checkout_rev.clone(),
+        })
+    }
+
     /// Get normalized repository list with explicit default to current directory
     ///
     /// This method makes the default behavior explicit by converting empty repository

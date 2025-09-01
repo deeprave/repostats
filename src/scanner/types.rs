@@ -2,6 +2,7 @@
 //!
 //! Shared types and enums used throughout the scanner module.
 
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Bitflags for scanner requirements from plugins
@@ -184,6 +185,8 @@ pub struct FileChangeData {
     pub insertions: usize,
     pub deletions: usize,
     pub is_binary: bool,
+    /// Path to checkout directory where file content is available (if FILE_CONTENT requirement is active)
+    pub checkout_path: Option<PathBuf>,
 }
 
 /// Repository metadata information
