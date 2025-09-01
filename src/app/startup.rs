@@ -1,8 +1,9 @@
 use crate::app::cli::display::display_plugin_table;
+use crate::core::error_handling::log_error_with_context;
 use crate::core::error_handling::ContextualError;
 use crate::core::services::get_services;
 use crate::core::validation::ValidationError;
-use crate::plugin::api::{log_plugin_error_with_context, PluginError};
+use crate::plugin::error::PluginError;
 use log;
 use std::fmt;
 use toml;
@@ -74,7 +75,10 @@ impl ContextualError for StartupError {
 
     fn user_message(&self) -> Option<&str> {
         match self {
-            StartupError::ValidationFailed { error } => Some(error.details()),
+            StartupError::ValidationFailed { error } => {
+                // Use the ContextualError trait method for consistency
+                error.user_message()
+            }
             StartupError::QueryValidationFailed { message } => Some(message),
             StartupError::CommandSegmentationFailed { message } => Some(message),
             StartupError::ConfigurationError { message } => Some(message),
@@ -595,10 +599,7 @@ async fn configure_scanner(
             .setup_plugin_consumers(&queue_manager, &plugin_names, &plugin_args)
             .await
         {
-            log_plugin_error_with_context(
-                &e,
-                "Failed to setup plugin consumers for queue integration",
-            );
+            log_error_with_context(&e, "Failed to setup plugin consumers for queue integration");
             log::debug!("Plugin names: {plugin_names:?}");
             return None;
         }

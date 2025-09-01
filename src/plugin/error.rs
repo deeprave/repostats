@@ -91,11 +91,9 @@ impl ContextualError for PluginError {
             PluginError::Generic { message } => Some(message),
             PluginError::VersionIncompatible { message } => Some(message),
 
-            // PluginNotFound could show a helpful message
+            // PluginNotFound shows a helpful message to guide users
             PluginError::PluginNotFound { plugin_name: _ } => {
-                // For now, let system context handle this
-                // Could be enhanced to show "Plugin 'xyz' not found. Check plugin directory."
-                None
+                Some("Plugin not found. Check your plugin directory or plugin name spelling.")
             }
 
             // System errors - let generic context handle them

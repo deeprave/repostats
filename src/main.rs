@@ -19,6 +19,13 @@ pub fn get_plugin_api_version() -> u32 {
 
 static COMMAND_NAME: &str = "repostats";
 
+/// Main application entry point with unified error handling
+///
+/// The startup process returns a Result to enable proper error logging through
+/// the ContextualError trait system before exiting. This allows:
+/// - User-actionable errors to show specific, helpful messages
+/// - System errors to show generic context with debug details
+/// - Consistent error formatting across all startup failures
 #[tokio::main]
 async fn main() {
     // Try to get command name from args, otherwise use default
