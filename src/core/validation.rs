@@ -47,12 +47,6 @@ impl From<&str> for ValidationError {
     }
 }
 
-impl From<ValidationError> for String {
-    fn from(err: ValidationError) -> Self {
-        err.details
-    }
-}
-
 /// Split comma-separated items and collect unique trimmed non-empty strings
 pub fn split_and_collect<T, F>(items: &[T], to_string: F, deduplicate: bool) -> Vec<String>
 where
