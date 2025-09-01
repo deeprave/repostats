@@ -3,8 +3,6 @@
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
 use crate::core::query::QueryParams;
-#[cfg(test)]
-use crate::scanner::error::ScanResult;
 use crate::scanner::types::ScanRequires;
 
 /// Individual scanner task for a specific repository

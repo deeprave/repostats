@@ -3,8 +3,9 @@
 //! This module handles the complete parsing of global arguments after segmentation.
 //! It uses standard clap parsing since we have clean global args at this stage.
 
+use crate::core::validation::{split_and_collect, ValidationError};
+use crate::scanner::checkout::manager::TemplateVars;
 use clap::{ArgAction, Parser};
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 // Global arguments structure with all command-line options
@@ -160,6 +161,126 @@ pub struct Args {
     pub checkout_rev: Option<String>,
 }
 
+impl Args {
+    /// Validate CLI arguments for consistency and constraints
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        // Repository validation
+        if self.repository.is_empty() {
+            return Err(ValidationError::new(
+                "At least one repository must be specified",
+            ));
+        }
+
+        // Validate that all repository entries are non-empty and valid
+        for (index, repo) in self.repository.iter().enumerate() {
+            // Ensure path is valid UTF-8 for proper validation
+            let repo_str = match repo.to_str() {
+                Some(s) => s,
+                None => {
+                    return Err(ValidationError::new(&format!(
+                        "Repository path at index {} contains invalid UTF-8 characters. Please provide a valid UTF-8 path",
+                        index
+                    )));
+                }
+            };
+
+            let trimmed = repo_str.trim();
+            if trimmed.is_empty() {
+                return Err(ValidationError::new(&format!(
+                    "Repository at index {} cannot be empty",
+                    index
+                )));
+            }
+
+            // Check if path looks like a URL (don't validate filesystem for URLs)
+            if trimmed.starts_with("http://")
+                || trimmed.starts_with("https://")
+                || trimmed.starts_with("git@")
+            {
+                // URL repositories are valid - skip filesystem checks
+                continue;
+            }
+
+            // For local paths, validate existence and Git repository status
+            if !repo.exists() {
+                return Err(ValidationError::new(&format!(
+                    "Repository path at index {} does not exist: '{}'",
+                    index,
+                    repo.display()
+                )));
+            }
+
+            if !repo.is_dir() {
+                return Err(ValidationError::new(&format!(
+                    "Repository at index {} is not a directory: '{}'",
+                    index,
+                    repo.display()
+                )));
+            }
+
+            // Check if it's a Git repository
+            let git_dir = repo.join(".git");
+            if !git_dir.exists() {
+                return Err(ValidationError::new(&format!(
+                    "Repository at index {} is not a Git repository (no .git directory found): '{}'",
+                    index,
+                    repo.display()
+                )));
+            }
+        }
+
+        // Checkout functionality validation
+        let has_checkout_flags = self.checkout_dir.is_some()
+            || self.checkout_keep
+            || self.checkout_force
+            || self.checkout_rev.is_some();
+
+        if has_checkout_flags && self.repository.len() > 1 {
+            return Err(ValidationError::new(&format!(
+                "Checkout functionality currently supports single repository only (found {}, tracked in RS-29)",
+                self.repository.len()
+            )));
+        }
+
+        // Checkout flags require checkout-dir
+        if (self.checkout_keep || self.checkout_force || self.checkout_rev.is_some())
+            && self.checkout_dir.is_none()
+        {
+            return Err(ValidationError::new("Options --checkout-keep, --checkout-force, and --checkout-rev require --checkout-dir"));
+        }
+
+        // Validate checkout directory template if provided
+        if let Some(checkout_template) = &self.checkout_dir {
+            // Create test template variables for validation
+            let test_vars = TemplateVars::new(
+                "test-commit".to_string(),
+                "test-sha".to_string(),
+                "test-branch".to_string(),
+                "test-repo".to_string(),
+                "test-scanner".to_string(),
+            );
+
+            if let Err(e) = test_vars.render(checkout_template) {
+                return Err(ValidationError::new(&format!(
+                    "Invalid checkout directory template: {}",
+                    e
+                )));
+            }
+        }
+
+        // Max commits validation
+        if let Some(max) = self.max_commits {
+            if max == 0 {
+                return Err(ValidationError::new(
+                    "Option --max-commits must be greater than 0",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 impl Default for Args {
     fn default() -> Self {
         Self {
@@ -212,7 +333,7 @@ impl Args {
     }
 
     /// Apply enhanced parsing to handle comma-separated values, deduplication, and path validation
-    pub fn apply_enhanced_parsing(&mut self) -> Result<(), String> {
+    pub fn apply_enhanced_parsing(&mut self) -> Result<(), ValidationError> {
         self.repository = Self::parse_comma_separated_paths(&self.repository);
         self.plugin_exclusions = Self::parse_comma_separated_strings(&self.plugin_exclusions);
         self.author = Self::parse_comma_separated_strings(&self.author);
@@ -228,98 +349,39 @@ impl Args {
 
     /// Parse comma-separated paths from a vector of PathBufs
     fn parse_comma_separated_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
-        let mut result = Vec::new();
-
-        for path in paths {
-            let path_str = path.to_string_lossy();
-            // Known and accepted limitation: no support for paths containing a comma
-            if path_str.contains(',') {
-                // Split by comma and trim whitespace
-                for split_path in path_str.split(',') {
-                    let trimmed = split_path.trim();
-                    if !trimmed.is_empty() {
-                        result.push(PathBuf::from(trimmed));
-                    }
-                }
-            } else {
-                // No comma, use the path as-is
-                result.push(path.clone());
-            }
-        }
-
-        result
+        // Known and accepted limitation: no support for paths containing a comma
+        split_and_collect(paths, |path| path.to_string_lossy().to_string(), false)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
     }
 
     /// Parse comma-separated strings from a vector of Strings with deduplication
     fn parse_comma_separated_strings(strings: &[String]) -> Vec<String> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-
-        for string in strings {
-            if string.contains(',') {
-                // Split by comma and trim whitespace
-                for split_string in string.split(',') {
-                    let trimmed = split_string.trim().to_string();
-                    if !trimmed.is_empty() && !seen.contains(&trimmed) {
-                        seen.insert(trimmed.clone());
-                        result.push(trimmed);
-                    }
-                }
-            } else {
-                // No comma, use the string as-is
-                let trimmed = string.trim().to_string();
-                if !trimmed.is_empty() && !seen.contains(&trimmed) {
-                    seen.insert(trimmed.clone());
-                    result.push(trimmed);
-                }
-            }
-        }
-
-        result
+        split_and_collect(strings, |s| s.clone(), true)
     }
 
     /// Process a list of patterns, deduplicating and validating paths
     /// This deals with paths of files in a git commit, not filesystem paths
-    fn parse_comma_separated_path_patterns(strings: &[String]) -> Result<Vec<String>, String> {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
+    fn parse_comma_separated_path_patterns(
+        strings: &[String],
+    ) -> Result<Vec<String>, ValidationError> {
+        let parts = split_and_collect(strings, |s| s.clone(), true);
 
-        for string in strings {
-            if string.contains(',') {
-                // Split by comma and trim whitespace
-                for split_string in string.split(',') {
-                    let trimmed = split_string.trim();
-                    if !trimmed.is_empty() {
-                        let normalized = Self::normalize_path_pattern(trimmed)?;
-                        if !seen.contains(&normalized) {
-                            seen.insert(normalized.clone());
-                            result.push(normalized);
-                        }
-                    }
-                }
-            } else {
-                // No comma, use the string as-is
-                let trimmed = string.trim();
-                if !trimmed.is_empty() {
-                    let normalized = Self::normalize_path_pattern(trimmed)?;
-                    if !seen.contains(&normalized) {
-                        seen.insert(normalized.clone());
-                        result.push(normalized);
-                    }
-                }
-            }
+        for part in &parts {
+            Self::normalize_path_pattern(part)?;
         }
 
-        Ok(result)
+        Ok(parts)
     }
 
     /// Normalize path patterns, rejecting absolute paths with a clear error
-    fn normalize_path_pattern(pattern: &str) -> Result<String, String> {
+    fn normalize_path_pattern(pattern: &str) -> Result<String, ValidationError> {
         if pattern.starts_with('/') {
-            Err(format!(
-                "Absolute paths are not supported in path patterns: '{}'. Please use a relative path.",
+            Err(ValidationError::new(&format!(
+                "Absolute paths are not supported in path patterns: '{}'. Please use a relative path",
                 pattern
-            ))
+            )))
         } else {
             Ok(pattern.to_string())
         }
@@ -1693,8 +1755,8 @@ mod tests {
 
         let mut result = Args::try_parse_from(&args).unwrap();
         let error = result.apply_enhanced_parsing().unwrap_err();
-        assert!(error.contains("Absolute paths are not supported"));
-        assert!(error.contains("/src/*.rs"));
+        assert!(error.details().contains("Absolute paths are not supported"));
+        assert!(error.details().contains("/src/*.rs"));
     }
 
     #[test]
@@ -1707,8 +1769,8 @@ mod tests {
 
         let mut result = Args::try_parse_from(&args).unwrap();
         let error = result.apply_enhanced_parsing().unwrap_err();
-        assert!(error.contains("Absolute paths are not supported"));
-        assert!(error.contains("/absolute/path"));
+        assert!(error.details().contains("Absolute paths are not supported"));
+        assert!(error.details().contains("/absolute/path"));
     }
 
     #[test]
@@ -2075,5 +2137,385 @@ mod tests {
         assert!(!result.no_checkout_keep);
         assert!(!result.checkout_force);
         assert_eq!(result.checkout_rev, None);
+    }
+
+    #[test]
+    fn test_validate_single_repository_with_checkout_success() {
+        let mut args = Args::default();
+        args.repository = vec!["https://github.com/user/repo.git".into()];
+        args.checkout_dir = Some("/tmp/checkout".to_string());
+
+        let result = args.validate();
+        assert!(
+            result.is_ok(),
+            "Single repository with checkout should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_multiple_repositories_without_checkout_success() {
+        let mut args = Args::default();
+        args.repository = vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ];
+        // No checkout flags set
+
+        let result = args.validate();
+        assert!(
+            result.is_ok(),
+            "Multiple repositories without checkout should be valid"
+        );
+    }
+
+    #[test]
+    fn test_validate_multiple_repositories_with_checkout_dir_error() {
+        let mut args = Args::default();
+        args.repository = vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ];
+        args.checkout_dir = Some("/tmp/checkout".to_string());
+
+        let result = args.validate();
+        assert!(
+            result.is_err(),
+            "Multiple repositories with --checkout-dir should fail"
+        );
+        let error = result.unwrap_err();
+        assert!(error
+            .details()
+            .contains("Checkout functionality currently supports single repository only"));
+        assert!(error.details().contains("found 2"));
+        assert!(error.details().contains("RS-29"));
+    }
+
+    #[test]
+    fn test_validate_multiple_repositories_with_checkout_keep_error() {
+        let mut args = Args::default();
+        args.repository = vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ];
+        args.checkout_keep = true;
+
+        let result = args.validate();
+        assert!(
+            result.is_err(),
+            "Multiple repositories with --checkout-keep should fail"
+        );
+    }
+
+    #[test]
+    fn test_validate_multiple_repositories_with_checkout_force_error() {
+        let mut args = Args::default();
+        args.repository = vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ];
+        args.checkout_force = true;
+
+        let result = args.validate();
+        assert!(
+            result.is_err(),
+            "Multiple repositories with --checkout-force should fail"
+        );
+    }
+
+    #[test]
+    fn test_validate_multiple_repositories_with_checkout_rev_error() {
+        let mut args = Args::default();
+        args.repository = vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ];
+        args.checkout_rev = Some("main".to_string());
+
+        let result = args.validate();
+        assert!(
+            result.is_err(),
+            "Multiple repositories with --checkout-rev should fail"
+        );
+    }
+
+    #[test]
+    fn test_validate_empty_repository_list_error() {
+        let args = Args::default(); // repository list is empty by default
+
+        let result = args.validate();
+        assert!(
+            result.is_err(),
+            "Empty repository list should fail validation"
+        );
+        let error = result.unwrap_err();
+        assert!(error
+            .details()
+            .contains("At least one repository must be specified"));
+    }
+
+    #[test]
+    fn test_validate_checkout_flags_without_dir_error() {
+        let mut args = Args::default();
+        args.repository = vec!["https://github.com/user/repo.git".into()];
+        args.checkout_keep = true;
+        // checkout_dir is None
+
+        let result = args.validate();
+        assert!(
+            result.is_err(),
+            "--checkout-keep without --checkout-dir should fail"
+        );
+        let error = result.unwrap_err();
+        assert!(error.details().contains("require --checkout-dir"));
+    }
+
+    #[test]
+    fn test_validate_max_commits_zero_error() {
+        let mut args = Args::default();
+        args.repository = vec!["https://github.com/user/repo.git".into()];
+        args.max_commits = Some(0);
+
+        let result = args.validate();
+        assert!(result.is_err(), "--max-commits 0 should fail validation");
+        let error = result.unwrap_err();
+        assert!(error.details().contains("must be greater than 0"));
+    }
+
+    #[test]
+    fn test_validate_max_commits_positive_success() {
+        let mut args = Args::default();
+        args.repository = vec!["https://github.com/user/repo.git".into()];
+        args.max_commits = Some(100);
+
+        let result = args.validate();
+        assert!(
+            result.is_ok(),
+            "--max-commits with positive value should be valid"
+        );
+    }
+
+    // Integration tests - verify end-to-end CLI validation functionality
+    mod integration_tests {
+        use super::*;
+
+        #[test]
+        fn test_end_to_end_cli_validation_integration() {
+            // Test that Args parsing + validation works together
+            let mut args = Args::default();
+
+            // Valid case: single repo, no checkout flags
+            args.repository = vec!["https://github.com/user/repo.git".into()];
+            assert!(args.validate().is_ok(), "Valid args should pass validation");
+
+            // Invalid case: checkout flags with multiple repos (caught by validation)
+            args.repository = vec![
+                "https://github.com/user/repo1.git".into(),
+                "https://github.com/user/repo2.git".into(),
+            ];
+            args.checkout_dir = Some("/tmp/checkout".to_string());
+
+            let result = args.validate();
+            assert!(result.is_err(), "Invalid config should fail validation");
+
+            let error = result.unwrap_err();
+            assert!(
+                error.details().contains("single repository only"),
+                "Error should mention single repo restriction"
+            );
+            assert!(
+                error.details().contains("RS-29"),
+                "Error should reference RS-29"
+            );
+        }
+
+        #[test]
+        fn test_validation_prevents_invalid_startup_configs() {
+            // Simulate different invalid configurations that would be caught at startup
+
+            // Case 1: Empty repository list
+            let args_empty = Args::default();
+            assert!(args_empty.validate().is_err(), "Empty repos should fail");
+
+            // Case 2: Checkout flags without checkout-dir
+            let mut args_incomplete = Args::default();
+            args_incomplete.repository = vec!["/repo".into()];
+            args_incomplete.checkout_keep = true; // Missing checkout_dir
+            assert!(
+                args_incomplete.validate().is_err(),
+                "Incomplete checkout config should fail"
+            );
+
+            // Case 3: Invalid max commits
+            let mut args_bad_commits = Args::default();
+            args_bad_commits.repository = vec!["/repo".into()];
+            args_bad_commits.max_commits = Some(0);
+            assert!(
+                args_bad_commits.validate().is_err(),
+                "Zero max commits should fail"
+            );
+        }
+
+        #[test]
+        fn test_complete_valid_configurations_pass() {
+            // Test various valid configurations that should work end-to-end
+
+            // Case 1: Remote repository URLs (should pass validation)
+            let mut args_url = Args::default();
+            args_url.repository = vec!["https://github.com/user/repo.git".into()];
+            assert!(
+                args_url.validate().is_ok(),
+                "Remote repository URL should be valid"
+            );
+
+            // Case 2: Git SSH URL with checkout
+            let mut args_ssh_checkout = Args::default();
+            args_ssh_checkout.repository = vec!["git@github.com:user/repo.git".into()];
+            args_ssh_checkout.checkout_dir = Some("/tmp/{commit-id}".to_string());
+            args_ssh_checkout.checkout_keep = true;
+            assert!(
+                args_ssh_checkout.validate().is_ok(),
+                "SSH repo with checkout should be valid"
+            );
+
+            // Case 3: Multiple remote repos without checkout
+            let mut args_multi_url = Args::default();
+            args_multi_url.repository = vec![
+                "https://github.com/user/repo1.git".into(),
+                "https://github.com/user/repo2.git".into(),
+            ];
+            assert!(
+                args_multi_url.validate().is_ok(),
+                "Multiple remote repos should be valid"
+            );
+        }
+
+        #[test]
+        fn test_validate_local_git_repository() {
+            use std::fs;
+            use tempfile::TempDir;
+
+            // Create a temporary Git repository for testing
+            let temp_dir = TempDir::new().expect("Failed to create temp directory");
+            let git_dir = temp_dir.path().join(".git");
+            fs::create_dir(&git_dir).expect("Failed to create .git directory");
+
+            // Test with valid Git repository
+            let mut args_valid_git = Args::default();
+            args_valid_git.repository = vec![temp_dir.path().to_path_buf()];
+            assert!(
+                args_valid_git.validate().is_ok(),
+                "Valid Git repository should pass validation"
+            );
+
+            // Test with non-existent path
+            let mut args_nonexistent = Args::default();
+            args_nonexistent.repository = vec!["/this/path/does/not/exist".into()];
+            let result = args_nonexistent.validate();
+            assert!(
+                result.is_err(),
+                "Non-existent repository should fail validation"
+            );
+            assert!(result.unwrap_err().details().contains("does not exist"));
+
+            // Test with existing directory but not a Git repository
+            let non_git_dir = TempDir::new().expect("Failed to create temp directory");
+            let mut args_not_git = Args::default();
+            args_not_git.repository = vec![non_git_dir.path().to_path_buf()];
+            let result_not_git = args_not_git.validate();
+            assert!(
+                result_not_git.is_err(),
+                "Directory without .git should fail validation"
+            );
+            assert!(result_not_git
+                .unwrap_err()
+                .details()
+                .contains("not a Git repository"));
+        }
+
+        #[test]
+        fn test_validate_checkout_template_variables() {
+            // Test valid checkout template
+            let mut args_valid = Args::default();
+            args_valid.repository = vec!["https://github.com/user/repo.git".into()];
+            args_valid.checkout_dir = Some("/tmp/{repo}/{commit-id}".to_string());
+            assert!(
+                args_valid.validate().is_ok(),
+                "Valid checkout template should pass"
+            );
+
+            // Test invalid checkout template with unknown variable
+            let mut args_invalid = Args::default();
+            args_invalid.repository = vec!["https://github.com/user/repo.git".into()];
+            args_invalid.checkout_dir = Some("/tmp/{unknown-var}".to_string());
+            let result = args_invalid.validate();
+            assert!(
+                result.is_err(),
+                "Invalid checkout template should fail validation"
+            );
+            let error_msg = result.unwrap_err();
+            assert!(error_msg
+                .details()
+                .contains("Invalid checkout directory template"));
+            assert!(error_msg.details().contains("unknown-var"));
+
+            // Test checkout template with all valid variables
+            let mut args_all_vars = Args::default();
+            args_all_vars.repository = vec!["https://github.com/user/repo.git".into()];
+            args_all_vars.checkout_dir = Some(
+                "{tmpdir}/{repo}/{pid}-{scanner-id}-{commit-id}-{sha256}-{branch}".to_string(),
+            );
+            assert!(
+                args_all_vars.validate().is_ok(),
+                "Template with all variables should pass"
+            );
+        }
+
+        #[test]
+        fn test_validate_empty_repository_strings() {
+            use std::path::PathBuf;
+
+            // Test empty string in repository vector
+            let mut args = Args::default();
+            args.repository = vec![PathBuf::from("")];
+            let result = args.validate();
+            assert!(
+                result.is_err(),
+                "Empty repository string should fail validation"
+            );
+            assert!(result
+                .unwrap_err()
+                .details()
+                .contains("Repository at index 0 cannot be empty"));
+
+            // Test whitespace-only string in repository vector
+            let mut args_ws = Args::default();
+            args_ws.repository = vec![PathBuf::from("  \t\n  ")];
+            let result_ws = args_ws.validate();
+            assert!(
+                result_ws.is_err(),
+                "Whitespace-only repository string should fail validation"
+            );
+            assert!(result_ws
+                .unwrap_err()
+                .details()
+                .contains("Repository at index 0 cannot be empty"));
+
+            // Test mixed valid and invalid repositories
+            let mut args_mixed = Args::default();
+            args_mixed.repository = vec![
+                PathBuf::from("https://github.com/user/repo.git"),
+                PathBuf::from(""),
+                PathBuf::from("https://github.com/user/repo2.git"),
+            ];
+            let result_mixed = args_mixed.validate();
+            assert!(
+                result_mixed.is_err(),
+                "Mixed valid/invalid repositories should fail validation"
+            );
+            assert!(result_mixed
+                .unwrap_err()
+                .details()
+                .contains("Repository at index 1 cannot be empty"));
+        }
     }
 }

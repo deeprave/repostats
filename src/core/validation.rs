@@ -3,18 +3,114 @@
 //! Provides advanced validation logic for filter combinations and argument values.
 
 use crate::app::cli::date_parser;
+use std::collections::HashSet;
+use std::error::Error;
+use std::fmt;
+
+/// Custom error type for validation errors
+#[derive(Debug)]
+pub struct ValidationError {
+    details: String,
+}
+
+impl ValidationError {
+    pub fn new(msg: &str) -> ValidationError {
+        ValidationError {
+            details: msg.to_string(),
+        }
+    }
+
+    pub fn details(&self) -> &str {
+        &self.details
+    }
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl Error for ValidationError {}
+
+impl From<String> for ValidationError {
+    fn from(msg: String) -> Self {
+        ValidationError { details: msg }
+    }
+}
+
+impl From<&str> for ValidationError {
+    fn from(msg: &str) -> Self {
+        ValidationError {
+            details: msg.to_string(),
+        }
+    }
+}
+
+impl From<ValidationError> for String {
+    fn from(err: ValidationError) -> Self {
+        err.details
+    }
+}
+
+/// Split comma-separated items and collect unique trimmed non-empty strings
+pub fn split_and_collect<T, F>(items: &[T], to_string: F, deduplicate: bool) -> Vec<String>
+where
+    F: Fn(&T) -> String,
+{
+    let mut seen = if deduplicate {
+        Some(HashSet::new())
+    } else {
+        None
+    };
+    let mut result = Vec::new();
+
+    for item in items {
+        let item_str = to_string(item);
+        let parts = if item_str.contains(',') {
+            item_str
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect()
+        } else {
+            let trimmed = item_str.trim();
+            if trimmed.is_empty() {
+                vec![]
+            } else {
+                vec![trimmed]
+            }
+        };
+
+        for part in parts {
+            let part_string = part.to_string();
+            if let Some(ref mut seen_set) = seen {
+                if !seen_set.contains(&part_string) {
+                    seen_set.insert(part_string.clone());
+                    result.push(part_string);
+                }
+            } else {
+                result.push(part_string);
+            }
+        }
+    }
+    result
+}
 
 /// Validate date range arguments (since/until can now handle both ISO 8601 and relative formats)
-pub fn validate_date_range(since: Option<&str>, until: Option<&str>) -> Result<(), String> {
+pub fn validate_date_range(
+    since: Option<&str>,
+    until: Option<&str>,
+) -> Result<(), ValidationError> {
     if let (Some(since_str), Some(until_str)) = (since, until) {
-        let start_time = date_parser::parse_date(since_str)?;
-        let end_time = date_parser::parse_date(until_str)?;
+        let start_time = date_parser::parse_date(since_str).map_err(ValidationError::from)?;
+        let end_time = date_parser::parse_date(until_str).map_err(ValidationError::from)?;
 
         if start_time > end_time {
-            return Err(format!(
+            return Err(ValidationError::new(&format!(
                 "Start date '{}' (--since) is after end date '{}' (--until)",
                 since_str, until_str
-            ));
+            )));
         }
     }
     Ok(())
@@ -23,37 +119,45 @@ pub fn validate_date_range(since: Option<&str>, until: Option<&str>) -> Result<(
 // Reference conflict validation is no longer needed since we only have --ref
 
 /// Validate positive integer value
-pub fn validate_positive_int(value: &str) -> Result<usize, String> {
+pub fn validate_positive_int(value: &str) -> Result<usize, ValidationError> {
     match value.parse::<usize>() {
-        Ok(0) => Err("Value must be greater than 0".to_string()),
+        Ok(0) => Err(ValidationError::new("Value must be greater than 0")),
         Ok(n) => Ok(n),
-        Err(_) => Err(format!("'{}' is not a valid positive integer", value)),
+        Err(_) => Err(ValidationError::new(&format!(
+            "'{}' is not a valid positive integer",
+            value
+        ))),
     }
 }
 
 /// Validate file extension format
-pub fn validate_extension(ext: &str) -> Result<String, String> {
+pub fn validate_extension(ext: &str) -> Result<String, ValidationError> {
     // Remove leading dot if present
     let cleaned = if ext.starts_with('.') { &ext[1..] } else { ext };
 
     // Check for invalid characters
     if cleaned.is_empty() {
-        return Err("Extension cannot be empty".to_string());
+        return Err(ValidationError::new("Extension cannot be empty"));
     }
 
     if cleaned.contains('/') || cleaned.contains('\\') {
-        return Err("Extension cannot contain path separators".to_string());
+        return Err(ValidationError::new(
+            "Extension cannot contain path separators",
+        ));
     }
 
     Ok(cleaned.to_lowercase())
 }
 
 /// Validate glob pattern syntax
-pub fn validate_glob_pattern(pattern: &str) -> Result<String, String> {
+pub fn validate_glob_pattern(pattern: &str) -> Result<String, ValidationError> {
     // Try to compile as glob pattern
     match glob::Pattern::new(pattern) {
         Ok(_) => Ok(pattern.to_string()),
-        Err(e) => Err(format!("Invalid glob pattern '{}': {}", pattern, e)),
+        Err(e) => Err(ValidationError::new(&format!(
+            "Invalid glob pattern '{}': {}",
+            pattern, e
+        ))),
     }
 }
 
@@ -63,26 +167,26 @@ pub fn validate_filter_combinations(
     exclude_patterns: &[String],
     include_extensions: &[String],
     exclude_extensions: &[String],
-) -> Result<(), String> {
+) -> Result<(), ValidationError> {
     // Check for overlapping include/exclude extensions
     for inc_ext in include_extensions {
         if exclude_extensions.contains(inc_ext) {
-            return Err(format!(
+            return Err(ValidationError::new(&format!(
                 "Extension '{}' is both included and excluded. \
                  Remove it from one of the lists.",
                 inc_ext
-            ));
+            )));
         }
     }
 
     // Check for identical include/exclude patterns
     for pattern in include_patterns {
         if exclude_patterns.contains(pattern) {
-            return Err(format!(
+            return Err(ValidationError::new(&format!(
                 "Pattern '{}' is both included and excluded. \
                  Remove it from one of the lists.",
                 pattern
-            ));
+            )));
         }
     }
 
