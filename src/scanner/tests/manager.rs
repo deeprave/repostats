@@ -647,7 +647,7 @@ async fn test_content_reconstruction_api() {
     // Test with invalid commit SHA - should error properly
     let invalid_sha = "0000000000000000000000000000000000000000";
     match scanner_task
-        .reconstruct_file_content("any_file.rs", invalid_sha)
+        .read_current_file_content("any_file.rs", invalid_sha)
         .await
     {
         Ok(_) => panic!("Should not work with invalid commit SHA"),
@@ -666,7 +666,7 @@ async fn test_content_reconstruction_api() {
     // Test API method exists with valid commit (functionality test)
     // The actual file content reconstruction logic is simplified for initial implementation
     match scanner_task
-        .reconstruct_file_content("README.md", &head_sha)
+        .read_current_file_content("README.md", &head_sha)
         .await
     {
         Ok(_) => {

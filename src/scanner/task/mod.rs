@@ -8,4 +8,7 @@ mod events;
 mod git_ops;
 mod queue_ops;
 
+#[cfg(test)]
+mod tests;
+
 pub use core::ScannerTask;

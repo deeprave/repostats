@@ -138,6 +138,26 @@ pub struct Args {
         help = "List all discovered plugins and their functions"
     )]
     pub plugins: bool,
+
+    /// Directory template for file checkout (supports {commit-id}, {sha256}, {branch}, {repo})
+    #[arg(long = "checkout-dir", value_name = "DIRECTORY")]
+    pub checkout_dir: Option<String>,
+
+    /// Keep checked out files after processing (only valid with --checkout-dir)
+    #[arg(long = "checkout-keep", conflicts_with = "no_checkout_keep")]
+    pub checkout_keep: bool,
+
+    /// Don't keep checked out files after processing (only valid with --checkout-dir)
+    #[arg(long = "no-checkout-keep", conflicts_with = "checkout_keep")]
+    pub no_checkout_keep: bool,
+
+    /// Overwrite existing content in checkout directory
+    #[arg(long = "checkout-force")]
+    pub checkout_force: bool,
+
+    /// Which revision to check out (default: HEAD)
+    #[arg(long = "checkout-rev", value_name = "REV")]
+    pub checkout_rev: Option<String>,
 }
 
 impl Default for Args {
@@ -168,6 +188,11 @@ impl Default for Args {
             merge_commits: false,
             max_files_per_commit: None,
             plugins: false,
+            checkout_dir: None,
+            checkout_keep: false,
+            no_checkout_keep: false,
+            checkout_force: false,
+            checkout_rev: None,
         }
     }
 }
@@ -551,6 +576,38 @@ impl Args {
                     .long("plugins")
                     .action(ArgAction::SetTrue)
                     .help("List all discovered plugins and their functions"),
+            )
+            .arg(
+                clap::Arg::new("checkout_dir")
+                    .long("checkout-dir")
+                    .value_name("DIRECTORY")
+                    .help("Directory template for file checkout (supports {commit-id}, {sha256}, {branch}, {repo})"),
+            )
+            .arg(
+                clap::Arg::new("checkout_keep")
+                    .long("checkout-keep")
+                    .conflicts_with("no_checkout_keep")
+                    .action(ArgAction::SetTrue)
+                    .help("Keep checked out files after processing (only valid with --checkout-dir)"),
+            )
+            .arg(
+                clap::Arg::new("no_checkout_keep")
+                    .long("no-checkout-keep")
+                    .conflicts_with("checkout_keep")
+                    .action(ArgAction::SetTrue)
+                    .help("Don't keep checked out files after processing (only valid with --checkout-dir)"),
+            )
+            .arg(
+                clap::Arg::new("checkout_force")
+                    .long("checkout-force")
+                    .action(ArgAction::SetTrue)
+                    .help("Overwrite existing content in checkout directory"),
+            )
+            .arg(
+                clap::Arg::new("checkout_rev")
+                    .long("checkout-rev")
+                    .value_name("REV")
+                    .help("Which revision to check out (default: HEAD)"),
             );
 
         // Add help/version args if requested (only in parse_from_args)
@@ -1130,6 +1187,23 @@ impl Args {
             args.no_merge_commits = true;
         } else if matches.get_flag("merge_commits") {
             args.no_merge_commits = false;
+        }
+
+        // Checkout arguments
+        if let Some(checkout_dir) = matches.get_one::<String>("checkout_dir") {
+            args.checkout_dir = Some(checkout_dir.clone());
+        }
+        if matches.get_flag("checkout_keep") {
+            args.checkout_keep = true;
+        }
+        if matches.get_flag("no_checkout_keep") {
+            args.no_checkout_keep = true;
+        }
+        if matches.get_flag("checkout_force") {
+            args.checkout_force = true;
+        }
+        if let Some(checkout_rev) = matches.get_one::<String>("checkout_rev") {
+            args.checkout_rev = Some(checkout_rev.clone());
         }
     }
 }
@@ -1921,5 +1995,85 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("Absolute paths are not supported"));
+    }
+
+    #[test]
+    fn test_checkout_dir_parsing() {
+        let args = vec![
+            "repostats".to_string(),
+            "--checkout-dir".to_string(),
+            "/tmp/checkout-{repo}-{commit-id}".to_string(),
+        ];
+
+        let result = Args::try_parse_from(&args).unwrap();
+        assert_eq!(
+            result.checkout_dir,
+            Some("/tmp/checkout-{repo}-{commit-id}".to_string())
+        );
+    }
+
+    #[test]
+    fn test_checkout_keep_flags() {
+        // Test --checkout-keep
+        let args_keep = vec!["repostats".to_string(), "--checkout-keep".to_string()];
+        let result_keep = Args::try_parse_from(&args_keep).unwrap();
+        assert!(result_keep.checkout_keep);
+        assert!(!result_keep.no_checkout_keep);
+
+        // Test --no-checkout-keep
+        let args_no_keep = vec!["repostats".to_string(), "--no-checkout-keep".to_string()];
+        let result_no_keep = Args::try_parse_from(&args_no_keep).unwrap();
+        assert!(!result_no_keep.checkout_keep);
+        assert!(result_no_keep.no_checkout_keep);
+
+        // Test mutual exclusion
+        let args_both = vec![
+            "repostats".to_string(),
+            "--checkout-keep".to_string(),
+            "--no-checkout-keep".to_string(),
+        ];
+        let result_both = Args::try_parse_from(&args_both);
+        assert!(result_both.is_err());
+    }
+
+    #[test]
+    fn test_checkout_force_flag() {
+        let args = vec!["repostats".to_string(), "--checkout-force".to_string()];
+
+        let result = Args::try_parse_from(&args).unwrap();
+        assert!(result.checkout_force);
+    }
+
+    #[test]
+    fn test_checkout_rev_parsing() {
+        let args = vec![
+            "repostats".to_string(),
+            "--checkout-rev".to_string(),
+            "main".to_string(),
+        ];
+
+        let result = Args::try_parse_from(&args).unwrap();
+        assert_eq!(result.checkout_rev, Some("main".to_string()));
+
+        // Test with commit SHA
+        let args_sha = vec![
+            "repostats".to_string(),
+            "--checkout-rev".to_string(),
+            "abc123def".to_string(),
+        ];
+
+        let result_sha = Args::try_parse_from(&args_sha).unwrap();
+        assert_eq!(result_sha.checkout_rev, Some("abc123def".to_string()));
+    }
+
+    #[test]
+    fn test_checkout_args_default_values() {
+        let result = Args::default();
+
+        assert_eq!(result.checkout_dir, None);
+        assert!(!result.checkout_keep);
+        assert!(!result.no_checkout_keep);
+        assert!(!result.checkout_force);
+        assert_eq!(result.checkout_rev, None);
     }
 }

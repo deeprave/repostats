@@ -15,6 +15,7 @@
 //! - **Event Coordination**: Lifecycle events via notification system
 
 // Internal modules - all access should go through api module
+pub(crate) mod checkout;
 pub(crate) mod error;
 pub(crate) mod manager;
 pub(crate) mod task;
