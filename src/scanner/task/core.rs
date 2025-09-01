@@ -139,7 +139,6 @@ impl ScannerTask {
     }
 
     /// Get the requirements for this scanner task
-    #[cfg(test)]
     pub fn requirements(&self) -> ScanRequires {
         self.requirements
     }

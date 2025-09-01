@@ -30,6 +30,9 @@ pub struct DumpPlugin {
     /// Whether to show message headers
     show_headers: bool,
 
+    /// Whether to request file content from scanner (enables checkout mode)
+    request_file_content: bool,
+
     /// Shutdown sender to signal task termination
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
@@ -41,6 +44,7 @@ impl DumpPlugin {
             initialized: false,
             output_format: OutputFormat::Text,
             show_headers: true,
+            request_file_content: false,
             shutdown_tx: None,
         }
     }
@@ -222,6 +226,7 @@ impl std::fmt::Debug for DumpPlugin {
             .field("initialized", &self.initialized)
             .field("output_format", &self.output_format)
             .field("show_headers", &self.show_headers)
+            .field("request_file_content", &self.request_file_content)
             .field("shutdown_tx", &self.shutdown_tx.is_some())
             .finish()
     }
@@ -258,7 +263,15 @@ impl Plugin for DumpPlugin {
     fn requirements(&self) -> ScanRequires {
         // Dump plugin needs comprehensive data for debugging purposes
         // Including repository info, history, and file changes for complete debugging visibility
-        ScanRequires::REPOSITORY_INFO | ScanRequires::HISTORY | ScanRequires::FILE_CHANGES
+        let mut reqs =
+            ScanRequires::REPOSITORY_INFO | ScanRequires::HISTORY | ScanRequires::FILE_CHANGES;
+
+        // If --checkout flag was used, also request file content for testing historical reconstruction
+        if self.request_file_content {
+            reqs |= ScanRequires::FILE_CONTENT;
+        }
+
+        reqs
     }
 
     async fn initialize(&mut self) -> PluginResult<()> {
@@ -306,6 +319,12 @@ impl Plugin for DumpPlugin {
                 .long("no-headers")
                 .action(clap::ArgAction::SetTrue)
                 .help("Don't show message headers (sequence, producer, etc.)"),
+        )
+        .arg(
+            Arg::new("checkout")
+                .long("checkout")
+                .action(clap::ArgAction::SetTrue)
+                .help("Request file content from scanner (enables historical file reconstruction testing)"),
         );
 
         // Parse arguments using clap
@@ -314,6 +333,7 @@ impl Plugin for DumpPlugin {
         // Determine format from arguments and configuration
         self.output_format = determine_format(&matches, config);
         self.show_headers = !matches.get_flag("no-headers");
+        self.request_file_content = matches.get_flag("checkout");
 
         Ok(())
     }
@@ -510,15 +530,28 @@ mod tests {
         assert!(result.is_ok());
         assert!(!plugin.show_headers);
 
-        // Removed max-messages test as it's no longer supported
+        // Test checkout flag
+        let result = plugin
+            .parse_plugin_arguments(&["--checkout".to_string()], &config)
+            .await;
+        assert!(result.is_ok());
+        assert!(plugin.request_file_content);
 
         // Test combined flags
         let result = plugin
-            .parse_plugin_arguments(&["--json".to_string(), "--no-headers".to_string()], &config)
+            .parse_plugin_arguments(
+                &[
+                    "--json".to_string(),
+                    "--no-headers".to_string(),
+                    "--checkout".to_string(),
+                ],
+                &config,
+            )
             .await;
         assert!(result.is_ok());
         assert_eq!(plugin.output_format, OutputFormat::Json);
         assert!(!plugin.show_headers);
+        assert!(plugin.request_file_content);
     }
 
     #[tokio::test]
@@ -601,5 +634,30 @@ mod tests {
 
         // Check that shutdown sender is consumed (cleared)
         assert!(plugin.shutdown_tx.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dump_plugin_requirements_with_checkout() {
+        // Test without checkout flag
+        let plugin = DumpPlugin::new();
+        let reqs = plugin.requirements();
+        assert!(reqs.requires_repository_info());
+        assert!(reqs.requires_history());
+        assert!(reqs.requires_file_changes());
+        assert!(!reqs.requires_file_content()); // Should not be included without --checkout
+
+        // Test with checkout flag
+        let mut plugin_with_checkout = DumpPlugin::new();
+        let config = PluginConfig::default();
+        let result = plugin_with_checkout
+            .parse_plugin_arguments(&["--checkout".to_string()], &config)
+            .await;
+        assert!(result.is_ok());
+
+        let reqs_with_checkout = plugin_with_checkout.requirements();
+        assert!(reqs_with_checkout.requires_repository_info());
+        assert!(reqs_with_checkout.requires_history());
+        assert!(reqs_with_checkout.requires_file_changes());
+        assert!(reqs_with_checkout.requires_file_content()); // Should be included with --checkout
     }
 }
