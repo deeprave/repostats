@@ -10,15 +10,7 @@ pub use crate::plugin::manager::PluginManager;
 
 // Error handling
 pub use crate::plugin::error::PluginError;
+pub use crate::plugin::error_handling::log_plugin_error_with_context;
 
 // Plugin metadata and information
 pub use crate::plugin::types::PluginInfo;
-
-// Plugin configuration and arguments
-
-// Plugin registry for management
-pub use crate::plugin::registry::{PluginRegistry, SharedPluginRegistry};
-
-// Plugin discovery and loading
-
-// Plugin context and settings

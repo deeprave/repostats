@@ -25,4 +25,21 @@ impl fmt::Display for ScanError {
 
 impl std::error::Error for ScanError {}
 
+impl crate::core::error_handling::ContextualError for ScanError {
+    fn is_user_actionable(&self) -> bool {
+        match self {
+            ScanError::Configuration { .. } => true, // User can fix config issues
+            ScanError::Repository { .. } => false,   // System/Git issues
+            ScanError::Io { .. } => false,           // System IO issues
+        }
+    }
+
+    fn user_message(&self) -> Option<&str> {
+        match self {
+            ScanError::Configuration { message } => Some(message),
+            _ => None,
+        }
+    }
+}
+
 pub type ScanResult<T> = Result<T, ScanError>;

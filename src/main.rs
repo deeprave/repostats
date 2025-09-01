@@ -1,3 +1,4 @@
+use crate::core::error_handling::log_error_with_context;
 use crate::notifications::api::{Event, SystemEvent, SystemEventType};
 use crate::scanner::api::ScanError;
 
@@ -30,7 +31,14 @@ async fn main() {
     let pid = std::process::id();
 
     // Startup returns configured scanner manager, or None if no repositories to scan
-    let scanner_manager = app::startup::startup(command_name).await;
+    let scanner_manager = match app::startup::startup(command_name).await {
+        Ok(scanner_manager) => scanner_manager,
+        Err(e) => {
+            // Handle startup errors using unified error handling system
+            log_error_with_context(&e, "Application startup");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(e) = system_start(pid).await {
         log::error!("Failed to start system: {e}");

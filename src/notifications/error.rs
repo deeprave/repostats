@@ -71,3 +71,13 @@ impl fmt::Display for NotificationError {
 }
 
 impl std::error::Error for NotificationError {}
+
+impl crate::core::error_handling::ContextualError for NotificationError {
+    fn is_user_actionable(&self) -> bool {
+        false // All notification errors are system-level
+    }
+
+    fn user_message(&self) -> Option<&str> {
+        None
+    }
+}

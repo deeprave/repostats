@@ -163,6 +163,19 @@ pub struct Args {
 }
 
 impl Args {
+    /// Get normalized repository list with explicit default to current directory
+    ///
+    /// This method makes the default behavior explicit by converting empty repository
+    /// lists to vec![PathBuf::from(".")] instead of relying on downstream defaulting.
+    /// This eliminates hidden invariants and makes the behavior predictable.
+    pub fn normalized_repositories(&self) -> Vec<PathBuf> {
+        if self.repository.is_empty() {
+            vec![PathBuf::from(".")]
+        } else {
+            self.repository.clone()
+        }
+    }
+
     /// Validate CLI arguments for consistency and constraints
     pub fn validate(&self) -> Result<(), ValidationError> {
         self.validate_repositories()?;
@@ -171,12 +184,13 @@ impl Args {
         Ok(())
     }
 
-    /// Validate repository arguments
+    /// Validate repository arguments using normalized repository list
     fn validate_repositories(&self) -> Result<(), ValidationError> {
-        // Empty repository list is valid - application defaults to current directory
+        // Use normalized repositories (empty list gets converted to current directory)
+        let normalized_repos = self.normalized_repositories();
 
         // Validate that all repository entries are non-empty and valid
-        for (index, repo) in self.repository.iter().enumerate() {
+        for (index, repo) in normalized_repos.iter().enumerate() {
             // Ensure path is valid UTF-8 for proper validation
             let repo_str = match repo.to_str() {
                 Some(s) => s,

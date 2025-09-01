@@ -4,5 +4,3 @@
 //! Provides temporary directory management and cleanup functionality.
 
 pub mod manager;
-
-pub use manager::CheckoutManager;
