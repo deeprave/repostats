@@ -234,6 +234,7 @@ impl ScannerManager {
         &self,
         repository_path: &str,
         query_params: Option<&QueryParams>,
+        checkout_settings: Option<&crate::app::cli::CheckoutSettings>,
     ) -> ScanResult<Arc<ScannerTask>> {
         // First normalize the path
         let normalized_path = self.normalise_repository_path(repository_path)?;
@@ -290,7 +291,24 @@ impl ScannerManager {
         self._scanner_tasks
             .lock()
             .unwrap()
-            .insert(scanner_id, scanner_task.clone());
+            .insert(scanner_id.clone(), scanner_task.clone());
+
+        // Create checkout manager if checkout settings are provided
+        if let Some(settings) = checkout_settings {
+            if let Err(e) =
+                self.request_checkout(&scanner_id, &normalized_path, Some(settings.clone()))
+            {
+                // Clean up scanner task if checkout setup fails
+                self._scanner_tasks.lock().unwrap().remove(&scanner_id);
+                self.cancel_reservation(&repo_id);
+                return Err(ScanError::Configuration {
+                    message: format!(
+                        "Failed to create checkout manager for '{}': {}",
+                        repository_path, e
+                    ),
+                });
+            }
+        }
 
         // Create queue publisher to ensure queue is ready, with retries for transient errors
         let mut last_publisher_err = None;
@@ -388,6 +406,7 @@ impl ScannerManager {
         &self,
         repository_paths: &[PathBuf],
         query_params: Option<&QueryParams>,
+        checkout_settings: Option<&crate::app::cli::CheckoutSettings>,
     ) -> ScanResult<Vec<Arc<ScannerTask>>> {
         // Note: Empty repository list is handled by startup layer which defaults to current directory
         // so this method should never receive an empty list in normal operation
@@ -399,7 +418,10 @@ impl ScannerManager {
         for (index, repo_path) in repository_paths.iter().enumerate() {
             let repo_path_str = repo_path.to_string_lossy();
 
-            match self.create_scanner(&repo_path_str, query_params).await {
+            match self
+                .create_scanner(&repo_path_str, query_params, checkout_settings)
+                .await
+            {
                 Ok(scanner) => {
                     log::info!(
                         "Successfully created scanner for repository '{}' (#{}/{})",
@@ -599,18 +621,20 @@ impl ScannerManager {
 
     /// Unregister a plugin from using a scanner's checkout
     pub fn unregister_plugin_checkout(&self, scanner_id: &str, plugin_id: &str) -> ScanResult<()> {
-        // Update checkout state
+        // Perform all operations atomically to prevent race conditions
         let mut checkout_managers = self.checkout_managers.lock().unwrap();
+        let mut plugin_to_scanners = self.plugin_to_scanners.lock().unwrap();
+
+        // Update checkout state and determine if cleanup is needed
         let should_cleanup = if let Some(state) = checkout_managers.get_mut(scanner_id) {
             state.active_plugins.remove(plugin_id);
-            // Check if this was the last plugin
+            // Check if this was the last plugin and cleanup should happen
             state.active_plugins.is_empty() && !state.manager.keep_files
         } else {
             false
         };
 
         // Update plugin-to-scanner mapping
-        let mut plugin_to_scanners = self.plugin_to_scanners.lock().unwrap();
         if let Some(scanners) = plugin_to_scanners.get_mut(plugin_id) {
             scanners.remove(scanner_id);
             if scanners.is_empty() {
@@ -618,20 +642,64 @@ impl ScannerManager {
             }
         }
 
-        // Cleanup if no plugins are using the checkout and keep_files is false
+        // Perform cleanup while holding locks to prevent race conditions
         if should_cleanup {
-            self.cleanup_scanner_checkout(scanner_id)?;
+            if let Some(mut state) = checkout_managers.remove(scanner_id) {
+                // Release locks before doing potentially expensive cleanup
+                drop(plugin_to_scanners);
+                drop(checkout_managers);
+
+                // Perform cleanup outside of lock
+                if let Err(e) = state.manager.cleanup_all() {
+                    log::warn!(
+                        "Failed to cleanup checkouts for scanner '{}': {}",
+                        scanner_id,
+                        e
+                    );
+                } else {
+                    log::debug!(
+                        "Cleaned up checkouts for scanner '{}' (last plugin unregistered)",
+                        scanner_id
+                    );
+                }
+            }
         }
 
         Ok(())
     }
 
     /// Get the CheckoutManager for a scanner (if it exists)
+    ///
+    /// WARNING: Returns a clone of the CheckoutManager, which may lead to state inconsistency.
+    /// Prefer using `create_checkout_for_scanner` for checkout operations to maintain state consistency.
     pub fn get_checkout_manager(&self, scanner_id: &str) -> Option<CheckoutManager> {
         let checkout_managers = self.checkout_managers.lock().unwrap();
         checkout_managers
             .get(scanner_id)
             .map(|state| state.manager.clone())
+    }
+
+    /// Perform a checkout operation for a scanner, maintaining state consistency
+    pub fn create_checkout_for_scanner(
+        &self,
+        scanner_id: &str,
+        vars: &crate::scanner::checkout::manager::TemplateVars,
+        revision: Option<&str>,
+    ) -> ScanResult<PathBuf> {
+        let mut checkout_managers = self.checkout_managers.lock().unwrap();
+
+        if let Some(state) = checkout_managers.get_mut(scanner_id) {
+            state
+                .manager
+                .create_checkout_dir(vars, revision)
+                .map_err(|e| ScanError::Configuration {
+                    message: format!("Checkout failed for scanner '{}': {}", scanner_id, e),
+                })
+        } else {
+            Err(ScanError::Configuration {
+                message: format!("No checkout manager found for scanner '{}'", scanner_id),
+            })
+        }
     }
 
     /// Cleanup checkout for a specific scanner
@@ -641,8 +709,15 @@ impl ScannerManager {
         if let Some(mut state) = checkout_managers.remove(scanner_id) {
             // Only cleanup if no plugins are active and keep_files is false
             if state.active_plugins.is_empty() && !state.manager.keep_files {
-                state.manager.cleanup_all();
-                log::debug!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                if let Err(e) = state.manager.cleanup_all() {
+                    log::warn!(
+                        "Failed to cleanup checkouts for scanner '{}': {}",
+                        scanner_id,
+                        e
+                    );
+                } else {
+                    log::debug!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                }
             } else if !state.active_plugins.is_empty() {
                 // Get the count before reinserting
                 let active_count = state.active_plugins.len();
@@ -670,8 +745,15 @@ impl ScannerManager {
 
         for (scanner_id, mut state) in checkout_managers.drain() {
             if !state.manager.keep_files {
-                state.manager.cleanup_all();
-                log::debug!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                if let Err(e) = state.manager.cleanup_all() {
+                    log::warn!(
+                        "Failed to cleanup checkouts for scanner '{}': {}",
+                        scanner_id,
+                        e
+                    );
+                } else {
+                    log::debug!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                }
             }
         }
 

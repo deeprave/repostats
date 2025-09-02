@@ -248,11 +248,15 @@ pub async fn startup(
 
     // Stage 7: Scanner configuration and system integration
     let normalized_repositories = final_args.normalized_repositories();
+    // Extract checkout settings from CLI arguments
+    let checkout_settings = final_args.checkout_settings();
+
     log::debug!(
         "Starting scanner configuration with {} repositories",
         normalized_repositories.len()
     );
-    let scanner_manager_opt = configure_scanner(&normalized_repositories, query_params).await;
+    let scanner_manager_opt =
+        configure_scanner(&normalized_repositories, query_params, checkout_settings).await;
 
     // Return the configured scanner manager for main.rs to use, or None if no valid scanners
     match scanner_manager_opt {
@@ -559,6 +563,7 @@ async fn build_query_params(
 async fn configure_scanner(
     repositories: &[std::path::PathBuf],
     query_params: crate::core::query::QueryParams,
+    checkout_settings: Option<crate::app::cli::CheckoutSettings>,
 ) -> Option<std::sync::Arc<crate::scanner::api::ScannerManager>> {
     use crate::scanner::api::ScannerManager;
 
@@ -607,7 +612,11 @@ async fn configure_scanner(
 
     // Step 4: Create scanners for all repositories using batch method with all-or-nothing semantics
     match scanner_manager
-        .create_scanners(&repositories_to_scan, Some(&query_params))
+        .create_scanners(
+            &repositories_to_scan,
+            Some(&query_params),
+            checkout_settings.as_ref(),
+        )
         .await
     {
         Ok(scanners) => {

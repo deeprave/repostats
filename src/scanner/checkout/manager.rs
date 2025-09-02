@@ -115,15 +115,15 @@ impl TemplateVars {
         // E.g., {commit-id} should be replaced before {commit} to avoid conflicts
         substitutions.sort_by_key(|(key, _)| std::cmp::Reverse(key.len()));
 
-        let substitution_map: HashMap<_, _> = substitutions.iter().cloned().collect();
-
-        // Use static regex to match whole variable names in curly braces and substitute
+        // Use static regex to match whole variable names and substitute using sorted array
+        // to preserve the length-based ordering for overlapping variable names
         let mut unknown_vars = std::collections::HashSet::new();
 
         let resolved = TEMPLATE_VAR_REGEX.replace_all(template, |caps: &regex::Captures| {
             let key = &caps[1];
-            match substitution_map.get(key) {
-                Some(value) => value.to_string(),
+            // Search through sorted substitutions to find the key
+            match substitutions.iter().find(|(k, _)| *k == key) {
+                Some((_, value)) => value.to_string(),
                 None => {
                     unknown_vars.insert(key.to_string());
                     caps[0].to_string() // Return original if unknown
@@ -213,6 +213,17 @@ impl crate::core::error_handling::ContextualError for CheckoutError {
 }
 
 impl CheckoutManager {
+    /// Helper to open the git repository with consistent error handling
+    fn open_repository(&self) -> CheckoutResult<gix::Repository> {
+        gix::open(&self.repository_path).map_err(|e| {
+            CheckoutError::GitOperation(format!(
+                "Failed to open repository at '{}': {}",
+                self.repository_path.display(),
+                e
+            ))
+        })
+    }
+
     /// Create a new checkout manager with repository path
     pub fn new<P: AsRef<Path>>(repository_path: P) -> Self {
         Self {
@@ -257,8 +268,8 @@ impl CheckoutManager {
     /// and returns the revision or a default. Full git resolution will be
     /// implemented in a future enhancement.
     pub fn resolve_revision(&self, revision: Option<&str>) -> CheckoutResult<String> {
-        // Verify repository exists
-        let _repo = gix::open(&self.repository_path)?;
+        // Verify repository exists using helper
+        let _repo = self.open_repository()?;
 
         let revision_str = revision
             .or(self.default_revision.as_deref())
@@ -266,8 +277,14 @@ impl CheckoutManager {
 
         // TODO: Implement proper revision resolution to commit SHA
         // IMPORTANT: This is a stub implementation - revision is not resolved to a commit SHA
-        log::warn!(
-            "resolve_revision: Returning revision '{}' as-is without resolving to commit SHA. This is a stub implementation.",
+        use std::sync::Once;
+        static WARN_STUB: Once = Once::new();
+        WARN_STUB.call_once(|| {
+            log::warn!("Checkout operations using stub implementation - git resolution not yet implemented");
+        });
+
+        log::debug!(
+            "resolve_revision: Returning revision '{}' as-is without resolving to commit SHA (stub implementation)",
             revision_str
         );
 
@@ -285,12 +302,20 @@ impl CheckoutManager {
         progress_callback: Option<&dyn Fn(usize, usize)>,
     ) -> CheckoutResult<usize> {
         // Verify repository exists
-        let _repo = gix::open(&self.repository_path)?;
+        let _repo = self.open_repository()?;
 
         // TODO: Implement actual git file extraction using gix
         // IMPORTANT: This is a stub implementation - no files are actually checked out
-        log::warn!(
-            "extract_files_from_commit: Only a placeholder file is created at '{}' for revision '{}'. No files have been checked out. This is a stub implementation.",
+        use std::sync::Once;
+        static WARN_EXTRACT_STUB: Once = Once::new();
+        WARN_EXTRACT_STUB.call_once(|| {
+            log::warn!(
+                "File extraction using stub implementation - only placeholder files are created"
+            );
+        });
+
+        log::debug!(
+            "extract_files_from_commit: Creating placeholder file at '{}' for revision '{}' (stub implementation)",
             target_dir.join(".checkout_info").display(),
             revision
         );
@@ -344,7 +369,7 @@ impl CheckoutManager {
         )?;
 
         log::debug!(
-            "Extracted {} files from revision '{}' to {}",
+            "Extracted {} files from revision '{}' to {} (STUB: only placeholder file created)",
             extracted_count,
             resolved_revision,
             checkout_path.display()
@@ -384,7 +409,7 @@ impl CheckoutManager {
             self.extract_files_from_commit(&resolved_revision, &checkout_path, progress_callback)?;
 
         log::debug!(
-            "Extracted {} files from revision '{}' to {}",
+            "Extracted {} files from revision '{}' to {} (STUB: only placeholder file created)",
             extracted_count,
             resolved_revision,
             checkout_path.display()
