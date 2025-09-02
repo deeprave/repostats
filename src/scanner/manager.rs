@@ -3,6 +3,7 @@
 //! Central coordination component for managing multiple repository scanner tasks,
 //! each with unique SHA256-based identification to prevent duplicate scanning.
 
+use crate::core::cleanup::Cleanup;
 use crate::core::query::QueryParams;
 use crate::core::services::get_services;
 use crate::scanner::checkout::manager::CheckoutManager;
@@ -689,6 +690,40 @@ impl ScannerManager {
                     );
                 } else {
                     log::debug!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                }
+            }
+        }
+
+        // Clear plugin mappings
+        let mut plugin_to_scanners = self.plugin_to_scanners.lock().unwrap();
+        plugin_to_scanners.clear();
+    }
+
+    /// Get an opaque cleanup handle for main.rs coordination
+    ///
+    /// Returns a trait object that allows main.rs to trigger cleanup operations
+    /// without needing to know about internal management structure.
+    pub fn cleanup_handle(self: Arc<Self>) -> Arc<dyn Cleanup> {
+        self
+    }
+}
+
+/// Implementation of Cleanup trait for ScannerManager
+impl Cleanup for ScannerManager {
+    fn cleanup(&self) {
+        // Delegate to the existing implementation
+        let mut checkout_managers = self.checkout_managers.lock().unwrap();
+
+        for (scanner_id, state) in checkout_managers.drain() {
+            // Acquire the manager lock once to avoid potential deadlock
+            let mut manager = state.manager.lock().unwrap();
+            if !manager.keep_files {
+                if let Err(e) = manager.cleanup_all() {
+                    log::trace!(
+                        "Failed to cleanup checkouts for scanner '{}': {}",
+                        scanner_id,
+                        e
+                    );
                 }
             }
         }

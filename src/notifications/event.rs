@@ -24,12 +24,13 @@ pub enum QueueEventType {
     MemoryNormal,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 pub enum PluginEventType {
     Registered,
     Processing,
     DataReady,
+    Completed,
     Error,
     Unregistered,
 }
