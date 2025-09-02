@@ -90,11 +90,22 @@ where
     /// Deserialize an Arc<Message> to the target type
     fn deserialize_message(&self, message: &Arc<Message>) -> QueueResult<T> {
         serde_json::from_str(&message.data).map_err(|e| {
+            let data_preview = if message.data.len() > 100 {
+                format!("{}...", message.data.chars().take(100).collect::<String>())
+            } else {
+                message.data.clone()
+            };
+
             crate::queue::error::QueueError::DeserializationError {
                 message: format!(
-                    "Failed to deserialize message to {}: {}",
+                    "Failed to deserialize message to {}: {} | sequence: {}, type: '{}', producer: '{}' | data_length: {}, data_preview: '{}'",
                     std::any::type_name::<T>(),
-                    e
+                    e,
+                    message.header.sequence,
+                    message.header.message_type,
+                    message.header.producer_id,
+                    message.data.len(),
+                    data_preview
                 ),
             }
         })

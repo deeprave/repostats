@@ -161,6 +161,93 @@ async fn test_typed_consumer_multiple_messages() {
 }
 
 #[tokio::test]
+async fn test_enhanced_deserialization_error_context() {
+    let manager = Arc::new(QueueManager::new());
+
+    let publisher = manager
+        .create_publisher("context-producer".to_string())
+        .unwrap();
+    let typed_consumer = manager
+        .create_typed_consumer::<TestMessage>("context-consumer".to_string())
+        .unwrap();
+
+    // Test with invalid JSON that's longer than 100 characters to test data preview truncation
+    let long_invalid_json = format!("{{\"invalid\": \"{}\"}}", "x".repeat(150));
+    let message = Message::new(
+        "context-producer".to_string(),
+        "context_type".to_string(),
+        long_invalid_json.clone(),
+    );
+    publisher.publish(message).unwrap();
+
+    let result = typed_consumer.read();
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        QueueError::DeserializationError { message } => {
+            // Verify enhanced error context includes all expected metadata
+            assert!(message.contains("TestMessage"));
+            assert!(message.contains("sequence:"));
+            assert!(message.contains("type: 'context_type'"));
+            assert!(message.contains("producer: 'context-producer'"));
+            assert!(message.contains("data_length:"));
+            assert!(message.contains("data_preview:"));
+
+            // Verify data length is correct
+            assert!(message.contains(&format!("data_length: {}", long_invalid_json.len())));
+
+            // Verify data preview is truncated with ellipsis for long messages
+            assert!(message.contains("..."));
+        }
+        other => panic!(
+            "Expected DeserializationError with enhanced context, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[tokio::test]
+async fn test_short_message_error_context() {
+    let manager = Arc::new(QueueManager::new());
+
+    let publisher = manager
+        .create_publisher("short-producer".to_string())
+        .unwrap();
+    let typed_consumer = manager
+        .create_typed_consumer::<TestMessage>("short-consumer".to_string())
+        .unwrap();
+
+    // Test with short invalid JSON (no truncation expected)
+    let short_invalid_json = "invalid";
+    let message = Message::new(
+        "short-producer".to_string(),
+        "short_type".to_string(),
+        short_invalid_json.to_string(),
+    );
+    publisher.publish(message).unwrap();
+
+    let result = typed_consumer.read();
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        QueueError::DeserializationError { message } => {
+            // Verify enhanced error context
+            assert!(message.contains("TestMessage"));
+            assert!(message.contains("sequence:"));
+            assert!(message.contains("type: 'short_type'"));
+            assert!(message.contains("producer: 'short-producer'"));
+            assert!(message.contains("data_length: 7")); // "invalid" is 7 chars
+            assert!(message.contains("data_preview: 'invalid'")); // No truncation
+
+            // Should NOT contain ellipsis for short messages
+            assert!(!message.contains("..."));
+        }
+        other => panic!(
+            "Expected DeserializationError with enhanced context, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[tokio::test]
 async fn test_typed_consumer_inner_access() {
     let manager = Arc::new(QueueManager::new());
     let typed_consumer = manager
