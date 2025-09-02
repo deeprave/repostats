@@ -10,7 +10,7 @@ use crate::plugin::args::{
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
-use crate::queue::api::QueueConsumer;
+use crate::queue::api::{QueueConsumer, QueueError};
 use crate::queue::typed::{TypedMessage, TypedQueueConsumer};
 use crate::scanner::api::ScanMessage;
 use crate::scanner::types::ScanRequires;
@@ -406,7 +406,14 @@ impl ConsumerPlugin for DumpPlugin {
                                 // (timeout will naturally provide a small delay)
                             }
                             Ok(Err(e)) => {
-                                error!("DumpPlugin: Error reading message: {:?}", e);
+                                match &e {
+                                    QueueError::DeserializationError { message } => {
+                                        error!("DumpPlugin: Message deserialization failed: {}", message);
+                                    }
+                                    _ => {
+                                        error!("DumpPlugin: Error reading typed message: {:?}", e);
+                                    }
+                                }
                                 // Continue processing despite errors
                             }
                             Err(_) => {
