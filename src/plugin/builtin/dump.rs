@@ -636,6 +636,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_dump_plugin_typed_consumer_integration() {
+        use crate::queue::api::Message;
+        use crate::scanner::api::ScanMessage;
+        use crate::scanner::types::{RepositoryData, ScanStats};
+        use std::time::{Duration, SystemTime};
+
+        let mut plugin = DumpPlugin::new();
+        let queue_manager = QueueManager::create().await;
+
+        // Initialize and configure plugin
+        plugin.initialize().await.unwrap();
+        let config = PluginConfig::default();
+        plugin
+            .parse_plugin_arguments(&["--json".to_string()], &config)
+            .await
+            .unwrap();
+
+        // Create publisher and consumer
+        let publisher = queue_manager
+            .create_publisher("scanner".to_string())
+            .unwrap();
+        let consumer = queue_manager
+            .create_consumer("dump-test".to_string())
+            .unwrap();
+
+        // Publish a ScanStarted message
+        let scan_started = ScanMessage::ScanStarted {
+            scanner_id: "integration-test-scanner".to_string(),
+            timestamp: SystemTime::now(),
+            repository_data: RepositoryData {
+                path: "/test/repo".to_string(),
+                url: None,
+                name: Some("test-repo".to_string()),
+                description: Some("Test repository".to_string()),
+                default_branch: Some("main".to_string()),
+                is_bare: false,
+                is_shallow: false,
+                work_dir: Some("/test/repo".to_string()),
+                git_dir: "/test/repo/.git".to_string(),
+                git_ref: Some("main".to_string()),
+                date_range: None,
+                file_paths: None,
+                authors: None,
+                max_commits: Some(10),
+            },
+        };
+
+        let json_data = serde_json::to_string(&scan_started).unwrap();
+        let message = Message::new("scanner".to_string(), "scan_started".to_string(), json_data);
+        publisher.publish(message).unwrap();
+
+        // Start consuming (spawns background task)
+        plugin.start_consuming(consumer).await.unwrap();
+
+        // Give the background task time to process the ScanStarted message
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Publish a ScanCompleted message to trigger shutdown
+        let scan_completed = ScanMessage::ScanCompleted {
+            scanner_id: "integration-test-scanner".to_string(),
+            timestamp: SystemTime::now(),
+            stats: ScanStats {
+                total_commits: 5,
+                total_files_changed: 10,
+                total_insertions: 100,
+                total_deletions: 50,
+                scan_duration: Duration::from_millis(1000),
+            },
+        };
+
+        let json_data = serde_json::to_string(&scan_completed).unwrap();
+        let message = Message::new(
+            "scanner".to_string(),
+            "scan_completed".to_string(),
+            json_data,
+        );
+        publisher.publish(message).unwrap();
+
+        // Wait for processing
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Plugin should have automatically stopped consuming due to all scanners completed
+        // Verify it can be cleanly shut down
+        let result = plugin.stop_consuming().await;
+        assert!(result.is_ok());
+
+        // Verify shutdown state
+        assert!(plugin.shutdown_tx.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dump_plugin_typed_error_handling() {
+        use crate::queue::api::Message;
+        use std::time::Duration;
+
+        let mut plugin = DumpPlugin::new();
+        let queue_manager = QueueManager::create().await;
+
+        // Initialize plugin
+        plugin.initialize().await.unwrap();
+        let config = PluginConfig::default();
+        plugin
+            .parse_plugin_arguments(&["--json".to_string()], &config)
+            .await
+            .unwrap();
+
+        // Create publisher and consumer
+        let publisher = queue_manager
+            .create_publisher("scanner".to_string())
+            .unwrap();
+        let consumer = queue_manager
+            .create_consumer("error-test".to_string())
+            .unwrap();
+
+        // Publish an invalid JSON message that will trigger deserialization error
+        let message = Message::new(
+            "scanner".to_string(),
+            "invalid_message".to_string(),
+            "invalid json content".to_string(),
+        );
+        publisher.publish(message).unwrap();
+
+        // Start consuming
+        plugin.start_consuming(consumer).await.unwrap();
+
+        // Give time for error processing
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Plugin should continue running despite the error
+        assert!(plugin.shutdown_tx.is_some());
+
+        // Clean shutdown
+        plugin.stop_consuming().await.unwrap();
+        assert!(plugin.shutdown_tx.is_none());
+    }
+
+    #[tokio::test]
     async fn test_dump_plugin_requirements_with_checkout() {
         // Test without checkout flag
         let plugin = DumpPlugin::new();
