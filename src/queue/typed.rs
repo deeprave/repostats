@@ -91,7 +91,8 @@ where
     fn deserialize_message(&self, message: &Arc<Message>) -> QueueResult<T> {
         serde_json::from_str(&message.data).map_err(|e| {
             let data_preview = if message.data.len() > 100 {
-                format!("{}...", message.data.chars().take(100).collect::<String>())
+                let truncated_bytes = &message.data.as_bytes()[..100.min(message.data.len())];
+                format!("{}...", String::from_utf8_lossy(truncated_bytes))
             } else {
                 message.data.clone()
             };

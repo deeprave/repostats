@@ -342,3 +342,55 @@ async fn test_typed_consumer_mixed_message_types() {
         other => panic!("Expected DeserializationError, got: {:?}", other),
     }
 }
+
+#[tokio::test]
+async fn test_binary_data_error_context() {
+    let manager = Arc::new(QueueManager::new());
+
+    let publisher = manager
+        .create_publisher("binary-producer".to_string())
+        .unwrap();
+    let typed_consumer = manager
+        .create_typed_consumer::<TestMessage>("binary-consumer".to_string())
+        .unwrap();
+
+    // Create binary data with invalid UTF-8 sequences
+    let mut binary_data = b"valid start ".to_vec();
+    binary_data.extend_from_slice(&[0xFF, 0xFE, 0xFD, 0xFC]); // Invalid UTF-8
+    binary_data
+        .extend_from_slice(b" more content that exceeds 100 bytes to test truncation behaviour ");
+    binary_data.extend_from_slice(&[0x80, 0x81, 0x82, 0x83]); // More invalid UTF-8
+    binary_data.extend_from_slice(&[65u8; 50]); // 50 'A's to make it long
+
+    let binary_string = String::from_utf8_lossy(&binary_data).to_string();
+    let message = Message::new(
+        "binary-producer".to_string(),
+        "binary_type".to_string(),
+        binary_string,
+    );
+    publisher.publish(message).unwrap();
+
+    let result = typed_consumer.read();
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        QueueError::DeserializationError { message } => {
+            // Verify enhanced error context handles binary data gracefully
+            assert!(message.contains("TestMessage"));
+            assert!(message.contains("sequence:"));
+            assert!(message.contains("type: 'binary_type'"));
+            assert!(message.contains("producer: 'binary-producer'"));
+            assert!(message.contains("data_length:"));
+            assert!(message.contains("data_preview:"));
+
+            // Should contain ellipsis for truncated data
+            assert!(message.contains("..."));
+
+            // The error message should be properly formed despite invalid UTF-8
+            assert!(!message.is_empty());
+        }
+        other => panic!(
+            "Expected DeserializationError with binary data handling, got: {:?}",
+            other
+        ),
+    }
+}
