@@ -16,6 +16,9 @@ pub enum QueueError {
 
     #[error("Operation failed: {message}")]
     OperationFailed { message: String },
+
+    #[error("Message deserialization failed: {message}")]
+    DeserializationError { message: String },
 }
 
 impl crate::core::error_handling::ContextualError for QueueError {
@@ -26,6 +29,7 @@ impl crate::core::error_handling::ContextualError for QueueError {
             QueueError::ProducerNotFound { .. } => true, // User can check plugin config
             QueueError::SequenceOutOfBounds { .. } => false, // System/timing issue
             QueueError::OperationFailed { .. } => false, // System error
+            QueueError::DeserializationError { .. } => true, // User can check message format
         }
     }
 

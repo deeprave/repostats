@@ -12,3 +12,4 @@ mod lifecycle;
 mod manager;
 mod memory;
 mod publisher;
+mod typed;
