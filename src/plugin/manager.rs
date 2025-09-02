@@ -4,6 +4,7 @@
 //! Owns the plugin registry and provides high-level plugin management operations.
 
 use crate::app::cli::command_segmenter::CommandSegment;
+use crate::notifications::api::{Event, EventFilter, PluginEventType};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::SharedPluginRegistry;
 use crate::plugin::types::PluginSource;
@@ -12,7 +13,50 @@ use crate::plugin::unified_discovery::PluginDiscovery;
 use crate::queue::api::{QueueConsumer, QueueManager};
 use log::{info, warn};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
+use tokio::time::timeout;
 use toml::Table;
+
+/// Configuration for plugin manager timeouts and thresholds
+#[derive(Clone, Debug)]
+pub struct PluginManagerConfig {
+    /// Timeout for waiting for plugin completion events
+    pub completion_event_timeout: Duration,
+
+    /// Maximum time to wait for all plugins to complete during shutdown
+    pub shutdown_timeout: Duration,
+
+    /// Check interval for plugin completion status
+    pub completion_check_interval: Duration,
+}
+
+impl Default for PluginManagerConfig {
+    fn default() -> Self {
+        Self {
+            completion_event_timeout: Duration::from_millis(100),
+            shutdown_timeout: Duration::from_secs(30),
+            completion_check_interval: Duration::from_millis(50),
+        }
+    }
+}
+
+impl PluginManagerConfig {
+    /// Create configuration with custom timeouts
+    pub fn with_timeouts(
+        completion_event_timeout: Duration,
+        shutdown_timeout: Duration,
+        completion_check_interval: Duration,
+    ) -> Self {
+        Self {
+            completion_event_timeout,
+            shutdown_timeout,
+            completion_check_interval,
+        }
+    }
+}
 
 /// Central plugin manager responsible for:
 /// - Plugin lifecycle management
@@ -48,11 +92,27 @@ pub struct PluginManager {
     /// Notification receivers to keep channels alive
     /// Maps subscriber ID to notification receiver
     notification_receivers: HashMap<String, crate::notifications::api::EventReceiver>,
+
+    /// Plugin coordination state for shutdown management
+    /// Tracks whether plugins are in process of shutdown
+    shutdown_requested: Arc<AtomicBool>,
+
+    /// Plugin completion tracking
+    /// Maps plugin name to completion status
+    pub(crate) plugin_completion: Arc<RwLock<HashMap<String, bool>>>,
+
+    /// Configuration for timeouts and thresholds
+    pub(crate) config: PluginManagerConfig,
 }
 
 impl PluginManager {
-    /// Create a new plugin manager
+    /// Create a new plugin manager with default configuration
     pub fn new(api_version: u32) -> Self {
+        Self::with_config(api_version, PluginManagerConfig::default())
+    }
+
+    /// Create a new plugin manager with custom configuration
+    pub fn with_config(api_version: u32, config: PluginManagerConfig) -> Self {
         Self {
             registry: SharedPluginRegistry::new(),
             api_version,
@@ -63,6 +123,9 @@ impl PluginManager {
             plugin_configs: HashMap::new(),
             pending_consumers: HashMap::new(),
             notification_receivers: HashMap::new(),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
+            plugin_completion: Arc::new(RwLock::new(HashMap::new())),
+            config,
         }
     }
 
@@ -239,14 +302,13 @@ impl PluginManager {
                     let consumer_plugin = factory();
                     registry.register_consumer_plugin(consumer_plugin)?;
                 }
-                PluginSource::External { library_path } => {
-                    // TODO: Implement external plugin loading from shared library
+                PluginSource::External { library_path: _ } => {
+                    // External plugin support is disabled in this version
+                    // Implementation would require dynamic library loading, symbol resolution,
+                    // and proper memory management across library boundaries
                     return Err(PluginError::LoadError {
                         plugin_name: discovered.info.name.clone(),
-                        cause: format!(
-                            "External plugin loading not yet implemented: {:?}",
-                            library_path
-                        ),
+                        cause: "External plugin support is not available in this version. Only built-in plugins are supported.".to_string(),
                     });
                 }
             }
@@ -660,7 +722,6 @@ impl PluginManager {
     pub async fn setup_system_notification_subscriber(&mut self) -> PluginResult<()> {
         use crate::core::services::get_services;
         use crate::notifications::api::{Event, EventFilter, SystemEventType};
-        use log::{error, info};
 
         let services = get_services();
         let mut notification_manager = services.notification_manager().await;
@@ -676,7 +737,7 @@ impl PluginManager {
                     while let Some(event) = receiver.recv().await {
                         if let Event::System(sys_event) = event {
                             if sys_event.event_type == SystemEventType::Startup {
-                                info!("PluginManager: Received system startup event, activating plugin consumers");
+                                log::trace!("PluginManager: Received system startup event, activating plugin consumers");
 
                                 // Get services and plugin manager inside the loop
                                 let services = get_services();
@@ -684,7 +745,18 @@ impl PluginManager {
 
                                 // Activate plugin consumers
                                 if let Err(e) = plugin_manager.activate_plugin_consumers().await {
-                                    error!("Failed to activate plugin consumers: {}", e);
+                                    log::error!("Failed to activate plugin consumers: {}", e);
+                                }
+                            } else if sys_event.event_type == SystemEventType::Shutdown {
+                                log::trace!("PluginManager: Received system shutdown event, notifying plugins");
+
+                                // Get services and plugin manager inside the loop
+                                let services = get_services();
+                                let plugin_manager = services.plugin_manager().await;
+
+                                // Notify all active plugins about shutdown
+                                if let Err(e) = plugin_manager.notify_plugins_shutdown().await {
+                                    log::error!("Failed to notify plugins of shutdown: {}", e);
                                 }
                             }
                         }
@@ -763,6 +835,48 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Notify all active plugins about system shutdown
+    pub async fn notify_plugins_shutdown(&self) -> PluginResult<()> {
+        use crate::core::services::get_services;
+        use crate::notifications::api::PluginEvent;
+        use crate::notifications::event::{Event, PluginEventType};
+
+        let services = get_services();
+        let mut notification_manager = services.notification_manager().await;
+
+        // Get list of all active plugins
+        let registry = self.registry.inner().read().await;
+        let active_plugin_names: Vec<String> = registry.get_active_plugins();
+        drop(registry);
+
+        log::trace!(
+            "Notifying {} active plugins about shutdown",
+            active_plugin_names.len()
+        );
+
+        // Publish shutdown notifications for each plugin
+        for plugin_name in &active_plugin_names {
+            let plugin_event = PluginEvent::with_message(
+                PluginEventType::Unregistered,
+                plugin_name.clone(),
+                "System shutdown requested".to_string(),
+            );
+
+            if let Err(e) = notification_manager
+                .publish(Event::Plugin(plugin_event))
+                .await
+            {
+                log::error!(
+                    "Failed to publish shutdown notification for plugin '{}': {}",
+                    plugin_name,
+                    e
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// List plugins with option to include all plugins or just active ones
     pub async fn list_plugins_with_filter(&self, active_only: bool) -> Vec<PluginInfo> {
         let registry = self.registry.inner().read().await;
@@ -784,6 +898,298 @@ impl PluginManager {
         }
 
         plugins
+    }
+
+    // MARK: Plugin Coordination Methods
+
+    /// Wait for all active plugins to complete their current operations naturally
+    ///
+    /// This method returns when all active plugins have finished processing.
+    /// It should be called after scanning is complete but before cleanup.
+    /// Returns immediately if no plugins are active.
+    ///
+    /// This implementation uses the notification system to wait for explicit
+    /// PluginEventType::Completed events from plugins.
+    pub async fn await_all_plugins_completion(&self) -> PluginResult<()> {
+        let active_plugin_names = {
+            let registry = self.registry.inner().read().await;
+            registry.get_active_plugins()
+        };
+
+        if active_plugin_names.is_empty() {
+            return Ok(());
+        }
+
+        log::trace!(
+            "Waiting for completion of {} active plugins",
+            active_plugin_names.len()
+        );
+
+        // Initialize completion tracking for all active plugins
+        {
+            let mut completion = self.plugin_completion.write().await;
+            for plugin_name in &active_plugin_names {
+                completion.insert(plugin_name.clone(), false);
+            }
+        }
+
+        // Subscribe to plugin completion events
+        let services = crate::core::services::get_services();
+        let mut notification_manager = services.notification_manager().await;
+
+        let mut event_receiver = notification_manager
+            .subscribe(
+                "plugin_completion_tracker".to_string(),
+                EventFilter::PluginOnly,
+                "PluginManager".to_string(),
+            )
+            .map_err(|e| PluginError::LoadError {
+                plugin_name: "system".to_string(),
+                cause: format!("Failed to subscribe to plugin events: {}", e),
+            })?;
+
+        // Wait for completion events from all active plugins
+        loop {
+            if self.is_shutdown_requested() {
+                log::trace!("Shutdown requested, stopping plugin completion wait");
+                break;
+            }
+
+            // Check if all plugins have completed
+            let all_completed = {
+                let completion = self.plugin_completion.read().await;
+                active_plugin_names
+                    .iter()
+                    .all(|name| completion.get(name).copied().unwrap_or(false))
+            };
+
+            if all_completed {
+                log::trace!("All plugins have completed");
+                break;
+            }
+
+            // Wait for completion events with timeout
+            let timeout_result =
+                timeout(self.config.completion_event_timeout, event_receiver.recv()).await;
+
+            match timeout_result {
+                Ok(event_result) => {
+                    match event_result {
+                        Some(event) => {
+                            if let Event::Plugin(plugin_event) = event {
+                                if plugin_event.event_type == PluginEventType::Completed {
+                                    // Mark this plugin as completed
+                                    let mut completion = self.plugin_completion.write().await;
+                                    completion.insert(plugin_event.plugin_id.clone(), true);
+                                    log::trace!(
+                                        "Plugin '{}' marked as completed",
+                                        plugin_event.plugin_id
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            log::trace!("Plugin event channel closed");
+                            break;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Timeout - continue checking completion status
+                    continue;
+                }
+            }
+        }
+
+        // Clean up completed plugins from tracking map
+        self.cleanup_completed_plugins().await;
+
+        Ok(())
+    }
+
+    /// Gracefully stop all active plugins with a timeout
+    ///
+    /// This method signals all active plugins to stop processing and waits
+    /// for them to complete within the specified timeout. Returns a summary
+    /// of which plugins completed vs timed out.
+    pub async fn graceful_stop_all(
+        &self,
+        stop_timeout: Duration,
+    ) -> PluginResult<PluginStopSummary> {
+        self.shutdown_requested.store(true, Ordering::Relaxed);
+
+        let active_plugin_names = {
+            let registry = self.registry.inner().read().await;
+            registry.get_active_plugins()
+        };
+
+        if active_plugin_names.is_empty() {
+            return Ok(PluginStopSummary::empty());
+        }
+
+        let mut completed_plugins = Vec::new();
+        let mut timed_out_plugins = Vec::new();
+        let mut error_plugins = Vec::new();
+
+        // Stop all consumer plugins first
+        let stop_result = timeout(stop_timeout, async {
+            let mut registry = self.registry.inner().write().await;
+
+            for plugin_name in &active_plugin_names {
+                if let Some(consumer_plugin) = registry.get_consumer_plugin_mut(plugin_name) {
+                    match consumer_plugin.stop_consuming().await {
+                        Ok(()) => {
+                            // Consumer stopped successfully, but don't add to completed yet
+                            // Wait for cleanup phase to mark as completed
+                        }
+                        Err(e) => {
+                            log::trace!("Failed to stop consumer plugin '{}': {}", plugin_name, e);
+                            error_plugins.push(plugin_name.clone());
+                        }
+                    }
+                }
+            }
+
+            // Call cleanup on all active plugins
+            for plugin_name in &active_plugin_names {
+                if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
+                    match plugin.cleanup().await {
+                        Ok(()) => {
+                            completed_plugins.push(plugin_name.clone());
+                        }
+                        Err(e) => {
+                            log::trace!("Plugin '{}' cleanup failed: {}", plugin_name, e);
+                            error_plugins.push(plugin_name.clone());
+                        }
+                    }
+                } else if let Some(consumer_plugin) = registry.get_consumer_plugin_mut(plugin_name)
+                {
+                    match consumer_plugin.cleanup().await {
+                        Ok(()) => {
+                            completed_plugins.push(plugin_name.clone());
+                        }
+                        Err(e) => {
+                            log::trace!("Consumer plugin '{}' cleanup failed: {}", plugin_name, e);
+                            error_plugins.push(plugin_name.clone());
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+
+        match stop_result {
+            Ok(()) => {
+                // Determine which plugins didn't complete
+                let all_handled: std::collections::HashSet<String> = completed_plugins
+                    .iter()
+                    .chain(error_plugins.iter())
+                    .cloned()
+                    .collect();
+
+                for plugin_name in &active_plugin_names {
+                    if !all_handled.contains(plugin_name) {
+                        timed_out_plugins.push(plugin_name.clone());
+                    }
+                }
+            }
+            Err(_) => {
+                // All remaining plugins are considered timed out
+                let handled: std::collections::HashSet<String> = completed_plugins
+                    .iter()
+                    .chain(error_plugins.iter())
+                    .cloned()
+                    .collect();
+
+                for plugin_name in &active_plugin_names {
+                    if !handled.contains(plugin_name) {
+                        timed_out_plugins.push(plugin_name.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(PluginStopSummary {
+            completed: completed_plugins,
+            timed_out: timed_out_plugins,
+            errors: error_plugins,
+        })
+    }
+
+    /// Check if shutdown has been requested
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Relaxed)
+    }
+
+    /// Mark a plugin as completed (for use by plugins to signal completion)
+    pub async fn mark_plugin_completed(&self, plugin_name: &str) {
+        let mut completion = self.plugin_completion.write().await;
+        completion.insert(plugin_name.to_string(), true);
+    }
+
+    /// Remove all completed plugins from the tracking map
+    /// This prevents memory leaks by cleaning up completed entries
+    pub async fn cleanup_completed_plugins(&self) {
+        let mut completion = self.plugin_completion.write().await;
+        let initial_count = completion.len();
+        completion.retain(|_, &mut completed| !completed);
+        let final_count = completion.len();
+
+        // Log cleanup activity for monitoring
+        if initial_count > final_count {
+            log::debug!(
+                "Cleaned up {} completed plugin entries (remaining: {})",
+                initial_count - final_count,
+                final_count
+            );
+        }
+
+        // Warn about potential memory leaks
+        if final_count > 100 {
+            log::warn!(
+                "Plugin completion tracking has {} entries - potential memory leak detected",
+                final_count
+            );
+        }
+    }
+
+    /// Get count of plugins currently being tracked for completion
+    /// Useful for monitoring and debugging
+    pub async fn get_pending_completion_count(&self) -> usize {
+        let completion = self.plugin_completion.read().await;
+        completion.len()
+    }
+}
+
+/// Summary of plugin stop operation results
+#[derive(Debug, Clone)]
+pub struct PluginStopSummary {
+    /// Plugins that completed gracefully
+    pub completed: Vec<String>,
+    /// Plugins that timed out
+    pub timed_out: Vec<String>,
+    /// Plugins that encountered errors during stop
+    pub errors: Vec<String>,
+}
+
+impl PluginStopSummary {
+    /// Create an empty summary
+    pub fn empty() -> Self {
+        Self {
+            completed: Vec::new(),
+            timed_out: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    /// Check if all plugins completed successfully
+    pub fn all_completed(&self) -> bool {
+        self.timed_out.is_empty() && self.errors.is_empty()
+    }
+
+    /// Get total number of plugins that were stopped
+    pub fn total_plugins(&self) -> usize {
+        self.completed.len() + self.timed_out.len() + self.errors.len()
     }
 }
 

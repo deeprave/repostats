@@ -1,9 +1,7 @@
 use crate::core::error_handling::log_error_with_context;
+use crate::core::shutdown::ShutdownCoordinator;
 use crate::notifications::api::{Event, SystemEvent, SystemEventType};
 use crate::scanner::api::ScanError;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::sync::broadcast;
 
 mod app;
 mod core;
@@ -21,39 +19,6 @@ pub fn get_plugin_api_version() -> u32 {
 }
 
 static COMMAND_NAME: &str = "repostats";
-
-/// Coordinates graceful shutdown across the application
-pub struct ShutdownCoordinator {
-    pub shutdown_tx: broadcast::Sender<()>,
-    pub shutdown_requested: Arc<AtomicBool>,
-}
-
-impl ShutdownCoordinator {
-    pub fn new() -> (Self, broadcast::Receiver<()>) {
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        let shutdown_requested = Arc::new(AtomicBool::new(false));
-
-        let coordinator = Self {
-            shutdown_tx,
-            shutdown_requested,
-        };
-
-        (coordinator, shutdown_rx)
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<()> {
-        self.shutdown_tx.subscribe()
-    }
-
-    pub fn trigger_shutdown(&self) {
-        self.shutdown_requested.store(true, Ordering::Relaxed);
-        let _ = self.shutdown_tx.send(());
-    }
-
-    pub fn is_shutdown_requested(&self) -> bool {
-        self.shutdown_requested.load(Ordering::Relaxed)
-    }
-}
 
 /// Main application entry point with unified error handling
 ///
@@ -73,108 +38,109 @@ async fn main() {
     let command_name = command_name_owned.as_deref().unwrap_or(COMMAND_NAME);
     let pid = std::process::id();
 
-    // Set up shutdown coordination
-    let (coordinator, mut shutdown_rx) = ShutdownCoordinator::new();
+    // Use shutdown coordinator to guard the entire application execution
+    let result = ShutdownCoordinator::guard(|mut shutdown_rx| async move {
+        // Application startup with shutdown checking
+        let scanner_manager = tokio::select! {
+            result = app::startup::startup(command_name) => {
+                match result {
+                    Ok(scanner_manager) => scanner_manager,
+                    Err(e) => {
+                        log_error_with_context(&e, "Application startup");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            _ = shutdown_rx.recv() => std::process::exit(0)
+        };
 
-    // Set up signal handlers immediately so they're active for the entire program lifetime
-    setup_signal_handlers(
-        coordinator.shutdown_tx.clone(),
-        coordinator.shutdown_requested.clone(),
-    );
-
-    let mut shutdown_check = shutdown_rx.resubscribe();
-    let scanner_manager = tokio::select! {
-        result = app::startup::startup(command_name) => {
-            match result {
-                Ok(scanner_manager) => scanner_manager,
-                Err(e) => {
-                    log_error_with_context(&e, "Application startup");
+        // System start with shutdown checking
+        let mut shutdown_check = shutdown_rx.resubscribe();
+        tokio::select! {
+            result = system_start(pid) => {
+                if let Err(e) = result {
+                    log::error!("Failed to start system: {e}");
                     std::process::exit(1);
                 }
             }
-        }
-        _ = shutdown_check.recv() => std::process::exit(0)
-    };
+            _ = shutdown_check.recv() => std::process::exit(0)
+        };
 
-    let mut shutdown_check = shutdown_rx.resubscribe();
-    tokio::select! {
-        result = system_start(pid) => {
-            if let Err(e) = result {
-                log::error!("Failed to start system: {e}");
-                std::process::exit(1);
-            }
-        }
-        _ = shutdown_check.recv() => std::process::exit(0)
-    }
-
-    {
         log::info!("{command_name}: ✅ Repository Statistics Tool starting");
 
-        // Start the actual scanner if we have one configured
-        if let Some(scanner_manager) = scanner_manager {
-            // Clone the Arc so we can use it for cleanup
-            let scanner_manager_for_cleanup = scanner_manager.clone();
+        // Handle scanner execution if configured
+        let final_result = if let Some(scanner_manager) = scanner_manager {
+            run_scanner_with_coordination(scanner_manager, shutdown_rx).await
+        } else {
+            Ok(())
+        };
 
-            // Run scanner with signal handling
-            let scanner_result = tokio::select! {
-                result = start_scanner(scanner_manager) => {
-                    result
-                }
-                _ = shutdown_rx.recv() => {
-                    scanner_manager_for_cleanup.cleanup_all_checkouts();
-                    Ok(())
-                }
-            };
-
-            if let Err(e) = scanner_result {
-                log::error!("Scanner error: {e}");
-                std::process::exit(1);
-            }
-        }
-
+        // System shutdown
         if let Err(e) = system_stop(pid).await {
             log::warn!("Error stopping system: {e}");
         }
+
+        final_result
+    })
+    .await;
+
+    if let Err(e) = result {
+        log::error!("Application error: {e}");
+        std::process::exit(1);
     }
 }
 
-fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested: Arc<AtomicBool>) {
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-        }
+/// Run scanner with component coordination for plugin shutdown
+async fn run_scanner_with_coordination(
+    scanner_manager: std::sync::Arc<scanner::api::ScannerManager>,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) -> Result<(), ScanError> {
+    // Get services for plugin coordination
+    let services = core::services::get_services();
+    let plugin_manager = services.plugin_manager().await;
 
-        use tokio::signal::unix::{signal, SignalKind};
-        let signals = [
-            SignalKind::interrupt(),
-            SignalKind::terminate(),
-            SignalKind::hangup(),
-            SignalKind::quit(),
-        ];
+    // Clone scanner_manager for the select block
+    let scanner_manager_for_start = scanner_manager.clone();
 
-        for kind in signals {
-            let tx = shutdown_tx.clone();
-            let requested = shutdown_requested.clone();
+    // Get opaque cleanup handle for coordinated shutdown
+    let cleanup_handle = scanner_manager.cleanup_handle();
 
-            tokio::spawn(async move {
-                if let Ok(mut sig) = signal(kind) {
-                    sig.recv().await;
-                    requested.store(true, Ordering::Relaxed);
-                    let _ = tx.send(());
+    // Run scanner with component coordination
+    tokio::select! {
+        result = start_scanner(scanner_manager_for_start) => {
+            // Normal completion path: wait for plugins then cleanup
+            match result {
+                Ok(()) => {
+                    if let Err(e) = plugin_manager.await_all_plugins_completion().await {
+                        log::trace!("Plugin completion wait failed: {}", e);
+                    }
+                    cleanup_handle.cleanup();
+                    Ok(())
                 }
-            });
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                shutdown_requested.store(true, Ordering::Relaxed);
-                let _ = shutdown_tx.send(());
+                Err(e) => {
+                    // Scanner failed, still need to coordinate shutdown
+                    let timeout = std::time::Duration::from_secs(30);
+                    if let Ok(summary) = plugin_manager.graceful_stop_all(timeout).await {
+                        if !summary.all_completed() {
+                            log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
+                        }
+                    }
+                    cleanup_handle.cleanup();
+                    Err(e)
+                }
             }
-        });
+        }
+        _ = shutdown_rx.recv() => {
+            // Signal interruption path: graceful plugin stop then cleanup
+            let timeout = std::time::Duration::from_secs(30);
+            if let Ok(summary) = plugin_manager.graceful_stop_all(timeout).await {
+                if !summary.all_completed() {
+                    log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
+                }
+            }
+            cleanup_handle.cleanup();
+            Ok(())
+        }
     }
 }
 
