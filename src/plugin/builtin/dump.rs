@@ -19,33 +19,6 @@ use serde_json::json;
 use std::collections::HashSet;
 use tokio::sync::oneshot;
 
-/// Publish plugin completion event to the notification system
-async fn publish_plugin_completion_event(plugin_name: &str) -> PluginResult<()> {
-    use crate::core::services::get_services;
-    use crate::notifications::api::PluginEvent;
-    use crate::notifications::event::{Event, PluginEventType};
-
-    let services = get_services();
-    let mut notification_manager = services.notification_manager().await;
-
-    let completion_event = Event::Plugin(PluginEvent::with_message(
-        PluginEventType::Completed,
-        plugin_name.to_string(), // Use dynamic plugin name
-        "Plugin processing completed - all scanners finished".to_string(),
-    ));
-
-    notification_manager
-        .publish(completion_event)
-        .await
-        .map_err(|e| PluginError::LoadError {
-            plugin_name: plugin_name.to_string(),
-            cause: format!("Failed to publish plugin completion event: {}", e),
-        })?;
-
-    log::trace!("{}: Published completion event", plugin_name);
-    Ok(())
-}
-
 /// Dump plugin for outputting queue messages to stdout
 pub struct DumpPlugin {
     /// Plugin initialization state
@@ -174,7 +147,7 @@ impl DumpPlugin {
         scan_message: Option<&ScanMessage>,
         show_headers: bool,
     ) -> String {
-        if msg.header.message_type.starts_with("repository_data") {
+        if msg.header.message_type.starts_with("scan_started") {
             Self::format_repository_data_text(msg, scan_message, show_headers)
         } else {
             Self::format_regular_message_text(msg, show_headers)
@@ -389,7 +362,10 @@ impl ConsumerPlugin for DumpPlugin {
                         log::debug!("DumpPlugin: Received shutdown signal, stopping...");
 
                         // Publish plugin completion event for shutdown scenario
-                        if let Err(e) = publish_plugin_completion_event(&plugin_name).await {
+                        if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
+                            &plugin_name,
+                            "Plugin shutdown requested - stopping gracefully"
+                        ).await {
                             log::error!("Failed to publish plugin completion event on shutdown: {}", e);
                         }
                         break;
@@ -423,7 +399,10 @@ impl ConsumerPlugin for DumpPlugin {
                                                 log::debug!("DumpPlugin: All scanners completed, finishing...");
 
                                                 // Publish plugin completion event
-                                                if let Err(e) = publish_plugin_completion_event(&plugin_name).await {
+                                                if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
+                                                    &plugin_name,
+                                                    "All scanners completed - plugin processing finished"
+                                                ).await {
                                                     log::error!("Failed to publish plugin completion event: {}", e);
                                                 }
                                                 break;
@@ -439,7 +418,10 @@ impl ConsumerPlugin for DumpPlugin {
                                                 log::debug!("DumpPlugin: All scanners completed (some with errors), finishing...");
 
                                                 // Publish plugin completion event
-                                                if let Err(e) = publish_plugin_completion_event(&plugin_name).await {
+                                                if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
+                                                    &plugin_name,
+                                                    "All scanners completed - plugin processing finished"
+                                                ).await {
                                                     log::error!("Failed to publish plugin completion event: {}", e);
                                                 }
                                                 break;
