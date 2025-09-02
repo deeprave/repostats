@@ -1,6 +1,9 @@
 use crate::core::error_handling::log_error_with_context;
 use crate::notifications::api::{Event, SystemEvent, SystemEventType};
 use crate::scanner::api::ScanError;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::broadcast;
 
 mod app;
 mod core;
@@ -18,6 +21,39 @@ pub fn get_plugin_api_version() -> u32 {
 }
 
 static COMMAND_NAME: &str = "repostats";
+
+/// Coordinates graceful shutdown across the application
+pub struct ShutdownCoordinator {
+    pub shutdown_tx: broadcast::Sender<()>,
+    pub shutdown_requested: Arc<AtomicBool>,
+}
+
+impl ShutdownCoordinator {
+    pub fn new() -> (Self, broadcast::Receiver<()>) {
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+
+        let coordinator = Self {
+            shutdown_tx,
+            shutdown_requested,
+        };
+
+        (coordinator, shutdown_rx)
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.shutdown_tx.subscribe()
+    }
+
+    pub fn trigger_shutdown(&self) {
+        self.shutdown_requested.store(true, Ordering::Relaxed);
+        let _ = self.shutdown_tx.send(());
+    }
+
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Relaxed)
+    }
+}
 
 /// Main application entry point with unified error handling
 ///
@@ -37,26 +73,61 @@ async fn main() {
     let command_name = command_name_owned.as_deref().unwrap_or(COMMAND_NAME);
     let pid = std::process::id();
 
-    // Startup returns configured scanner manager, or None if no repositories to scan
-    let scanner_manager = match app::startup::startup(command_name).await {
-        Ok(scanner_manager) => scanner_manager,
-        Err(e) => {
-            // Handle startup errors using unified error handling system
-            log_error_with_context(&e, "Application startup");
-            std::process::exit(1);
+    // Set up shutdown coordination
+    let (coordinator, mut shutdown_rx) = ShutdownCoordinator::new();
+
+    // Set up signal handlers immediately so they're active for the entire program lifetime
+    setup_signal_handlers(
+        coordinator.shutdown_tx.clone(),
+        coordinator.shutdown_requested.clone(),
+    );
+
+    let mut shutdown_check = shutdown_rx.resubscribe();
+    let scanner_manager = tokio::select! {
+        result = app::startup::startup(command_name) => {
+            match result {
+                Ok(scanner_manager) => scanner_manager,
+                Err(e) => {
+                    log_error_with_context(&e, "Application startup");
+                    std::process::exit(1);
+                }
+            }
         }
+        _ = shutdown_check.recv() => std::process::exit(0)
     };
 
-    if let Err(e) = system_start(pid).await {
-        log::error!("Failed to start system: {e}");
-        std::process::exit(1);
-    } else {
+    let mut shutdown_check = shutdown_rx.resubscribe();
+    tokio::select! {
+        result = system_start(pid) => {
+            if let Err(e) = result {
+                log::error!("Failed to start system: {e}");
+                std::process::exit(1);
+            }
+        }
+        _ = shutdown_check.recv() => std::process::exit(0)
+    }
+
+    {
         log::info!("{command_name}: ✅ Repository Statistics Tool starting");
 
         // Start the actual scanner if we have one configured
         if let Some(scanner_manager) = scanner_manager {
-            if let Err(e) = start_scanner(scanner_manager).await {
-                log::error!("Failed to start scanner: {e}");
+            // Clone the Arc so we can use it for cleanup
+            let scanner_manager_for_cleanup = scanner_manager.clone();
+
+            // Run scanner with signal handling
+            let scanner_result = tokio::select! {
+                result = start_scanner(scanner_manager) => {
+                    result
+                }
+                _ = shutdown_rx.recv() => {
+                    scanner_manager_for_cleanup.cleanup_all_checkouts();
+                    Ok(())
+                }
+            };
+
+            if let Err(e) = scanner_result {
+                log::error!("Scanner error: {e}");
                 std::process::exit(1);
             }
         }
@@ -64,6 +135,46 @@ async fn main() {
         if let Err(e) = system_stop(pid).await {
             log::warn!("Error stopping system: {e}");
         }
+    }
+}
+
+fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested: Arc<AtomicBool>) {
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+
+        use tokio::signal::unix::{signal, SignalKind};
+        let signals = [
+            SignalKind::interrupt(),
+            SignalKind::terminate(),
+            SignalKind::hangup(),
+            SignalKind::quit(),
+        ];
+
+        for kind in signals {
+            let tx = shutdown_tx.clone();
+            let requested = shutdown_requested.clone();
+
+            tokio::spawn(async move {
+                if let Ok(mut sig) = signal(kind) {
+                    sig.recv().await;
+                    requested.store(true, Ordering::Relaxed);
+                    let _ = tx.send(());
+                }
+            });
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                shutdown_requested.store(true, Ordering::Relaxed);
+                let _ = shutdown_tx.send(());
+            }
+        });
     }
 }
 
@@ -105,10 +216,110 @@ async fn start_scanner(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use tokio::time::{timeout, Duration};
+
     #[tokio::test]
     async fn test_main_is_async() {
         // Test that main function is now async
         // This test should pass once we've converted to async
         assert!(true, "Main function is now async");
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_coordinator_creation() {
+        let (coordinator, _rx) = ShutdownCoordinator::new();
+
+        // Should start with shutdown not requested
+        assert!(!coordinator.is_shutdown_requested());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_coordinator_trigger() {
+        let (coordinator, mut rx) = ShutdownCoordinator::new();
+
+        // Initially shutdown should not be requested
+        assert!(!coordinator.is_shutdown_requested());
+
+        // Trigger shutdown
+        coordinator.trigger_shutdown();
+
+        // Should now report shutdown requested
+        assert!(coordinator.is_shutdown_requested());
+
+        // Should receive shutdown signal
+        let signal_received = timeout(Duration::from_millis(100), rx.recv()).await;
+        assert!(signal_received.is_ok(), "Should receive shutdown signal");
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_coordinator_multiple_subscribers() {
+        let (coordinator, _rx1) = ShutdownCoordinator::new();
+        let mut rx2 = coordinator.subscribe();
+        let mut rx3 = coordinator.subscribe();
+
+        // Trigger shutdown
+        coordinator.trigger_shutdown();
+
+        // All subscribers should receive the signal
+        let signal2 = timeout(Duration::from_millis(100), rx2.recv()).await;
+        let signal3 = timeout(Duration::from_millis(100), rx3.recv()).await;
+
+        assert!(
+            signal2.is_ok(),
+            "Subscriber 2 should receive shutdown signal"
+        );
+        assert!(
+            signal3.is_ok(),
+            "Subscriber 3 should receive shutdown signal"
+        );
+        assert!(coordinator.is_shutdown_requested());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_coordinator_idempotent_trigger() {
+        let (coordinator, mut rx) = ShutdownCoordinator::new();
+
+        // Should start with shutdown not requested
+        assert!(!coordinator.is_shutdown_requested());
+
+        // Trigger shutdown multiple times
+        coordinator.trigger_shutdown();
+        assert!(coordinator.is_shutdown_requested());
+
+        coordinator.trigger_shutdown();
+        assert!(coordinator.is_shutdown_requested());
+
+        coordinator.trigger_shutdown();
+        assert!(coordinator.is_shutdown_requested());
+
+        // Should receive at least one signal (multiple triggers send multiple signals)
+        let signal_received = timeout(Duration::from_millis(100), rx.recv()).await;
+        assert!(signal_received.is_ok(), "Should receive shutdown signal");
+
+        // State should remain consistently true
+        assert!(coordinator.is_shutdown_requested());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_coordinator_subscribe_after_trigger() {
+        let (coordinator, _rx) = ShutdownCoordinator::new();
+
+        // Trigger shutdown first
+        coordinator.trigger_shutdown();
+        assert!(coordinator.is_shutdown_requested());
+
+        // Subscribe after shutdown was triggered
+        let mut late_subscriber = coordinator.subscribe();
+
+        // Late subscriber should not receive the signal that was already sent
+        let no_signal = timeout(Duration::from_millis(50), late_subscriber.recv()).await;
+        assert!(
+            no_signal.is_err(),
+            "Late subscriber should not receive already-sent signal"
+        );
+
+        // But should still be able to detect shutdown state
+        assert!(coordinator.is_shutdown_requested());
     }
 }

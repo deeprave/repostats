@@ -14,7 +14,7 @@ static TEMPLATE_VAR_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{([a-zA-Z0-9\-_]+)\}").expect("Invalid regex pattern"));
 
 /// Checkout manager for handling file checkout operations with automatic cleanup
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CheckoutManager {
     /// Template for checkout directory paths
     checkout_template: Option<String>,
@@ -60,6 +60,20 @@ impl TemplateVars {
             pid: std::process::id().to_string(),
             scanner_id,
         }
+    }
+
+    /// Create TemplateVars for a commit checkout with sensible defaults
+    /// Uses shortened SHA, default branch and repo names when specific values aren't available
+    pub fn for_commit_checkout(commit_sha: &str, scanner_id: &str) -> Self {
+        const SHORT_SHA_LENGTH: usize = 8;
+
+        Self::new(
+            commit_sha.to_string(),
+            commit_sha[..SHORT_SHA_LENGTH.min(commit_sha.len())].to_string(), // Use shortened SHA
+            "HEAD".to_string(), // default branch when not available
+            "repo".to_string(), // default repo name when not available
+            scanner_id.to_string(),
+        )
     }
 
     /// Create TemplateVars with optional values for all fields (None uses defaults)
@@ -132,23 +146,25 @@ impl TemplateVars {
         });
 
         if !unknown_vars.is_empty() {
-            return Err(CheckoutError::TemplateError(format!(
-                "Template resolution failed for template '{}'\n\
+            return Err(CheckoutError::Configuration {
+                message: format!(
+                    "Template resolution failed for template '{}'\n\
                  Unknown variables: {}\n\
                  Available variables: {}",
-                template,
-                {
-                    let mut sorted_vars: Vec<_> = unknown_vars.iter().cloned().collect();
-                    sorted_vars.sort();
-                    sorted_vars.join(", ")
-                },
-                {
-                    // Use the sorted substitutions array for consistent ordering
-                    let available_vars: Vec<_> =
-                        substitutions.iter().map(|(key, _)| *key).collect();
-                    available_vars.join(", ")
-                }
-            )));
+                    template,
+                    {
+                        let mut sorted_vars: Vec<_> = unknown_vars.iter().cloned().collect();
+                        sorted_vars.sort();
+                        sorted_vars.join(", ")
+                    },
+                    {
+                        // Use the sorted substitutions array for consistent ordering
+                        let available_vars: Vec<_> =
+                            substitutions.iter().map(|(key, _)| *key).collect();
+                        available_vars.join(", ")
+                    }
+                ),
+            });
         }
 
         Ok(resolved.to_string())
@@ -160,67 +176,63 @@ impl TemplateVars {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone)]
 pub enum CheckoutError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Git error: {0}")]
-    Git(#[from] gix::open::Error),
-
-    #[error("Git repository operation failed: {0}")]
-    GitOperation(String),
-
-    #[error("Template resolution error: {0}")]
-    TemplateError(String),
-
-    #[error("Directory already exists and force_overwrite is false: {0}")]
-    DirectoryExists(PathBuf),
-
-    #[error("Revision '{0}' not found in repository")]
-    RevisionNotFound(String),
-
-    #[error("Progress reporting failed: {0}")]
-    Progress(String),
+    /// Repository validation failed
+    Repository { message: String },
+    /// IO operation failed
+    Io { message: String },
+    /// Invalid configuration
+    Configuration { message: String },
 }
+
+impl std::fmt::Display for CheckoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckoutError::Repository { message } => write!(f, "Repository error: {}", message),
+            CheckoutError::Io { message } => write!(f, "IO error: {}", message),
+            CheckoutError::Configuration { message } => {
+                write!(f, "Configuration error: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for CheckoutError {}
 
 pub type CheckoutResult<T> = Result<T, CheckoutError>;
 
 impl crate::core::error_handling::ContextualError for CheckoutError {
     fn is_user_actionable(&self) -> bool {
         match self {
-            CheckoutError::DirectoryExists(_) => true,
-            CheckoutError::RevisionNotFound(_) => true,
-            CheckoutError::TemplateError(_) => true,
-            _ => false,
+            CheckoutError::Configuration { .. } => true, // User can fix config/template issues
+            CheckoutError::Repository { .. } => false,   // Git/repository issues are system-level
+            CheckoutError::Io { .. } => false,           // IO issues are system-level
         }
     }
 
     fn user_message(&self) -> Option<&str> {
         match self {
-            CheckoutError::DirectoryExists(_) => {
-                Some("The checkout directory already exists. Use --checkout-force to overwrite.")
-            }
-            CheckoutError::RevisionNotFound(_) => {
-                Some("The specified revision could not be found. Please check the branch, tag, or commit SHA.")
-            }
-            CheckoutError::TemplateError(_) => {
-                Some("The checkout directory template contains invalid variables. Valid variables are: {commit-id}, {sha256}, {branch}, {repo}, {tmpdir}, {pid}, {scanner-id}")
-            }
+            CheckoutError::Configuration { message } => Some(message),
             _ => None,
         }
     }
 }
 
 impl CheckoutManager {
+    /// Create a CheckoutManager and integrate with services (following established manager pattern)
+    pub async fn create<P: AsRef<Path>>(repository_path: P) -> Self {
+        Self::new(repository_path)
+    }
+
     /// Helper to open the git repository with consistent error handling
     fn open_repository(&self) -> CheckoutResult<gix::Repository> {
-        gix::open(&self.repository_path).map_err(|e| {
-            CheckoutError::GitOperation(format!(
+        gix::open(&self.repository_path).map_err(|e| CheckoutError::Repository {
+            message: format!(
                 "Failed to open repository at '{}': {}",
                 self.repository_path.display(),
                 e
-            ))
+            ),
         })
     }
 
@@ -264,85 +276,248 @@ impl CheckoutManager {
 
     /// Resolve revision (branch, tag, or commit SHA) to a commit SHA string
     ///
-    /// For now, this is a placeholder that validates the repository exists
-    /// and returns the revision or a default. Full git resolution will be
-    /// implemented in a future enhancement.
+    /// Resolves branches, tags, and commit SHAs to their full commit SHA using git.
+    /// Supports --checkout-rev override and defaults to HEAD when no revision specified.
     pub fn resolve_revision(&self, revision: Option<&str>) -> CheckoutResult<String> {
-        // Verify repository exists using helper
-        let _repo = self.open_repository()?;
+        let repo = self.open_repository()?;
 
         let revision_str = revision
             .or(self.default_revision.as_deref())
             .unwrap_or("HEAD");
 
-        // TODO: Implement proper revision resolution to commit SHA
-        // IMPORTANT: This is a stub implementation - revision is not resolved to a commit SHA
-        use std::sync::Once;
-        static WARN_STUB: Once = Once::new();
-        WARN_STUB.call_once(|| {
-            log::warn!("Checkout operations using stub implementation - git resolution not yet implemented");
-        });
-
         log::debug!(
-            "resolve_revision: Returning revision '{}' as-is without resolving to commit SHA (stub implementation)",
+            "resolve_revision: Resolving revision '{}' to commit SHA",
             revision_str
         );
 
-        Ok(revision_str.to_string())
+        // Use gix to resolve the revision to a commit object
+        let parsed_ref =
+            repo.rev_parse(revision_str)
+                .map_err(|e| CheckoutError::Configuration {
+                    message: format!("Failed to resolve revision '{}': {}", revision_str, e),
+                })?;
+
+        let commit_id = parsed_ref
+            .single()
+            .ok_or_else(|| CheckoutError::Configuration {
+                message: format!(
+                    "Revision '{}' could not be resolved to a single object",
+                    revision_str
+                ),
+            })?;
+
+        // Verify the resolved object is actually a commit
+        let commit = repo
+            .find_commit(commit_id)
+            .map_err(|e| CheckoutError::Configuration {
+                message: format!(
+                    "Revision '{}' (SHA: {}) is not a valid commit: {}",
+                    revision_str, commit_id, e
+                ),
+            })?;
+
+        let commit_sha = commit.id().to_string();
+
+        log::debug!(
+            "resolve_revision: Successfully resolved '{}' to commit SHA '{}'",
+            revision_str,
+            commit_sha
+        );
+
+        Ok(commit_sha)
     }
 
     /// Extract files from a git commit to the specified directory
     ///
-    /// This is a placeholder implementation that creates the directory structure.
-    /// Full git file extraction will be implemented in a future enhancement.
+    /// Extracts all files from the specified commit to the target directory,
+    /// preserving the directory structure and file content.
     pub fn extract_files_from_commit(
         &self,
         revision: &str,
         target_dir: &Path,
         progress_callback: Option<&dyn Fn(usize, usize)>,
     ) -> CheckoutResult<usize> {
-        // Verify repository exists
-        let _repo = self.open_repository()?;
-
-        // TODO: Implement actual git file extraction using gix
-        // IMPORTANT: This is a stub implementation - no files are actually checked out
-        use std::sync::Once;
-        static WARN_EXTRACT_STUB: Once = Once::new();
-        WARN_EXTRACT_STUB.call_once(|| {
-            log::warn!(
-                "File extraction using stub implementation - only placeholder files are created"
-            );
-        });
+        let repo = self.open_repository()?;
 
         log::debug!(
-            "extract_files_from_commit: Creating placeholder file at '{}' for revision '{}' (stub implementation)",
-            target_dir.join(".checkout_info").display(),
+            "extract_files_from_commit: Extracting files from revision '{}' to '{}'",
+            revision,
+            target_dir.display()
+        );
+
+        // Parse the revision to get commit SHA
+        let parsed_ref = repo
+            .rev_parse(revision)
+            .map_err(|e| CheckoutError::Configuration {
+                message: format!("Failed to resolve revision '{}': {}", revision, e),
+            })?;
+
+        let commit_id = parsed_ref
+            .single()
+            .ok_or_else(|| CheckoutError::Configuration {
+                message: format!(
+                    "Revision '{}' could not be resolved to a single object",
+                    revision
+                ),
+            })?;
+
+        // Get the commit object
+        let commit = repo
+            .find_commit(commit_id)
+            .map_err(|e| CheckoutError::Repository {
+                message: format!("Failed to find commit '{}': {}", commit_id, e),
+            })?;
+
+        // Get the tree from the commit
+        let tree = commit.tree().map_err(|e| CheckoutError::Repository {
+            message: format!("Failed to get tree for commit '{}': {}", commit_id, e),
+        })?;
+
+        // Count total entries for progress reporting
+        let total_entries = self.count_tree_entries(&tree)?;
+        let mut extracted_count = 0;
+
+        // Extract all files recursively
+        self.extract_tree_recursive(
+            &tree,
+            target_dir,
+            "",
+            &mut extracted_count,
+            total_entries,
+            progress_callback,
+        )?;
+
+        log::debug!(
+            "extract_files_from_commit: Successfully extracted {} files from revision '{}'",
+            extracted_count,
             revision
         );
 
-        // For now, just create a placeholder file to indicate the checkout happened
-        let placeholder_file = target_dir.join(".checkout_info");
-        let info_content = format!(
-            "Placeholder checkout only.\nNo files were extracted from revision: {}\nTimestamp: {}\nThis is a stub implementation.\n",
-            revision,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        );
-        std::fs::write(&placeholder_file, info_content)?;
+        Ok(extracted_count)
+    }
 
-        // Report progress if callback provided
-        if let Some(callback) = progress_callback {
-            callback(1, 1);
+    /// Count total entries in tree for progress reporting
+    fn count_tree_entries(&self, tree: &gix::Tree) -> CheckoutResult<usize> {
+        let mut count = 0;
+        for entry_result in tree.iter() {
+            let entry = entry_result.map_err(|e| CheckoutError::Repository {
+                message: format!("Failed to read tree entry: {}", e),
+            })?;
+
+            if entry.mode().is_tree() {
+                // Recursively count subtree entries
+                let subtree = entry
+                    .object()
+                    .map_err(|e| CheckoutError::Repository {
+                        message: format!("Failed to get subtree: {}", e),
+                    })?
+                    .try_into_tree()
+                    .map_err(|_| CheckoutError::Repository {
+                        message: "Expected tree object".to_string(),
+                    })?;
+                count += self.count_tree_entries(&subtree)?;
+            } else {
+                count += 1;
+            }
         }
+        Ok(count)
+    }
 
-        // Return 1 for the placeholder file
-        Ok(1)
+    /// Recursively extract tree contents to directory
+    fn extract_tree_recursive(
+        &self,
+        tree: &gix::Tree,
+        base_dir: &Path,
+        relative_path: &str,
+        extracted_count: &mut usize,
+        total_entries: usize,
+        progress_callback: Option<&dyn Fn(usize, usize)>,
+    ) -> CheckoutResult<()> {
+        for entry_result in tree.iter() {
+            let entry = entry_result.map_err(|e| CheckoutError::Repository {
+                message: format!("Failed to read tree entry: {}", e),
+            })?;
+
+            let entry_name =
+                std::str::from_utf8(entry.filename()).map_err(|e| CheckoutError::Repository {
+                    message: format!("Invalid UTF-8 in filename: {}", e),
+                })?;
+
+            let entry_path = if relative_path.is_empty() {
+                entry_name.to_string()
+            } else {
+                format!("{}/{}", relative_path, entry_name)
+            };
+
+            let target_path = base_dir.join(&entry_path);
+
+            if entry.mode().is_tree() {
+                // Create directory and recurse
+                std::fs::create_dir_all(&target_path).map_err(|e| CheckoutError::Io {
+                    message: e.to_string(),
+                })?;
+
+                let subtree = entry
+                    .object()
+                    .map_err(|e| CheckoutError::Repository {
+                        message: format!("Failed to get subtree: {}", e),
+                    })?
+                    .try_into_tree()
+                    .map_err(|_| CheckoutError::Repository {
+                        message: "Expected tree object".to_string(),
+                    })?;
+
+                self.extract_tree_recursive(
+                    &subtree,
+                    base_dir,
+                    &entry_path,
+                    extracted_count,
+                    total_entries,
+                    progress_callback,
+                )?;
+            } else {
+                // Extract file
+                let blob = entry
+                    .object()
+                    .map_err(|e| CheckoutError::Repository {
+                        message: format!("Failed to get blob: {}", e),
+                    })?
+                    .try_into_blob()
+                    .map_err(|_| CheckoutError::Repository {
+                        message: "Expected blob object".to_string(),
+                    })?;
+
+                // Ensure parent directory exists
+                if let Some(parent) = target_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| CheckoutError::Io {
+                        message: e.to_string(),
+                    })?;
+                }
+
+                // Write file content
+                std::fs::write(&target_path, &blob.data).map_err(|e| CheckoutError::Io {
+                    message: e.to_string(),
+                })?;
+
+                *extracted_count += 1;
+
+                // Report progress
+                if let Some(callback) = progress_callback {
+                    callback(*extracted_count, total_entries);
+                }
+
+                log::trace!(
+                    "extract_files_from_commit: Extracted file '{}' ({} bytes)",
+                    entry_path,
+                    blob.data.len()
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Create checkout directory and extract files from git
-    pub fn create_checkout_dir(
+    pub fn create_checkout(
         &mut self,
         vars: &TemplateVars,
         revision: Option<&str>,
@@ -351,12 +526,21 @@ impl CheckoutManager {
 
         if checkout_path.exists() {
             if !self.force_overwrite {
-                return Err(CheckoutError::DirectoryExists(checkout_path));
+                return Err(CheckoutError::Configuration {
+                    message: format!(
+                        "Directory already exists: {}. Use --checkout-force to overwrite.",
+                        checkout_path.display()
+                    ),
+                });
             }
-            std::fs::remove_dir_all(&checkout_path)?;
+            std::fs::remove_dir_all(&checkout_path).map_err(|e| CheckoutError::Io {
+                message: e.to_string(),
+            })?;
         }
 
-        std::fs::create_dir_all(&checkout_path)?;
+        std::fs::create_dir_all(&checkout_path).map_err(|e| CheckoutError::Io {
+            message: e.to_string(),
+        })?;
 
         // Resolve revision to commit SHA
         let resolved_revision = self.resolve_revision(revision)?;
@@ -369,7 +553,7 @@ impl CheckoutManager {
         )?;
 
         log::debug!(
-            "Extracted {} files from revision '{}' to {} (STUB: only placeholder file created)",
+            "Successfully extracted {} files from revision '{}' to {}",
             extracted_count,
             resolved_revision,
             checkout_path.display()
@@ -384,7 +568,7 @@ impl CheckoutManager {
     }
 
     /// Create checkout directory with progress reporting
-    pub fn create_checkout_dir_with_progress(
+    pub fn create_checkout_with_progress(
         &mut self,
         vars: &TemplateVars,
         revision: Option<&str>,
@@ -394,12 +578,21 @@ impl CheckoutManager {
 
         if checkout_path.exists() {
             if !self.force_overwrite {
-                return Err(CheckoutError::DirectoryExists(checkout_path));
+                return Err(CheckoutError::Configuration {
+                    message: format!(
+                        "Directory already exists: {}. Use --checkout-force to overwrite.",
+                        checkout_path.display()
+                    ),
+                });
             }
-            std::fs::remove_dir_all(&checkout_path)?;
+            std::fs::remove_dir_all(&checkout_path).map_err(|e| CheckoutError::Io {
+                message: e.to_string(),
+            })?;
         }
 
-        std::fs::create_dir_all(&checkout_path)?;
+        std::fs::create_dir_all(&checkout_path).map_err(|e| CheckoutError::Io {
+            message: e.to_string(),
+        })?;
 
         // Resolve revision to commit SHA
         let resolved_revision = self.resolve_revision(revision)?;
@@ -409,7 +602,7 @@ impl CheckoutManager {
             self.extract_files_from_commit(&resolved_revision, &checkout_path, progress_callback)?;
 
         log::debug!(
-            "Extracted {} files from revision '{}' to {} (STUB: only placeholder file created)",
+            "Successfully extracted {} files from revision '{}' to {}",
             extracted_count,
             resolved_revision,
             checkout_path.display()
@@ -427,7 +620,9 @@ impl CheckoutManager {
     pub fn cleanup_checkout(&mut self, checkout_id: &str) -> CheckoutResult<()> {
         if let Some(checkout_path) = self.active_checkouts.remove(checkout_id) {
             if !self.keep_files && checkout_path.exists() {
-                std::fs::remove_dir_all(&checkout_path)?;
+                std::fs::remove_dir_all(&checkout_path).map_err(|e| CheckoutError::Io {
+                    message: e.to_string(),
+                })?;
             }
         }
         Ok(())
@@ -438,7 +633,9 @@ impl CheckoutManager {
         if !self.keep_files {
             for (_, checkout_path) in self.active_checkouts.drain() {
                 if checkout_path.exists() {
-                    std::fs::remove_dir_all(&checkout_path)?;
+                    std::fs::remove_dir_all(&checkout_path).map_err(|e| CheckoutError::Io {
+                        message: e.to_string(),
+                    })?;
                 }
             }
         } else {
@@ -467,8 +664,24 @@ impl Default for CheckoutManager {
 
 impl Drop for CheckoutManager {
     fn drop(&mut self) {
-        // Best effort cleanup on drop
-        let _ = self.cleanup_all();
+        // Cleanup all checkouts when the manager is dropped
+        // This ensures cleanup even on panic or unexpected termination
+        let active_count = self.active_checkout_count();
+
+        if active_count > 0 {
+            log::debug!(
+                "CheckoutManager dropping: cleaning up {} active checkouts",
+                active_count
+            );
+            if let Err(e) = self.cleanup_all() {
+                log::warn!("Failed to cleanup checkouts during drop: {}", e);
+            } else {
+                log::debug!(
+                    "Successfully cleaned up {} checkouts during drop",
+                    active_count
+                );
+            }
+        }
     }
 }
 
@@ -599,20 +812,20 @@ mod tests {
     // This test requires a real git repository to work with the new checkout functionality
     #[test]
     #[ignore]
-    fn test_create_checkout_dir_requires_git_repo() {
+    fn test_create_checkout_requires_git_repo() {
         // This test is temporarily disabled because it requires actual git checkout functionality
         // which will be implemented in the next iteration
     }
 
     #[test]
     #[ignore]
-    fn test_create_checkout_dir_already_exists_no_force() {
+    fn test_create_checkout_already_exists_no_force() {
         // Temporarily disabled - requires actual git repository functionality
     }
 
     #[test]
     #[ignore]
-    fn test_create_checkout_dir_already_exists_with_force() {
+    fn test_create_checkout_already_exists_with_force() {
         // Temporarily disabled - requires actual git repository functionality
     }
 

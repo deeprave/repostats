@@ -384,7 +384,7 @@ fn format_system_time(time: &std::time::SystemTime) -> String {
 /// Scanner messages for repository scan data
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ScanMessage {
-    RepositoryData {
+    ScanStarted {
         scanner_id: String,
         timestamp: SystemTime,
         repository_data: RepositoryData,
@@ -418,7 +418,7 @@ impl ScanMessage {
     /// Get the message type string for queue publishing
     pub fn message_type(&self) -> &'static str {
         match self {
-            ScanMessage::RepositoryData { .. } => "repository_data",
+            ScanMessage::ScanStarted { .. } => "scan_started",
             ScanMessage::CommitData { .. } => "commit_data",
             ScanMessage::FileChange { .. } => "file_change",
             ScanMessage::ScanCompleted { .. } => "scan_completed",

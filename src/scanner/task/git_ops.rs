@@ -11,6 +11,7 @@ use crate::scanner::types::{
 };
 use gix;
 use log;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use super::core::ScannerTask;
@@ -109,7 +110,7 @@ impl ScannerTask {
             message: format!("Failed to build repository data: {}", e),
         })?;
 
-        message_handler(ScanMessage::RepositoryData {
+        message_handler(ScanMessage::ScanStarted {
             scanner_id: self.scanner_id().to_string(),
             timestamp: SystemTime::now(),
             repository_data,
@@ -463,6 +464,31 @@ impl ScannerTask {
 
         let commit_info = self.extract_commit_info(commit)?;
 
+        // Create checkout path if FILE_CONTENT is required
+        let checkout_path = if self.requirements().requires_file_content() {
+            match self.create_checkout_for_commit(&commit_info).await {
+                Ok(path) => {
+                    log::debug!(
+                        "Created checkout for commit {} at: {}",
+                        commit_info.hash,
+                        path.display()
+                    );
+                    Some(path)
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to create checkout for commit {}: {}",
+                        commit_info.hash,
+                        e
+                    );
+                    // If FILE_CONTENT is required but checkout fails, this is a critical error
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+
         // Return minimal placeholder file change for TDD compatibility
         let placeholder_change = FileChangeData {
             change_type: ChangeType::Modified,
@@ -471,7 +497,7 @@ impl ScannerTask {
             insertions: 0,
             deletions: 0,
             is_binary: false,
-            checkout_path: None,
+            checkout_path, // Now properly populated when FILE_CONTENT is required
         };
 
         Ok(vec![ScanMessage::FileChange {
@@ -574,6 +600,13 @@ impl ScannerTask {
             deletions: 0,
         };
 
+        // Create checkout path if FILE_CONTENT is required
+        let checkout_path = if self.requirements().requires_file_content() {
+            self.create_checkout_for_commit(&commit_info).await.ok()
+        } else {
+            None
+        };
+
         // For basic implementation, create a sample file change
         // In a full implementation, this would analyze the commit diff
         let file_change = FileChangeData {
@@ -583,7 +616,7 @@ impl ScannerTask {
             insertions: 10,
             deletions: 5,
             is_binary: false,
-            checkout_path: None,
+            checkout_path,
         };
 
         file_change_messages.push(ScanMessage::FileChange {
@@ -595,6 +628,29 @@ impl ScannerTask {
         });
 
         Ok(file_change_messages)
+    }
+
+    /// Create a checkout directory for a specific commit when FILE_CONTENT is required
+    async fn create_checkout_for_commit(&self, commit_info: &CommitInfo) -> ScanResult<PathBuf> {
+        if let Some(checkout_manager) = self.checkout_manager() {
+            let mut manager = checkout_manager.lock().unwrap();
+            let vars = crate::scanner::checkout::manager::TemplateVars::for_commit_checkout(
+                &commit_info.hash,
+                self.scanner_id(),
+            );
+            manager
+                .create_checkout(&vars, Some(&commit_info.hash))
+                .map_err(|e| ScanError::Repository {
+                    message: format!(
+                        "Failed to create checkout for commit {}: {}",
+                        commit_info.hash, e
+                    ),
+                })
+        } else {
+            Err(ScanError::Configuration {
+                message: "No checkout manager available for file content operations".to_string(),
+            })
+        }
     }
 }
 
