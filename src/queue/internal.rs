@@ -116,7 +116,7 @@ impl MultiConsumerQueue {
     }
 
     /// Publish a message to the queue
-    pub fn publish(&self, message: Message) -> QueueResult<u64> {
+    pub fn publish(&self, mut message: Message) -> QueueResult<u64> {
         // Check queue size limit
         {
             let messages = self.messages.read().unwrap();
@@ -134,6 +134,9 @@ impl MultiConsumerQueue {
             *next_seq += 1;
             current
         };
+
+        // Update message header with assigned sequence
+        message.header.sequence = sequence;
 
         // Add message to queue
         let entry = QueueEntry {

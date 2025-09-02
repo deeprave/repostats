@@ -12,6 +12,9 @@ pub use crate::queue::publisher::QueuePublisher;
 // Message types and utilities
 pub use crate::queue::message::Message;
 
+// Typed queue consumers for compile-time type safety
+pub use crate::queue::typed::{TypedMessage, TypedQueueConsumer, TypedQueueManagerExt};
+
 // Internal queue implementation (may be needed by some components)
 
 // Error handling

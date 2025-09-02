@@ -10,7 +10,8 @@ use crate::plugin::args::{
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
-use crate::queue::api::{Message, QueueConsumer};
+use crate::queue::api::QueueConsumer;
+use crate::queue::typed::{TypedMessage, TypedQueueConsumer};
 use crate::scanner::api::ScanMessage;
 use crate::scanner::types::ScanRequires;
 use clap::Arg;
@@ -49,13 +50,6 @@ impl DumpPlugin {
         }
     }
 
-    /// Check if a message type is a scan message that should be deserialized
-    fn is_scan_message(message_type: &str) -> bool {
-        message_type.starts_with("scan_")
-            || message_type.starts_with("commit_")
-            || message_type.starts_with("file_")
-    }
-
     /// Format a message header in standard format
     fn format_header(sequence: u64, message_type: &str, producer_id: &str, data: &str) -> String {
         format!(
@@ -64,110 +58,91 @@ impl DumpPlugin {
         )
     }
 
-    /// Extract scan message from raw message data
-    fn extract_scan_message(msg: &Message) -> Option<ScanMessage> {
-        if Self::is_scan_message(&msg.header.message_type) {
-            match serde_json::from_str::<ScanMessage>(&msg.data) {
-                Ok(scan_msg) => Some(scan_msg),
-                Err(e) => {
-                    error!(
-                        "DumpPlugin: Failed to deserialize ScanMessage (type: {}): {}",
-                        msg.header.message_type, e
-                    );
-                    None
-                }
-            }
-        } else {
-            None
+    /// Format typed message directly without recreating raw message
+    fn format_typed_message_direct(
+        typed_msg: &TypedMessage<ScanMessage>,
+        output_format: OutputFormat,
+        show_headers: bool,
+    ) -> String {
+        match output_format {
+            OutputFormat::Json => Self::format_json_typed(typed_msg),
+            OutputFormat::Compact => Self::format_compact_typed(typed_msg),
+            OutputFormat::Text => Self::format_text_typed(typed_msg, show_headers),
         }
     }
 
-    /// Format message in JSON format
-    fn format_json(msg: &Message, scan_message: Option<&ScanMessage>) -> String {
-        if let Some(scan_msg) = scan_message {
-            json!({
-                "sequence": msg.header.sequence,
-                "producer_id": msg.header.producer_id,
-                "message_type": msg.header.message_type,
-                "timestamp": msg.header
-                    .timestamp
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                "scan_message": scan_msg
-            })
-            .to_string()
-        } else {
-            json!({
-                "sequence": msg.header.sequence,
-                "producer_id": msg.header.producer_id,
-                "message_type": msg.header.message_type,
-                "timestamp": msg.header
-                    .timestamp
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                "data": msg.data
-            })
-            .to_string()
-        }
+    /// Format typed message in JSON format
+    fn format_json_typed(typed_msg: &TypedMessage<ScanMessage>) -> String {
+        json!({
+            "sequence": typed_msg.header.sequence,
+            "producer_id": typed_msg.header.producer_id,
+            "message_type": typed_msg.header.message_type,
+            "timestamp": typed_msg.header
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            "scan_message": typed_msg.content
+        })
+        .to_string()
     }
 
-    /// Format message in compact format
-    fn format_compact(msg: &Message, scan_message: Option<&ScanMessage>) -> String {
-        if msg.header.message_type.starts_with("scan_started") {
-            if let Some(ScanMessage::ScanStarted {
+    /// Format typed message in compact format
+    fn format_compact_typed(typed_msg: &TypedMessage<ScanMessage>) -> String {
+        if typed_msg.header.message_type.starts_with("scan_started") {
+            if let ScanMessage::ScanStarted {
                 repository_data, ..
-            }) = scan_message
+            } = &typed_msg.content
             {
                 format!(
                     "{}:{}:repository[{}]:{:?}",
-                    msg.header.sequence,
-                    msg.header.producer_id,
+                    typed_msg.header.sequence,
+                    typed_msg.header.producer_id,
                     repository_data.path,
                     repository_data.git_ref
                 )
             } else {
                 format!(
                     "{}:{}:{}:{}",
-                    msg.header.sequence, msg.header.producer_id, msg.header.message_type, msg.data
+                    typed_msg.header.sequence,
+                    typed_msg.header.producer_id,
+                    typed_msg.header.message_type,
+                    serde_json::to_string(&typed_msg.content).unwrap_or_default()
                 )
             }
         } else {
             format!(
                 "{}:{}:{}:{}",
-                msg.header.sequence, msg.header.producer_id, msg.header.message_type, msg.data
+                typed_msg.header.sequence,
+                typed_msg.header.producer_id,
+                typed_msg.header.message_type,
+                serde_json::to_string(&typed_msg.content).unwrap_or_default()
             )
         }
     }
 
-    /// Format message in text format
-    fn format_text(
-        msg: &Message,
-        scan_message: Option<&ScanMessage>,
-        show_headers: bool,
-    ) -> String {
-        if msg.header.message_type.starts_with("scan_started") {
-            Self::format_repository_data_text(msg, scan_message, show_headers)
+    /// Format typed message in text format
+    fn format_text_typed(typed_msg: &TypedMessage<ScanMessage>, show_headers: bool) -> String {
+        if typed_msg.header.message_type.starts_with("scan_started") {
+            Self::format_repository_data_text_typed(typed_msg, show_headers)
         } else {
-            Self::format_regular_message_text(msg, show_headers)
+            Self::format_regular_message_text_typed(typed_msg, show_headers)
         }
     }
 
-    /// Format repository data message in text format
-    fn format_repository_data_text(
-        msg: &Message,
-        scan_message: Option<&ScanMessage>,
+    /// Format repository data message from typed message in text format
+    fn format_repository_data_text_typed(
+        typed_msg: &TypedMessage<ScanMessage>,
         show_headers: bool,
     ) -> String {
-        if let Some(ScanMessage::ScanStarted {
+        if let ScanMessage::ScanStarted {
             repository_data, ..
-        }) = scan_message
+        } = &typed_msg.content
         {
             if show_headers {
                 format!(
                     "[{}] Repository Scan Metadata:\n  Path: {}\n  Branch: {:?}\n  Filters: {} files, {} authors, {:?} commits max\n  Date Range: {:?}",
-                    msg.header.sequence,
+                    typed_msg.header.sequence,
                     repository_data.path,
                     repository_data.git_ref.as_deref().unwrap_or("default"),
                     repository_data.file_paths.as_deref().unwrap_or("all"),
@@ -182,33 +157,25 @@ impl DumpPlugin {
                 )
             }
         } else {
-            // Fallback if deserialization fails
-            Self::format_regular_message_text(msg, show_headers)
+            // Fallback if message type doesn't match content
+            Self::format_regular_message_text_typed(typed_msg, show_headers)
         }
     }
 
-    /// Format regular (non-repository) message in text format
-    fn format_regular_message_text(msg: &Message, show_headers: bool) -> String {
+    /// Format regular (non-repository) typed message in text format
+    fn format_regular_message_text_typed(
+        typed_msg: &TypedMessage<ScanMessage>,
+        show_headers: bool,
+    ) -> String {
         if show_headers {
             Self::format_header(
-                msg.header.sequence,
-                &msg.header.message_type,
-                &msg.header.producer_id,
-                &msg.data,
+                typed_msg.header.sequence,
+                &typed_msg.header.message_type,
+                &typed_msg.header.producer_id,
+                &serde_json::to_string(&typed_msg.content).unwrap_or_default(),
             )
         } else {
-            msg.data.clone()
-        }
-    }
-
-    /// Format message according to output format
-    fn format_message(msg: &Message, output_format: OutputFormat, show_headers: bool) -> String {
-        let scan_message = Self::extract_scan_message(msg);
-
-        match output_format {
-            OutputFormat::Json => Self::format_json(msg, scan_message.as_ref()),
-            OutputFormat::Compact => Self::format_compact(msg, scan_message.as_ref()),
-            OutputFormat::Text => Self::format_text(msg, scan_message.as_ref(), show_headers),
+            serde_json::to_string(&typed_msg.content).unwrap_or_default()
         }
     }
 }
@@ -344,6 +311,9 @@ impl ConsumerPlugin for DumpPlugin {
         // Create shutdown channel for graceful shutdown
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
+        // Create typed consumer for ScanMessage
+        let typed_consumer = TypedQueueConsumer::<ScanMessage>::new(consumer);
+
         // Capture plugin settings for the task
         let output_format = self.output_format;
         let show_headers = self.show_headers;
@@ -371,25 +341,24 @@ impl ConsumerPlugin for DumpPlugin {
                         break;
                     }
 
-                    // Try to read a message (with timeout to allow shutdown checks)
+                    // Try to read a typed message (with timeout to allow shutdown checks)
                     result = tokio::time::timeout(
                         tokio::time::Duration::from_millis(100),
-                        async { consumer.read() }
+                        async { typed_consumer.read_with_header() }
                     ) => {
                         match result {
-                            Ok(Ok(Some(msg))) => {
-                                let formatted = DumpPlugin::format_message(&msg, output_format, show_headers);
+                            Ok(Ok(Some(typed_msg))) => {
+                                let formatted = DumpPlugin::format_typed_message_direct(&typed_msg, output_format, show_headers);
                                 println!("{}", formatted);
                                 message_count += 1;
 
-                                // Track scanner lifecycle
-                                if let Ok(scan_message) = serde_json::from_str::<ScanMessage>(&msg.data) {
-                                    match scan_message {
-                                        ScanMessage::ScanStarted { scanner_id, .. } => {
-                                            active_scanners.insert(scanner_id.clone());
-                                            log::debug!("DumpPlugin: Started tracking scanner: {}", scanner_id);
-                                        }
-                                        ScanMessage::ScanCompleted { scanner_id, .. } => {
+                                // Track scanner lifecycle using typed content directly
+                                match &typed_msg.content {
+                                    ScanMessage::ScanStarted { scanner_id, .. } => {
+                                        active_scanners.insert(scanner_id.clone());
+                                        log::debug!("DumpPlugin: Started tracking scanner: {}", scanner_id);
+                                    }
+                                    ScanMessage::ScanCompleted { scanner_id, .. } => {
                                             completed_scanners.insert(scanner_id.clone());
                                             log::debug!("DumpPlugin: Scanner completed: {}", scanner_id);
 
@@ -407,29 +376,28 @@ impl ConsumerPlugin for DumpPlugin {
                                                 }
                                                 break;
                                             }
-                                        }
-                                        ScanMessage::ScanError { scanner_id, .. } => {
-                                            completed_scanners.insert(scanner_id.clone());
-                                            log::debug!("DumpPlugin: Scanner failed: {}", scanner_id);
+                                    }
+                                    ScanMessage::ScanError { scanner_id, .. } => {
+                                        completed_scanners.insert(scanner_id.clone());
+                                        log::debug!("DumpPlugin: Scanner failed: {}", scanner_id);
 
-                                            // Check if all active scanners have completed (including errors)
-                                            if !active_scanners.is_empty() &&
-                                               active_scanners.iter().all(|id| completed_scanners.contains(id)) {
-                                                log::debug!("DumpPlugin: All scanners completed (some with errors), finishing...");
+                                        // Check if all active scanners have completed (including errors)
+                                        if !active_scanners.is_empty() &&
+                                           active_scanners.iter().all(|id| completed_scanners.contains(id)) {
+                                            log::debug!("DumpPlugin: All scanners completed (some with errors), finishing...");
 
-                                                // Publish plugin completion event
-                                                if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
-                                                    &plugin_name,
-                                                    "All scanners completed - plugin processing finished"
-                                                ).await {
-                                                    log::error!("Failed to publish plugin completion event: {}", e);
-                                                }
-                                                break;
+                                            // Publish plugin completion event
+                                            if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
+                                                &plugin_name,
+                                                "All scanners completed - plugin processing finished"
+                                            ).await {
+                                                log::error!("Failed to publish plugin completion event: {}", e);
                                             }
+                                            break;
                                         }
-                                        _ => {
-                                            // Other message types don't affect lifecycle
-                                        }
+                                    }
+                                    _ => {
+                                        // Other message types don't affect lifecycle
                                     }
                                 }
                             }

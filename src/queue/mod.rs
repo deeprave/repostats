@@ -81,6 +81,7 @@ pub(crate) mod manager;
 pub(crate) mod message;
 pub(crate) mod publisher;
 pub(crate) mod traits;
+pub(crate) mod typed;
 pub(crate) mod types;
 
 // Public API module - the only public interface for the queue system
