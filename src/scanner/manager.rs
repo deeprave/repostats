@@ -27,8 +27,8 @@ enum RepoState {
 /// Checkout state tracking
 #[derive(Debug)]
 struct CheckoutState {
-    /// The CheckoutManager instance
-    manager: CheckoutManager,
+    /// The CheckoutManager instance (shared with thread safety)
+    manager: Arc<Mutex<CheckoutManager>>,
     /// Plugin IDs currently using this checkout
     active_plugins: HashSet<String>,
     /// Scanner ID that owns this checkout
@@ -112,9 +112,12 @@ impl ScannerManager {
     }
 
     /// Validate a repository path using gix and return the Repository and normalized path
+    /// Also validates that specified git refs exist in the repository
     pub fn validate_repository(
         &self,
         repository_path: &Path,
+        query_params: Option<&crate::core::query::QueryParams>,
+        checkout_settings: Option<&crate::app::cli::CheckoutSettings>,
     ) -> ScanResult<(gix::Repository, PathBuf)> {
         // For now, reject remote URLs
         let path_str = repository_path.to_string_lossy();
@@ -127,6 +130,19 @@ impl ScannerManager {
         // Attempt to discover and open the repository using gix
         match gix::discover(repository_path) {
             Ok(repo) => {
+                // Validate git refs if specified
+                if let Some(params) = query_params {
+                    if let Some(ref git_ref) = params.git_ref {
+                        self.validate_git_ref(&repo, git_ref, "--ref")?;
+                    }
+                }
+
+                if let Some(settings) = checkout_settings {
+                    if let Some(ref checkout_rev) = settings.default_revision {
+                        self.validate_git_ref(&repo, checkout_rev, "--checkout-rev")?;
+                    }
+                }
+
                 // Get the normalized path (the actual git directory)
                 let git_dir = repo.git_dir().to_path_buf();
 
@@ -145,6 +161,31 @@ impl ScannerManager {
                     ),
                 })
             }
+        }
+    }
+
+    /// Validate that a git reference exists in the repository
+    fn validate_git_ref(
+        &self,
+        repo: &gix::Repository,
+        git_ref: &str,
+        flag_name: &str,
+    ) -> ScanResult<()> {
+        // Use gix to resolve the reference
+        match repo.rev_parse(git_ref) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(ScanError::Configuration {
+                message: format!(
+                    "Invalid git reference '{}' for {} flag in repository '{}': {}",
+                    git_ref,
+                    flag_name,
+                    repo.workdir()
+                        .or_else(|| repo.git_dir().parent())
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    e
+                ),
+            }),
         }
     }
 
@@ -241,7 +282,7 @@ impl ScannerManager {
 
         // Validate the repository and get the gix::Repository instance
         let path = Path::new(&normalized_path);
-        let (repo, _git_dir) = self.validate_repository(path)?;
+        let (repo, _git_dir) = self.validate_repository(path, query_params, checkout_settings)?;
 
         // Get the unique repository ID
         let repo_id = self.get_unique_repo_id(&repo)?;
@@ -276,12 +317,66 @@ impl ScannerManager {
         let plugin_manager = services.plugin_manager().await;
         let requirements = plugin_manager.get_combined_requirements().await;
 
-        // Create scanner task with the repository, requirements, and query params
+        // Check if checkout is needed BEFORE creating scanner task
+        let needs_checkout = checkout_settings.is_some() || requirements.requires_file_content();
+
+        // Create checkout manager first if needed, so we can inject it
+        let checkout_manager = if needs_checkout {
+            // Create the checkout manager using existing logic
+            let checkout_manager = if let Some(ref settings) = checkout_settings {
+                CheckoutManager::with_settings(
+                    &normalized_path,
+                    settings.checkout_template.clone(),
+                    settings.keep_checkouts,
+                    settings.force_overwrite,
+                    settings.default_revision.clone(),
+                )
+            } else {
+                // Create default checkout manager for FILE_CONTENT requirement
+                let template = Some(format!(
+                    "{}/repostats-checkout-{}/{{commit-id}}",
+                    std::env::temp_dir().display(),
+                    &scanner_id
+                ));
+                CheckoutManager::with_settings(
+                    &normalized_path,
+                    template,
+                    false, // don't keep files by default
+                    true,  // force overwrite
+                    None,  // no default revision
+                )
+            };
+
+            // Wrap in Arc<Mutex<>> for shared access
+            let shared_manager = Arc::new(Mutex::new(checkout_manager));
+
+            // Store checkout manager in centralized tracking
+            let checkout_state = CheckoutState {
+                manager: shared_manager.clone(),
+                active_plugins: std::collections::HashSet::new(),
+                scanner_id: scanner_id.clone(),
+            };
+
+            self.checkout_managers
+                .lock()
+                .unwrap()
+                .insert(scanner_id.clone(), checkout_state);
+            Some(shared_manager)
+        } else {
+            None
+        };
+
+        // Create scanner task with checkout manager injected via dependency injection
         let mut builder = ScannerTask::builder(scanner_id.clone(), normalized_path.clone(), repo)
             .with_requirements(requirements);
 
         if let Some(params) = query_params {
             builder = builder.with_query_params(params.clone());
+        }
+
+        // Inject checkout manager if available
+        if let Some(manager) = checkout_manager {
+            builder = builder.with_checkout_manager(manager);
         }
 
         let scanner_task = builder.build();
@@ -292,23 +387,6 @@ impl ScannerManager {
             .lock()
             .unwrap()
             .insert(scanner_id.clone(), scanner_task.clone());
-
-        // Create checkout manager if checkout settings are provided
-        if let Some(settings) = checkout_settings {
-            if let Err(e) =
-                self.request_checkout(&scanner_id, &normalized_path, Some(settings.clone()))
-            {
-                // Clean up scanner task if checkout setup fails
-                self._scanner_tasks.lock().unwrap().remove(&scanner_id);
-                self.cancel_reservation(&repo_id);
-                return Err(ScanError::Configuration {
-                    message: format!(
-                        "Failed to create checkout manager for '{}': {}",
-                        repository_path, e
-                    ),
-                });
-            }
-        }
 
         // Create queue publisher to ensure queue is ready, with retries for transient errors
         let mut last_publisher_err = None;
@@ -562,41 +640,6 @@ impl ScannerManager {
 
     // ===== Checkout Management Methods =====
 
-    /// Request a checkout for a scanner, creating a CheckoutManager if needed
-    pub fn request_checkout(
-        &self,
-        scanner_id: &str,
-        repository_path: &str,
-        checkout_settings: Option<crate::app::cli::CheckoutSettings>,
-    ) -> ScanResult<()> {
-        let mut checkout_managers = self.checkout_managers.lock().unwrap();
-
-        if !checkout_managers.contains_key(scanner_id) {
-            // Create a new CheckoutManager for this scanner
-            let manager = if let Some(settings) = checkout_settings {
-                CheckoutManager::with_settings(
-                    repository_path,
-                    settings.checkout_template,
-                    settings.keep_checkouts,
-                    settings.force_overwrite,
-                    settings.default_revision,
-                )
-            } else {
-                CheckoutManager::new(repository_path)
-            };
-
-            let state = CheckoutState {
-                manager,
-                active_plugins: HashSet::new(),
-                scanner_id: scanner_id.to_string(),
-            };
-
-            checkout_managers.insert(scanner_id.to_string(), state);
-        }
-
-        Ok(())
-    }
-
     /// Register a plugin as using a scanner's checkout
     pub fn register_plugin_checkout(&self, scanner_id: &str, plugin_id: &str) -> ScanResult<()> {
         // Update checkout state
@@ -629,7 +672,7 @@ impl ScannerManager {
         let should_cleanup = if let Some(state) = checkout_managers.get_mut(scanner_id) {
             state.active_plugins.remove(plugin_id);
             // Check if this was the last plugin and cleanup should happen
-            state.active_plugins.is_empty() && !state.manager.keep_files
+            state.active_plugins.is_empty() && !state.manager.lock().unwrap().keep_files
         } else {
             false
         };
@@ -650,7 +693,7 @@ impl ScannerManager {
                 drop(checkout_managers);
 
                 // Perform cleanup outside of lock
-                if let Err(e) = state.manager.cleanup_all() {
+                if let Err(e) = state.manager.lock().unwrap().cleanup_all() {
                     log::warn!(
                         "Failed to cleanup checkouts for scanner '{}': {}",
                         scanner_id,
@@ -670,9 +713,9 @@ impl ScannerManager {
 
     /// Get the CheckoutManager for a scanner (if it exists)
     ///
-    /// WARNING: Returns a clone of the CheckoutManager, which may lead to state inconsistency.
-    /// Prefer using `create_checkout_for_scanner` for checkout operations to maintain state consistency.
-    pub fn get_checkout_manager(&self, scanner_id: &str) -> Option<CheckoutManager> {
+    /// Get shared reference to CheckoutManager for proper coordination.
+    /// Use proper mutex locking when accessing the manager.
+    pub fn get_checkout_manager(&self, scanner_id: &str) -> Option<Arc<Mutex<CheckoutManager>>> {
         let checkout_managers = self.checkout_managers.lock().unwrap();
         checkout_managers
             .get(scanner_id)
@@ -691,7 +734,9 @@ impl ScannerManager {
         if let Some(state) = checkout_managers.get_mut(scanner_id) {
             state
                 .manager
-                .create_checkout_dir(vars, revision)
+                .lock()
+                .unwrap()
+                .create_checkout(vars, revision)
                 .map_err(|e| ScanError::Configuration {
                     message: format!("Checkout failed for scanner '{}': {}", scanner_id, e),
                 })
@@ -702,14 +747,52 @@ impl ScannerManager {
         }
     }
 
+    /// Get or create a checkout path for a specific commit
+    /// This is called by scanner tasks when they need FILE_CONTENT access
+    pub fn get_checkout_path_for_commit(
+        &self,
+        scanner_id: &str,
+        commit_sha: &str,
+    ) -> ScanResult<Option<PathBuf>> {
+        let checkout_managers = self.checkout_managers.lock().unwrap();
+
+        if let Some(state) = checkout_managers.get(scanner_id) {
+            // Create template variables for this commit
+            use crate::scanner::checkout::manager::TemplateVars;
+            let vars = TemplateVars::for_commit_checkout(commit_sha, scanner_id);
+
+            // Create checkout directory for this commit
+            match state
+                .manager
+                .lock()
+                .unwrap()
+                .create_checkout(&vars, Some(commit_sha))
+            {
+                Ok(checkout_path) => Ok(Some(checkout_path)),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to create checkout for commit {} in scanner {}: {}",
+                        commit_sha,
+                        scanner_id,
+                        e
+                    );
+                    Ok(None)
+                }
+            }
+        } else {
+            // No checkout manager for this scanner (FILE_CONTENT not required)
+            Ok(None)
+        }
+    }
+
     /// Cleanup checkout for a specific scanner
     pub fn cleanup_scanner_checkout(&self, scanner_id: &str) -> ScanResult<()> {
         let mut checkout_managers = self.checkout_managers.lock().unwrap();
 
         if let Some(mut state) = checkout_managers.remove(scanner_id) {
             // Only cleanup if no plugins are active and keep_files is false
-            if state.active_plugins.is_empty() && !state.manager.keep_files {
-                if let Err(e) = state.manager.cleanup_all() {
+            if state.active_plugins.is_empty() && !state.manager.lock().unwrap().keep_files {
+                if let Err(e) = state.manager.lock().unwrap().cleanup_all() {
                     log::warn!(
                         "Failed to cleanup checkouts for scanner '{}': {}",
                         scanner_id,
@@ -744,8 +827,8 @@ impl ScannerManager {
         let mut checkout_managers = self.checkout_managers.lock().unwrap();
 
         for (scanner_id, mut state) in checkout_managers.drain() {
-            if !state.manager.keep_files {
-                if let Err(e) = state.manager.cleanup_all() {
+            if !state.manager.lock().unwrap().keep_files {
+                if let Err(e) = state.manager.lock().unwrap().cleanup_all() {
                     log::warn!(
                         "Failed to cleanup checkouts for scanner '{}': {}",
                         scanner_id,

@@ -24,7 +24,7 @@ async fn test_repository_validation_valid_repo() {
 
     // Try to validate current directory (should be a git repo for this project)
     let current_dir = std::env::current_dir().unwrap();
-    let result = manager.validate_repository(&current_dir);
+    let result = manager.validate_repository(&current_dir, None, None);
 
     // Should succeed for this project's git repository
     assert!(
@@ -40,7 +40,7 @@ async fn test_repository_validation_invalid_repo() {
 
     // Try to validate a non-existent directory
     let invalid_path = std::path::Path::new("/non/existent/path");
-    let result = manager.validate_repository(invalid_path);
+    let result = manager.validate_repository(invalid_path, None, None);
 
     // Should fail for invalid path
     assert!(result.is_err());
@@ -384,7 +384,9 @@ async fn test_commit_traversal_and_message_creation() {
 
     // Create scanner with explicit requirements to test comprehensive data collection
     let scanner_task = {
-        let (repo, _) = manager.validate_repository(&current_dir).unwrap();
+        let (repo, _) = manager
+            .validate_repository(&current_dir, None, None)
+            .unwrap();
         let repo_id = manager.get_unique_repo_id(&repo).unwrap();
         let scanner_id = manager.generate_scanner_id(&repo_id).unwrap();
 
@@ -401,12 +403,12 @@ async fn test_commit_traversal_and_message_creation() {
         .await
         .expect("Should capture messages for testing");
 
-    // Should have at least 3 messages: RepositoryData, CommitData(s), ScanCompleted
+    // Should have at least 3 messages: ScanStarted, CommitData(s), ScanCompleted
     assert!(messages.len() >= 3, "Should have at least 3 messages");
 
-    // Verify message types - first should be RepositoryData
+    // Verify message types - first should be ScanStarted
     match &messages[0] {
-        ScanMessage::RepositoryData {
+        ScanMessage::ScanStarted {
             scanner_id,
             repository_data,
             ..
@@ -414,7 +416,7 @@ async fn test_commit_traversal_and_message_creation() {
             assert_eq!(scanner_id, scanner_task.scanner_id());
             assert_eq!(&repository_data.path, &scanner_task.repository_path());
         }
-        _ => panic!("First message should be RepositoryData"),
+        _ => panic!("First message should be ScanStarted"),
     }
 
     // Should have at least one CommitData message
@@ -819,7 +821,7 @@ async fn test_merge_commit_filtering() {
     // Verify that all messages still have proper structure
     assert!(matches!(
         messages_without_merge[0],
-        ScanMessage::RepositoryData { .. }
+        ScanMessage::ScanStarted { .. }
     ));
     assert!(matches!(
         messages_without_merge.last().unwrap(),

@@ -51,8 +51,7 @@ impl DumpPlugin {
 
     /// Check if a message type is a scan message that should be deserialized
     fn is_scan_message(message_type: &str) -> bool {
-        message_type.starts_with("repository_data")
-            || message_type.starts_with("scan_")
+        message_type.starts_with("scan_")
             || message_type.starts_with("commit_")
             || message_type.starts_with("file_")
     }
@@ -116,8 +115,8 @@ impl DumpPlugin {
 
     /// Format message in compact format
     fn format_compact(msg: &Message, scan_message: Option<&ScanMessage>) -> String {
-        if msg.header.message_type.starts_with("repository_data") {
-            if let Some(ScanMessage::RepositoryData {
+        if msg.header.message_type.starts_with("scan_started") {
+            if let Some(ScanMessage::ScanStarted {
                 repository_data, ..
             }) = scan_message
             {
@@ -161,7 +160,7 @@ impl DumpPlugin {
         scan_message: Option<&ScanMessage>,
         show_headers: bool,
     ) -> String {
-        if let Some(ScanMessage::RepositoryData {
+        if let Some(ScanMessage::ScanStarted {
             repository_data, ..
         }) = scan_message
         {
@@ -377,7 +376,7 @@ impl ConsumerPlugin for DumpPlugin {
                                 // Track scanner lifecycle
                                 if let Ok(scan_message) = serde_json::from_str::<ScanMessage>(&msg.data) {
                                     match scan_message {
-                                        ScanMessage::RepositoryData { scanner_id, .. } => {
+                                        ScanMessage::ScanStarted { scanner_id, .. } => {
                                             active_scanners.insert(scanner_id.clone());
                                             log::debug!("DumpPlugin: Started tracking scanner: {}", scanner_id);
                                         }

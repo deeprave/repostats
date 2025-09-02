@@ -4,6 +4,7 @@
 
 use crate::core::query::QueryParams;
 use crate::scanner::types::ScanRequires;
+use std::sync::{Arc, Mutex};
 
 /// Individual scanner task for a specific repository
 #[derive(Debug)]
@@ -23,6 +24,8 @@ pub struct ScannerTask {
     requirements: ScanRequires,
     /// Query parameters for filtering and customizing the scan
     query_params: Option<QueryParams>,
+    /// Injected checkout manager for FILE_CONTENT operations (None if no checkout required)
+    checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
 }
 
 /// Builder for creating ScannerTask instances with optional parameters
@@ -32,6 +35,7 @@ pub struct ScannerTaskBuilder {
     repository: gix::Repository,
     requirements: ScanRequires,
     query_params: Option<QueryParams>,
+    checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
 }
 
 impl ScannerTaskBuilder {
@@ -43,6 +47,7 @@ impl ScannerTaskBuilder {
             repository,
             requirements: ScanRequires::NONE,
             query_params: None,
+            checkout_manager: None,
         }
     }
 
@@ -58,6 +63,15 @@ impl ScannerTaskBuilder {
         self
     }
 
+    /// Set the checkout manager for FILE_CONTENT operations
+    pub fn with_checkout_manager(
+        mut self,
+        checkout_manager: Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>,
+    ) -> Self {
+        self.checkout_manager = Some(checkout_manager);
+        self
+    }
+
     /// Build the ScannerTask
     pub fn build(self) -> ScannerTask {
         let is_remote = ScannerTask::is_remote_path(&self.repository_path);
@@ -68,6 +82,7 @@ impl ScannerTaskBuilder {
             is_remote,
             requirements: self.requirements,
             query_params: self.query_params,
+            checkout_manager: self.checkout_manager,
         }
     }
 }
@@ -144,6 +159,13 @@ impl ScannerTask {
     /// Check if this is a remote repository
     pub fn is_remote(&self) -> bool {
         self.is_remote
+    }
+
+    /// Get reference to the checkout manager if available
+    pub fn checkout_manager(
+        &self,
+    ) -> Option<&Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>> {
+        self.checkout_manager.as_ref()
     }
 }
 
