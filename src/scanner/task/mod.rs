@@ -5,7 +5,7 @@
 
 mod core;
 mod events;
-mod git_ops;
+pub mod git_ops;
 mod queue_ops;
 
 #[cfg(test)]
