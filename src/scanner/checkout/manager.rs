@@ -9,6 +9,8 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::scanner::task::git_ops::open_repository_with_context;
+
 /// Static regex for template variable matching to avoid recompilation
 static TEMPLATE_VAR_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{([a-zA-Z0-9\-_]+)\}").expect("Invalid regex pattern"));
@@ -227,13 +229,10 @@ impl CheckoutManager {
 
     /// Helper to open the git repository with consistent error handling
     fn open_repository(&self) -> CheckoutResult<gix::Repository> {
-        gix::open(&self.repository_path).map_err(|e| CheckoutError::Repository {
-            message: format!(
-                "Failed to open repository at '{}': {}",
-                self.repository_path.display(),
-                e
-            ),
-        })
+        open_repository_with_context::<CheckoutError>(
+            &self.repository_path.to_string_lossy(),
+            &format!("at '{}'", self.repository_path.display()),
+        )
     }
 
     /// Create a new checkout manager with repository path
@@ -699,6 +698,61 @@ mod tests {
         )
     }
 
+    /// Create test repository with known content for checkout testing
+    fn create_test_repository() -> (tempfile::TempDir, PathBuf, String) {
+        use std::process::Command;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let repo_path = temp_dir.path().to_path_buf();
+
+        // Initialize repository
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Create test files with known content
+        std::fs::write(repo_path.join("test.txt"), "test content").unwrap();
+        std::fs::create_dir_all(repo_path.join("src")).unwrap();
+        std::fs::write(repo_path.join("src/lib.rs"), "pub fn test() {}").unwrap();
+
+        // Commit the files
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "Test commit"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+
+        // Get commit SHA
+        let commit_output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .unwrap();
+        let commit_str = std::str::from_utf8(&commit_output.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+
+        (temp_dir, repo_path, commit_str)
+    }
+
     #[test]
     fn test_checkout_manager_new() {
         let manager = CheckoutManager::new("/tmp/test-repo");
@@ -808,19 +862,84 @@ mod tests {
         assert_eq!(resolved, expected);
     }
 
-    // TODO: Re-enable once git functionality is fully implemented
-    // This test requires a real git repository to work with the new checkout functionality
     #[test]
-    #[ignore]
     fn test_create_checkout_requires_git_repo() {
-        // This test is temporarily disabled because it requires actual git checkout functionality
-        // which will be implemented in the next iteration
+        let (_temp_dir, repo_path, commit_sha) = create_test_repository();
+        let mut manager = CheckoutManager::new(&repo_path);
+
+        let vars = TemplateVars::new(
+            commit_sha.clone(),
+            format!("{}abcdef", &commit_sha[..8]),
+            "main".to_string(),
+            "test-repo".to_string(),
+            "test-scanner".to_string(),
+        );
+
+        let checkout_result = manager.create_checkout(&vars, Some(&commit_sha));
+        assert!(
+            checkout_result.is_ok(),
+            "Should successfully create checkout"
+        );
+
+        let checkout_path = checkout_result.unwrap();
+        assert!(checkout_path.exists(), "Checkout directory should exist");
+        assert!(
+            checkout_path.join("test.txt").exists(),
+            "test.txt should be checked out"
+        );
+        assert!(
+            checkout_path.join("src").exists(),
+            "src directory should be checked out"
+        );
+        assert!(
+            checkout_path.join("src/lib.rs").exists(),
+            "src/lib.rs should be checked out"
+        );
+
+        // Verify file content
+        let content = std::fs::read_to_string(checkout_path.join("test.txt")).unwrap();
+        assert_eq!(content, "test content");
+
+        let lib_content = std::fs::read_to_string(checkout_path.join("src/lib.rs")).unwrap();
+        assert_eq!(lib_content, "pub fn test() {}");
+
+        // Cleanup
+        manager.cleanup_all().unwrap();
     }
 
     #[test]
-    #[ignore]
     fn test_create_checkout_already_exists_no_force() {
-        // Temporarily disabled - requires actual git repository functionality
+        let (_temp_dir, repo_path, commit_sha) = create_test_repository();
+        let mut manager = CheckoutManager::new(&repo_path);
+
+        let vars = TemplateVars::new(
+            commit_sha.clone(),
+            format!("{}abcdef", &commit_sha[..8]),
+            "main".to_string(),
+            "test-repo".to_string(),
+            "test-scanner".to_string(),
+        );
+
+        // Create checkout first time - should succeed
+        let checkout_result = manager.create_checkout(&vars, Some(&commit_sha));
+        assert!(checkout_result.is_ok(), "First checkout should succeed");
+
+        // Try to create same checkout again without force - should fail
+        let second_checkout_result = manager.create_checkout(&vars, Some(&commit_sha));
+        assert!(
+            second_checkout_result.is_err(),
+            "Second checkout should fail without force"
+        );
+
+        // Verify error message mentions force option
+        let error_msg = format!("{}", second_checkout_result.unwrap_err());
+        assert!(
+            error_msg.contains("--checkout-force"),
+            "Error should mention force option"
+        );
+
+        // Cleanup
+        manager.cleanup_all().unwrap();
     }
 
     #[test]
