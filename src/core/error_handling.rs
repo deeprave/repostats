@@ -52,8 +52,9 @@ pub trait ContextualError: std::error::Error {
 /// * `operation_context` - Human-readable description of the operation that failed
 ///
 /// # Examples
-/// ```
-/// use crate::core::error_handling::{log_error_with_context, ContextualError};
+/// ```rust,no_run
+/// # use repostats::core::error_handling::{log_error_with_context, ContextualError};
+/// # use repostats::core::validation::ValidationError;
 ///
 /// // User-actionable error shows specific message
 /// let validation_err = ValidationError::new("Invalid email format");
@@ -61,9 +62,9 @@ pub trait ContextualError: std::error::Error {
 /// // Logs: "FATAL: Invalid email format"
 ///
 /// // System error shows generic context with debug details
-/// let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file.txt");
-/// log_error_with_context(&io_err, "Configuration loading");
-/// // Logs: "FATAL: Configuration loading" + debug details
+/// let system_err = ValidationError::new("Missing required field 'port'");
+/// log_error_with_context(&system_err, "Configuration loading");
+/// // Logs: "FATAL: Missing required field 'port'"
 /// ```
 pub fn log_error_with_context<E: ContextualError>(error: &E, operation_context: &str) {
     if error.is_user_actionable() {

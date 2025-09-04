@@ -5,11 +5,10 @@
 
 use crate::core::cleanup::Cleanup;
 use crate::core::query::QueryParams;
-use crate::core::services::get_services;
 use crate::scanner::checkout::manager::CheckoutManager;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
-use log::trace;
+use log;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -30,10 +29,6 @@ enum RepoState {
 struct CheckoutState {
     /// The CheckoutManager instance (shared with thread safety)
     manager: Arc<Mutex<CheckoutManager>>,
-    /// Plugin IDs currently using this checkout
-    active_plugins: HashSet<String>,
-    /// Scanner ID that owns this checkout
-    scanner_id: String,
 }
 
 /// Central scanner manager for coordinating multiple repository scanner tasks
@@ -117,7 +112,7 @@ impl ScannerManager {
     pub fn validate_repository(
         &self,
         repository_path: &Path,
-        query_params: Option<&crate::core::query::QueryParams>,
+        query_params: Option<&QueryParams>,
         checkout_settings: Option<&crate::app::cli::CheckoutSettings>,
     ) -> ScanResult<(gix::Repository, PathBuf)> {
         // For now, reject remote URLs
@@ -314,8 +309,7 @@ impl ScannerManager {
         };
 
         // Query all active plugins for their requirements
-        let services = get_services();
-        let plugin_manager = services.plugin_manager().await;
+        let plugin_manager = crate::plugin::api::get_plugin_service().await;
         let requirements = plugin_manager.get_combined_requirements().await;
 
         // Check if checkout is needed BEFORE creating scanner task
@@ -354,8 +348,6 @@ impl ScannerManager {
             // Store checkout manager in centralized tracking
             let checkout_state = CheckoutState {
                 manager: shared_manager.clone(),
-                active_plugins: std::collections::HashSet::new(),
-                scanner_id: scanner_id.clone(),
             };
 
             self.checkout_managers
@@ -367,20 +359,36 @@ impl ScannerManager {
             None
         };
 
-        // Create scanner task with checkout manager injected via dependency injection
-        let mut builder = ScannerTask::builder(scanner_id.clone(), normalized_path.clone(), repo)
-            .with_requirements(requirements);
+        // Create shared queue publisher with retry utility
+        use crate::core::retry::{retry_async, RetryPolicy};
+        let queue_publisher = retry_async("create_queue_publisher", RetryPolicy::default(), || {
+            let scanner_id = scanner_id.clone();
+            async move { crate::queue::api::get_queue_service().create_publisher(scanner_id) }
+        })
+        .await
+        .map_err(|e| {
+            // Cancel reservation on failure
+            self.cancel_reservation(&repo_id);
+            ScanError::Configuration {
+                message: format!(
+                    "Failed to create queue publisher for '{}' after {} attempts: {}",
+                    repository_path,
+                    RetryPolicy::default().max_attempts,
+                    e
+                ),
+            }
+        })?;
 
-        if let Some(params) = query_params {
-            builder = builder.with_query_params(params.clone());
-        }
-
-        // Inject checkout manager if available
-        if let Some(manager) = checkout_manager {
-            builder = builder.with_checkout_manager(manager);
-        }
-
-        let scanner_task = builder.build();
+        // Create scanner task with simple dependency injection
+        let scanner_task = ScannerTask::new(
+            scanner_id.clone(),
+            normalized_path.clone(),
+            repo,
+            requirements,
+            queue_publisher,
+            query_params.cloned(),
+            checkout_manager,
+        );
         let scanner_task = Arc::new(scanner_task);
 
         // Store the scanner task in the manager for later use
@@ -389,75 +397,25 @@ impl ScannerManager {
             .unwrap()
             .insert(scanner_id.clone(), scanner_task.clone());
 
-        // Create queue publisher to ensure queue is ready, with retries for transient errors
-        let mut last_publisher_err = None;
-        let mut publisher = None;
-        let max_retries = 3;
-        let retry_delay = Duration::from_millis(500);
-
-        for attempt in 0..max_retries {
-            match scanner_task.create_queue_publisher().await {
-                Ok(pub_result) => {
-                    publisher = Some(pub_result);
-                    break;
-                }
-                Err(e) => {
-                    last_publisher_err = Some(e);
-                    if attempt < max_retries - 1 {
-                        tokio::time::sleep(retry_delay).await;
-                    }
-                }
+        // Create notification subscriber with retry utility
+        let _subscriber = retry_async(
+            "create_notification_subscriber",
+            RetryPolicy::default(),
+            || scanner_task.create_notification_subscriber(),
+        )
+        .await
+        .map_err(|e| {
+            // Cancel reservation on failure
+            self.cancel_reservation(&repo_id);
+            ScanError::Configuration {
+                message: format!(
+                    "Failed to create notification subscriber for '{}' after {} attempts: {}",
+                    repository_path,
+                    RetryPolicy::default().max_attempts,
+                    e
+                ),
             }
-        }
-
-        let _publisher = match publisher {
-            Some(p) => p,
-            None => {
-                // Cancel reservation on failure
-                self.cancel_reservation(&repo_id);
-                let e = last_publisher_err.unwrap();
-                return Err(ScanError::Configuration {
-                    message: format!(
-                        "Failed to create queue publisher for '{}' after {} attempts: {}",
-                        repository_path, max_retries, e
-                    ),
-                });
-            }
-        };
-
-        // Create notification subscriber with retries for transient errors
-        let mut last_subscriber_err = None;
-        let mut subscriber = None;
-
-        for attempt in 0..max_retries {
-            match scanner_task.create_notification_subscriber().await {
-                Ok(sub_result) => {
-                    subscriber = Some(sub_result);
-                    break;
-                }
-                Err(e) => {
-                    last_subscriber_err = Some(e);
-                    if attempt < max_retries - 1 {
-                        tokio::time::sleep(retry_delay).await;
-                    }
-                }
-            }
-        }
-
-        let _subscriber = match subscriber {
-            Some(s) => s,
-            None => {
-                // Cancel reservation on failure
-                self.cancel_reservation(&repo_id);
-                let e = last_subscriber_err.unwrap();
-                return Err(ScanError::Configuration {
-                    message: format!(
-                        "Failed to create notification subscriber for '{}' after {} attempts: {}",
-                        repository_path, max_retries, e
-                    ),
-                });
-            }
-        };
+        })?;
 
         // Confirm the reservation now that all async operations succeeded
         if !self.confirm_reservation(&repo_id) {
@@ -543,7 +501,7 @@ impl ScannerManager {
                     self.cancel_reservation(&repo_id);
                 }
 
-                log::debug!("Cleaned up scanner: {}", scanner_id);
+                log::trace!("Cleaned up scanner: {}", scanner_id);
             }
 
             // Return detailed error about the failure
@@ -569,8 +527,6 @@ impl ScannerManager {
     /// Start scanning all configured repositories
     /// This triggers scan_commits_and_publish_incrementally() on all scanner tasks and waits for completion
     pub async fn start_scanning(&self) -> Result<(), ScanError> {
-        use log::{debug, info};
-
         // Collect all scanner tasks first, then drop the lock
         let scanner_tasks_vec = {
             let scanner_tasks = self._scanner_tasks.lock().unwrap();
@@ -581,7 +537,7 @@ impl ScannerManager {
                 });
             }
 
-            debug!(
+            log::trace!(
                 "Starting repository scanning for {} repositories",
                 scanner_tasks.len()
             );
@@ -598,13 +554,13 @@ impl ScannerManager {
         let mut failure_count = 0;
 
         for (scanner_id, scanner_task) in scanner_tasks_vec {
-            trace!("Starting scan for scanner: {}", scanner_id);
+            log::trace!("Starting scan for scanner: {}", scanner_id);
 
             // Use incremental publishing to avoid memory buildup for large repositories
             match scanner_task.scan_commits_and_publish_incrementally().await {
                 Ok(()) => {
                     success_count += 1;
-                    trace!(
+                    log::trace!(
                         "Successfully scanned and published messages for scanner: {}",
                         scanner_id
                     );
@@ -620,9 +576,10 @@ impl ScannerManager {
             }
         }
 
-        info!(
+        log::info!(
             "Repository scanning completed: {} successful, {} failed",
-            success_count, failure_count
+            success_count,
+            failure_count
         );
 
         if success_count == 0 {
@@ -635,46 +592,12 @@ impl ScannerManager {
     }
 
     /// Get the current number of active scanners (for testing)
+    #[cfg(test)]
     pub fn scanner_count(&self) -> usize {
         self._scanner_tasks.lock().unwrap().len()
     }
 
     // ===== Checkout Management Methods =====
-
-    /// Get or create a checkout path for a specific commit
-    /// This is called by scanner tasks when they need FILE_CONTENT access
-    pub fn get_checkout_path_for_commit(
-        &self,
-        scanner_id: &str,
-        commit_sha: &str,
-    ) -> ScanResult<Option<PathBuf>> {
-        let checkout_managers = self.checkout_managers.lock().unwrap();
-
-        if let Some(state) = checkout_managers.get(scanner_id) {
-            // Create template variables for this commit
-            use crate::scanner::checkout::manager::TemplateVars;
-            let vars = TemplateVars::for_commit_checkout(commit_sha, scanner_id);
-
-            // Create checkout directory for this commit
-            match state
-                .manager
-                .lock()
-                .unwrap()
-                .create_checkout(&vars, Some(commit_sha))
-            {
-                Ok(checkout_path) => Ok(Some(checkout_path)),
-                Err(e) => Err(ScanError::Configuration {
-                    message: format!(
-                        "Failed to create checkout for commit {} in scanner {}: {}",
-                        commit_sha, scanner_id, e
-                    ),
-                }),
-            }
-        } else {
-            // No checkout manager for this scanner (FILE_CONTENT not required)
-            Ok(None)
-        }
-    }
 
     /// Cleanup all checkouts when shutting down
     pub fn cleanup_all_checkouts(&self) {
@@ -689,7 +612,7 @@ impl ScannerManager {
                         e
                     );
                 } else {
-                    log::debug!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                    log::trace!("Cleaned up checkouts for scanner '{}'", scanner_id);
                 }
             }
         }

@@ -4,7 +4,6 @@
 //! It manages a single global queue that all producers publish to and all consumers
 //! read from, with each consumer maintaining its own independent position.
 
-use crate::core::services::get_services;
 use crate::notifications::api::{Event, QueueEvent, QueueEventType};
 use crate::queue::consumer::QueueConsumer;
 use crate::queue::error::QueueResult;
@@ -92,8 +91,7 @@ impl QueueManager {
         let manager = Arc::new(Self::new());
 
         // Publish Started event
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
         let started_event = Event::Queue(QueueEvent::new(
             QueueEventType::Started,
             "global".to_string(),

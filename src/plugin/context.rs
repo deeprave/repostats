@@ -1,35 +1,43 @@
 //! Plugin Context
 //!
-//! Provides plugins with access to the service registry and runtime environment.
-//! Minimal context container focused on service discovery.
-
-use crate::core::services::{get_services, ServiceRegistry};
+//! Provides plugins with access to core services and runtime environment.
+//! Simple context container that provides service access functions.
 
 /// Runtime context provided to plugins for service access
-pub struct PluginContext {
-    /// Service registry for accessing core services
-    services: &'static ServiceRegistry,
-}
+///
+/// Context is stateless - services are accessed through global functions
+pub struct PluginContext {}
 
 impl std::fmt::Debug for PluginContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PluginContext")
-            .field("services", &"ServiceRegistry")
-            .finish()
+        f.debug_struct("PluginContext").finish()
     }
 }
 
 impl PluginContext {
-    /// Create a new plugin context with access to services
+    /// Create a new plugin context
     pub fn new() -> Self {
-        Self {
-            services: get_services(),
-        }
+        Self {}
     }
 
-    /// Access the service registry
-    pub fn services(&self) -> &ServiceRegistry {
-        self.services
+    /// Get notification service
+    pub async fn notification_service(
+        &self,
+    ) -> tokio::sync::MutexGuard<'static, crate::notifications::manager::AsyncNotificationManager>
+    {
+        crate::notifications::api::get_notification_service().await
+    }
+
+    /// Get queue service
+    pub fn queue_service(&self) -> std::sync::Arc<crate::queue::manager::QueueManager> {
+        crate::queue::api::get_queue_service()
+    }
+
+    /// Get plugin service
+    pub async fn plugin_service(
+        &self,
+    ) -> tokio::sync::MutexGuard<'static, crate::plugin::manager::PluginManager> {
+        crate::plugin::api::get_plugin_service().await
     }
 }
 
@@ -47,12 +55,8 @@ mod tests {
     fn test_plugin_context_creation() {
         let context = PluginContext::new();
 
-        // Test that we can access services
-        let services = context.services();
-
-        // Services should be the same as the global instance
-        let global_services = get_services();
-        assert!(std::ptr::eq(services, global_services));
+        // Context creation should succeed
+        format!("{:?}", context);
     }
 
     #[test]
@@ -60,24 +64,23 @@ mod tests {
         let context = PluginContext::default();
         let context_new = PluginContext::new();
 
-        // Both should access the same global services
-        assert!(std::ptr::eq(context.services(), context_new.services()));
+        // Both should be equivalent
+        assert_eq!(format!("{:?}", context), format!("{:?}", context_new));
     }
 
     #[tokio::test]
     async fn test_plugin_context_service_access() {
         let context = PluginContext::new();
-        let services = context.services();
 
         // Test that we can access notification manager through context
-        let notification_manager = services.notification_manager().await;
+        let notification_manager = context.notification_service().await;
         let subscriber_count = notification_manager.subscriber_count();
 
         // Should be able to get a count (specific value doesn't matter)
         let _ = subscriber_count;
 
         // Test that we can access queue manager through context
-        let queue_manager = services.queue_manager();
+        let queue_manager = context.queue_service();
 
         // Should be able to create publisher and consumer
         let publisher = queue_manager
@@ -98,6 +101,5 @@ mod tests {
 
         // Should include the struct name
         assert!(debug_str.contains("PluginContext"));
-        assert!(debug_str.contains("services"));
     }
 }

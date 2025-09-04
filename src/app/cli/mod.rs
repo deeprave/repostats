@@ -23,17 +23,18 @@ pub struct RequiredArgs {
     pub plugins: bool,
 }
 
-pub fn initial_args(command_name: &str) -> RequiredArgs {
+pub fn initial_args(command_name: &str) -> Result<RequiredArgs, crate::app::startup::StartupError> {
     use args::Args;
     use std::env;
 
     // Get the command line arguments
     let cli_args: Vec<String> = env::args().collect();
 
-    // Parse using Args in initial mode
-    let (parsed_args, global_args) = Args::parse_initial(command_name, &cli_args);
+    // Parse using Args in initial mode with proper error handling
+    let (parsed_args, global_args) = Args::parse_initial(command_name, &cli_args)
+        .map_err(|e| crate::app::startup::StartupError::ValidationFailed { error: e })?;
 
-    RequiredArgs {
+    Ok(RequiredArgs {
         global_args,
         config_file: parsed_args.config_file,
         plugin_dir: parsed_args.plugin_dir,
@@ -44,5 +45,5 @@ pub fn initial_args(command_name: &str) -> RequiredArgs {
         log_level: parsed_args.log_level,
         log_file: parsed_args.log_file,
         plugins: parsed_args.plugins,
-    }
+    })
 }

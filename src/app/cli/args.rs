@@ -9,6 +9,7 @@ use clap::{ArgAction, Parser};
 use log;
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::time::Duration;
 
 // Global arguments structure with all command-line options
 //
@@ -142,6 +143,10 @@ pub struct Args {
     )]
     pub plugins: bool,
 
+    /// Plugin operation timeout in seconds (minimum: 5)
+    #[arg(long = "plugin-timeout", value_name = "SECONDS")]
+    pub plugin_timeout: Option<u64>,
+
     /// Directory template for file checkout (supports {commit-id}, {sha256}, {branch}, {repo})
     #[arg(long = "checkout-dir", value_name = "DIRECTORY")]
     pub checkout_dir: Option<String>,
@@ -207,6 +212,7 @@ impl Args {
         self.validate_repositories()?;
         self.validate_checkout_functionality()?;
         self.validate_commit_limits()?;
+        self.validate_plugin_timeout()?;
         Ok(())
     }
 
@@ -336,6 +342,26 @@ impl Args {
 
         Ok(())
     }
+
+    /// Validate plugin timeout argument
+    fn validate_plugin_timeout(&self) -> Result<(), ValidationError> {
+        if let Some(timeout_secs) = self.plugin_timeout {
+            if timeout_secs < 5 {
+                return Err(ValidationError::new(
+                    "Option --plugin-timeout must be at least 5 seconds",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Get plugin timeout as Duration (enforces minimum of 5 seconds)
+    pub fn plugin_timeout_duration(&self) -> Duration {
+        match self.plugin_timeout {
+            Some(secs) => Duration::from_secs(secs.max(5)),
+            None => Duration::from_secs(30), // Default 30 seconds
+        }
+    }
 }
 
 impl Default for Args {
@@ -366,6 +392,7 @@ impl Default for Args {
             merge_commits: false,
             max_files_per_commit: None,
             plugins: false,
+            plugin_timeout: None,
             checkout_dir: None,
             checkout_keep: false,
             no_checkout_keep: false,
@@ -700,6 +727,13 @@ impl Args {
                     .help("List all discovered plugins and their functions"),
             )
             .arg(
+                clap::Arg::new("plugin_timeout")
+                    .long("plugin_timeout")
+                    .value_name("SECONDS")
+                    .value_parser(clap::value_parser!(u64))
+                    .help("Plugin operation timeout in seconds (minimum: 5, default: 30)"),
+            )
+            .arg(
                 clap::Arg::new("checkout_dir")
                     .long("checkout-dir")
                     .value_name("DIRECTORY")
@@ -759,11 +793,14 @@ impl Args {
     /// Uses the same clap-based approach as parse_from_args but configured for initial parsing.
     /// Stops at the first external subcommand (assumed to be a command) and returns both
     /// the parsed arguments and the consumed argument list.
-    pub fn parse_initial(command_name: &str, args: &[String]) -> (Self, Vec<String>) {
+    pub fn parse_initial(
+        command_name: &str,
+        args: &[String],
+    ) -> Result<(Self, Vec<String>), crate::core::validation::ValidationError> {
         use clap::FromArgMatches;
 
         if args.is_empty() {
-            return (Self::default(), Vec::new());
+            return Ok((Self::default(), Vec::new()));
         }
 
         // Call the helper method with initial parsing configuration (no help/version, no color styling)
@@ -778,8 +815,13 @@ impl Args {
 
         match cmd.try_get_matches_from(args) {
             Ok(matches) => {
-                // Parse using clap's standard mechanism
-                let mut parsed_args = Self::from_arg_matches(&matches).unwrap_or_default();
+                // Parse using clap's standard mechanism with proper error handling
+                let mut parsed_args = Self::from_arg_matches(&matches).map_err(|e| {
+                    crate::core::validation::ValidationError::new(&format!(
+                        "CLI parsing failed: {}",
+                        e
+                    ))
+                })?;
 
                 // Handle special "none" value for log_file (same as parse_from_args)
                 if let Some(ref path) = parsed_args.log_file {
@@ -790,12 +832,14 @@ impl Args {
 
                 // Extract the consumed arguments
                 let global_args = Self::extract_consumed_args(args, &matches);
-                (parsed_args, global_args)
+                Ok((parsed_args, global_args))
             }
-            Err(_) => {
-                // parse_initial only cares about essential arguments for plugin loading
-                // Ignore any unknown arguments and let parse_from_args handle all validation
-                (Self::default(), args[1..].to_vec())
+            Err(e) => {
+                // Propagate the error as a ValidationError instead of returning defaults
+                Err(crate::core::validation::ValidationError::new(&format!(
+                    "CLI argument parsing error: {}",
+                    e
+                )))
             }
         }
     }
@@ -1281,7 +1325,7 @@ mod tests {
             "--help".to_string(),
         ];
 
-        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
         assert_eq!(parsed.log_level, Some("debug".to_string()));
         assert!(parsed.color);
@@ -1306,7 +1350,7 @@ mod tests {
             "--help".to_string(),  // This belongs to the command
         ];
 
-        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
         assert_eq!(parsed.log_file, Some(PathBuf::from("path")));
         assert_eq!(
@@ -1330,7 +1374,7 @@ mod tests {
             "1week".to_string(),
         ];
 
-        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
         assert_eq!(parsed.log_level, Some("info".to_string()));
         assert!(parsed.color);
@@ -1353,7 +1397,7 @@ mod tests {
             "debug".to_string(), // Command
         ];
 
-        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
         assert_eq!(parsed.log_file, None); // "none" becomes None
         assert_eq!(
@@ -1429,7 +1473,7 @@ mod tests {
             "1week".to_string(),
         ];
 
-        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
         assert_eq!(parsed.log_level, Some("debug".to_string()));
         assert_eq!(
@@ -1461,7 +1505,7 @@ mod tests {
             "--stats".to_string(),
         ];
 
-        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args);
+        let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
         assert_eq!(parsed.log_level, Some("debug".to_string()));
         assert_eq!(parsed.config_file, Some(PathBuf::from("/path/config.toml")));

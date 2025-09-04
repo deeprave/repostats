@@ -1,7 +1,6 @@
 use crate::app::cli::display::display_plugin_table;
 use crate::core::error_handling::log_error_with_context;
 use crate::core::error_handling::ContextualError;
-use crate::core::services::get_services;
 use crate::core::validation::ValidationError;
 use crate::plugin::error::PluginError;
 use log;
@@ -111,7 +110,7 @@ pub async fn startup(
     use crate::core::strings::title_case;
 
     // Stage 1: Initial parsing for configuration discovery
-    let args = initial_args(command_name);
+    let args = initial_args(command_name)?;
     let command_title = title_case(command_name);
     let use_color =
         (args.color || std::io::IsTerminal::is_terminal(&std::io::stdout())) && !args.no_color;
@@ -187,17 +186,33 @@ pub async fn startup(
         return Err(StartupError::ValidationFailed { error: e });
     }
 
+    // Configure plugin manager timeout from CLI args (respects user configuration)
+    log::trace!("Configuring plugin manager timeout from CLI args");
+    let timeout_duration = final_args.plugin_timeout_duration();
+    let mut plugin_manager = crate::core::services::get_plugin_service().await;
+    log::trace!("Acquired plugin manager lock for timeout configuration");
+    if let Err(e) = plugin_manager.configure_plugin_timeout(timeout_duration) {
+        return Err(StartupError::PluginFailed { error: e });
+    }
+    log::debug!("Configured plugin manager timeout: {:?}", timeout_duration);
+    log::trace!("Plugin manager timeout configuration completed");
+    drop(plugin_manager); // Explicitly release the plugin manager lock before discover_commands
+
     // Stage 4: Command discovery and segmentation
+    log::trace!("Starting command discovery phase");
     let _plugin_dir = plugin_dir.as_deref().or(final_args.plugin_dir.as_deref());
     let commands = discover_commands(_plugin_dir, &args.plugin_exclusions)
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
+    log::trace!(
+        "Command discovery phase completed, found {} commands",
+        commands.len()
+    );
 
     // Check if --plugins flag was provided (after plugin discovery, before segmentation)
     if args.plugins {
         log::debug!("--plugins flag detected, listing all discovered plugins");
-        let services = get_services();
-        let plugin_manager = services.plugin_manager().await;
+        let plugin_manager = crate::core::services::get_plugin_service().await;
         let plugins = plugin_manager.list_plugins_with_filter(false).await;
 
         if plugins.is_empty() {
@@ -276,11 +291,19 @@ async fn discover_commands(
     plugin_dir: Option<&str>,
     exclusions: &[String],
 ) -> Result<Vec<String>, PluginError> {
-    // Enhanced error context - capture initial state
-    let services = get_services();
-    let mut plugin_manager = services.plugin_manager().await;
+    log::trace!(
+        "discover_commands starting with plugin_dir: {:?}, exclusions: {:?}",
+        plugin_dir,
+        exclusions
+    );
+
+    // Enhanced error context - use independent service access
+    log::trace!("discover_commands getting plugin service independently");
+    let mut plugin_manager = crate::core::services::get_plugin_service().await;
+    log::trace!("discover_commands acquired plugin manager lock successfully");
 
     // Enhanced error handling with context
+    log::trace!("discover_commands calling plugin_manager.discover_plugins");
     plugin_manager
         .discover_plugins(plugin_dir, exclusions)
         .await
@@ -288,8 +311,13 @@ async fn discover_commands(
             log::warn!("Plugin discovery failed during plugin_manager.discover_plugins()");
             e
         })?;
+    log::trace!("discover_commands plugin discovery completed successfully");
 
     let plugins = plugin_manager.list_plugins_with_filter(false).await;
+    log::trace!(
+        "discover_commands found {} plugins after listing",
+        plugins.len()
+    );
 
     // Validate that we found plugins
     if plugins.is_empty() {
@@ -322,6 +350,10 @@ async fn discover_commands(
         });
     }
 
+    log::trace!(
+        "discover_commands completed successfully, returning {} commands",
+        command_names.len()
+    );
     Ok(command_names)
 }
 
@@ -339,9 +371,8 @@ async fn configure_plugins(
         });
     }
 
-    // Get plugin manager from services
-    let services = get_services();
-    let mut plugin_manager = services.plugin_manager().await;
+    // Get plugin manager independently to avoid deadlocks
+    let mut plugin_manager = crate::core::services::get_plugin_service().await;
 
     // Step 1: Set plugin configurations from TOML config if available
     if let Some(config) = toml_config {
@@ -574,9 +605,8 @@ async fn configure_scanner(
     let scanner_manager = ScannerManager::create().await;
 
     // Step 2: Get plugin manager and check for active processing plugins
-    let services = get_services();
     let plugin_names = {
-        let plugin_manager = services.plugin_manager().await;
+        let plugin_manager = crate::core::services::get_plugin_service().await;
         let active_plugins = plugin_manager.get_active_plugins();
 
         if active_plugins.is_empty() {
@@ -592,10 +622,10 @@ async fn configure_scanner(
     }; // plugin_manager lock is released here
 
     // Step 3: Setup plugin integration
-    let queue_manager = services.queue_manager();
+    let queue_manager = crate::core::services::get_queue_service();
     {
         // Setup plugin consumers (get mutable access to plugin manager)
-        let mut plugin_manager = services.plugin_manager().await;
+        let mut plugin_manager = crate::core::services::get_plugin_service().await;
 
         // Note: setup_plugin_consumers expects plugin_args, using empty for now
         let plugin_args: Vec<String> = Vec::new();

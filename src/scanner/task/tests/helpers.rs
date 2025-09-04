@@ -21,9 +21,22 @@ pub fn create_test_repo() -> (TempDir, gix::Repository) {
 pub fn create_test_scanner_task(requirements: ScanRequires) -> (TempDir, ScannerTask) {
     let (_temp_dir, repo) = create_test_repo();
     let repo_path = repo.git_dir().to_string_lossy().to_string();
-    let scanner = ScannerTask::builder("test-scanner-123".to_string(), repo_path, repo)
-        .with_requirements(requirements)
-        .build();
+
+    // Create test queue publisher
+    let queue_service = crate::queue::api::get_queue_service();
+    let test_publisher = queue_service
+        .create_publisher("test-scanner-123".to_string())
+        .expect("Failed to create test queue publisher");
+
+    let scanner = ScannerTask::new(
+        "test-scanner-123".to_string(),
+        repo_path,
+        repo,
+        requirements,
+        test_publisher,
+        None,
+        None,
+    );
     (_temp_dir, scanner)
 }
 

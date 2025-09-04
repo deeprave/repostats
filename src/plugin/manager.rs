@@ -8,15 +8,15 @@ use crate::notifications::api::{Event, EventFilter, PluginEventType};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::SharedPluginRegistry;
 use crate::plugin::types::PluginSource;
-use crate::plugin::types::{ActivePluginInfo, PluginFunction, PluginId, PluginInfo};
+use crate::plugin::types::{ActivePluginInfo, PluginFunction, PluginInfo};
 use crate::plugin::unified_discovery::PluginDiscovery;
 use crate::queue::api::{QueueConsumer, QueueManager};
-use log::{info, warn};
+use log;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
 use toml::Table;
 
@@ -31,6 +31,9 @@ pub struct PluginManagerConfig {
 
     /// Check interval for plugin completion status
     pub completion_check_interval: Duration,
+
+    /// Maximum time to wait for plugin completion with keep-alive reset capability
+    pub plugin_timeout: Duration,
 }
 
 impl Default for PluginManagerConfig {
@@ -39,6 +42,7 @@ impl Default for PluginManagerConfig {
             completion_event_timeout: Duration::from_millis(100),
             shutdown_timeout: Duration::from_secs(30),
             completion_check_interval: Duration::from_millis(50),
+            plugin_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -49,12 +53,34 @@ impl PluginManagerConfig {
         completion_event_timeout: Duration,
         shutdown_timeout: Duration,
         completion_check_interval: Duration,
-    ) -> Self {
-        Self {
+        plugin_timeout: Duration,
+    ) -> Result<Self, String> {
+        let config = Self {
             completion_event_timeout,
             shutdown_timeout,
             completion_check_interval,
+            plugin_timeout,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Create configuration with custom plugin timeout (keeping other defaults)
+    pub fn with_plugin_timeout(plugin_timeout: Duration) -> Result<Self, String> {
+        let config = Self {
+            plugin_timeout,
+            ..Self::default()
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate that plugin timeout meets minimum requirements (5 seconds)
+    pub fn validate(&self) -> Result<(), String> {
+        if self.plugin_timeout < Duration::from_secs(5) {
+            return Err("Plugin timeout must be at least 5 seconds".to_string());
         }
+        Ok(())
     }
 }
 
@@ -70,15 +96,6 @@ pub struct PluginManager {
     /// Current API version for compatibility checking
     api_version: u32,
 
-    /// Command resolution - which plugin/function to execute
-    active_command: Option<String>,
-
-    /// Plugin ID to name mapping for proxy resolution
-    plugin_ids: HashMap<PluginId, String>,
-
-    /// Next available plugin ID
-    next_id: PluginId,
-
     /// Currently active plugins (plugins matched to command segments)
     active_plugins: Vec<ActivePluginInfo>,
 
@@ -88,6 +105,10 @@ pub struct PluginManager {
     /// Queue consumers that have been created but not yet activated
     /// Maps plugin name to its QueueConsumer
     pending_consumers: HashMap<String, QueueConsumer>,
+
+    /// Shared reference to pending consumers for system event handler
+    /// This is set when the system notification subscriber is initialized
+    shared_pending_consumers: Option<Arc<Mutex<HashMap<String, QueueConsumer>>>>,
 
     /// Notification receivers to keep channels alive
     /// Maps subscriber ID to notification receiver
@@ -103,30 +124,102 @@ pub struct PluginManager {
 
     /// Configuration for timeouts and thresholds
     pub(crate) config: PluginManagerConfig,
+
+    /// Event receiver for continuous plugin event monitoring
+    /// Uses Arc<Mutex<>> for safe concurrent access during plugin completion awaiting
+    plugin_event_receiver: Arc<Mutex<Option<Arc<Mutex<crate::notifications::api::EventReceiver>>>>>,
+
+    /// Async-safe mutex to prevent concurrent event subscription initialization
+    event_subscription_mutex: Arc<Mutex<bool>>,
 }
 
 impl PluginManager {
     /// Create a new plugin manager with default configuration
+    /// Note: Call initialize_event_subscription() after creation for proper event handling
     pub fn new(api_version: u32) -> Self {
         Self::with_config(api_version, PluginManagerConfig::default())
     }
 
     /// Create a new plugin manager with custom configuration
+    /// Note: Call initialize_event_subscription() after creation for proper event handling
     pub fn with_config(api_version: u32, config: PluginManagerConfig) -> Self {
         Self {
             registry: SharedPluginRegistry::new(),
             api_version,
-            active_command: None,
-            plugin_ids: HashMap::new(),
-            next_id: PluginId::new(1),
             active_plugins: Vec::new(),
             plugin_configs: HashMap::new(),
             pending_consumers: HashMap::new(),
+            shared_pending_consumers: None,
             notification_receivers: HashMap::new(),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             plugin_completion: Arc::new(RwLock::new(HashMap::new())),
             config,
+            plugin_event_receiver: Arc::new(Mutex::new(None)), // Will be set by initialize_event_subscription()
+            event_subscription_mutex: Arc::new(Mutex::new(false)),
         }
+    }
+
+    /// Configure plugin timeout from CLI arguments
+    /// Should be called after construction with parsed CLI arguments
+    pub fn configure_plugin_timeout(&mut self, timeout: Duration) -> PluginResult<()> {
+        // Define a minimum timeout duration (5 seconds to match validation)
+        const MIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+        if timeout < MIN_TIMEOUT {
+            return Err(PluginError::Generic {
+                message: format!(
+                    "Plugin timeout value {:?} is below the minimum allowed ({:?})",
+                    timeout, MIN_TIMEOUT
+                ),
+            });
+        }
+
+        self.config.plugin_timeout = timeout;
+        log::trace!("Plugin manager configured with timeout: {:?}", timeout);
+        Ok(())
+    }
+
+    /// Initialize event subscription for plugin coordination
+    /// MUST be called after construction
+    /// Enables proper event handling and prevent race conditions
+    /// Takes notification manager directly to avoid circular service dependency
+    pub async fn initialize_event_subscription(
+        &self,
+        notification_manager: &mut crate::notifications::api::AsyncNotificationManager,
+    ) -> PluginResult<()> {
+        log::trace!("Starting plugin manager event subscription initialization");
+
+        // Use async-safe mutex to prevent concurrent initialization
+        let mut guard = self.event_subscription_mutex.lock().await;
+        if *guard {
+            log::trace!("Event subscription already initialized, skipping");
+            return Ok(()); // Already initialized
+        }
+
+        // Subscribe to plugin events immediately to prevent race conditions
+
+        let plugin_event_receiver = notification_manager
+            .subscribe(
+                "plugin_manager_events".to_string(),
+                EventFilter::PluginOnly,
+                "PluginManager".to_string(),
+            )
+            .map_err(|e| PluginError::LoadError {
+                plugin_name: "plugin_manager".to_string(),
+                cause: format!(
+                    "Failed to subscribe to plugin events during initialization: {}",
+                    e
+                ),
+            })?;
+
+        // Only set the receiver and mark as initialized AFTER successful subscription
+        *self.plugin_event_receiver.lock().await =
+            Some(Arc::new(Mutex::new(plugin_event_receiver)));
+        *guard = true; // Mark as initialized only after successful completion
+        log::trace!("Plugin manager event subscription initialized successfully");
+        log::debug!("Plugin manager event subscription initialized successfully");
+
+        Ok(())
     }
 
     /// Get shared access to the plugin registry
@@ -224,32 +317,10 @@ impl PluginManager {
     // MARK: End of helper methods
 
     /// Get plugin info by ID (internal)
-    async fn get_plugin_info(&self, plugin_id: PluginId) -> PluginResult<PluginInfo> {
-        let plugin_name =
-            self.plugin_ids
-                .get(&plugin_id)
-                .ok_or_else(|| PluginError::PluginNotFound {
-                    plugin_name: format!("ID:{:?}", plugin_id),
-                })?;
-
-        self.get_plugin_info_by_name(plugin_name)
-            .await
-            .ok_or_else(|| PluginError::PluginNotFound {
-                plugin_name: plugin_name.clone(),
-            })
-    }
-
-    /// Generate next plugin ID
-    fn next_plugin_id(&mut self) -> PluginId {
-        let id = self.next_id;
-        self.next_id.increment();
-        id
-    }
 
     /// Resolve command to plugin info
     pub async fn resolve_command(&mut self, command: &str) -> PluginResult<PluginInfo> {
         // For now, assume command == plugin name (simplified)
-        self.active_command = Some(command.to_string());
         self.get_plugin_info_by_name(command)
             .await
             .ok_or_else(|| PluginError::PluginNotFound {
@@ -316,7 +387,7 @@ impl PluginManager {
 
         // Auto-activate plugins marked as auto_active
         for plugin_name in &auto_active_plugins {
-            info!("Auto-activating plugin: {}", plugin_name);
+            log::trace!("Auto-activating plugin: {}", plugin_name);
 
             // Get plugin info using helper method
             let function_name_opt = self.get_first_function_name(plugin_name).await;
@@ -325,13 +396,13 @@ impl PluginManager {
             let function_name = function_name_opt.unwrap_or_else(|| "unknown".to_string());
 
             if !plugin_exists {
-                warn!("Auto-active plugin '{}' not found in registry", plugin_name);
+                log::warn!("Auto-active plugin '{}' not found in registry", plugin_name);
                 continue;
             }
 
             // Activate the plugin in registry
             if let Err(e) = registry.activate_plugin(plugin_name) {
-                warn!("Failed to auto-activate plugin '{}': {:?}", plugin_name, e);
+                log::warn!("Failed to auto-activate plugin '{}': {:?}", plugin_name, e);
                 continue;
             }
 
@@ -342,7 +413,7 @@ impl PluginManager {
                 args: Vec::new(), // Auto-active plugins have no command line args
             });
 
-            info!(
+            log::trace!(
                 "Auto-active plugin '{}' successfully activated",
                 plugin_name
             );
@@ -397,7 +468,7 @@ impl PluginManager {
             }
 
             if !matched {
-                warn!(
+                log::warn!(
                     "PluginManager: No plugin found for command '{}'",
                     segment.command_name
                 );
@@ -471,11 +542,11 @@ impl PluginManager {
                         self.plugin_configs
                             .insert(plugin_name.clone(), config_table.clone());
                     } else {
-                        warn!("PluginManager: Plugin config for '{}' in [plugins] section is not a table, ignoring", plugin_name);
+                        log::warn!("PluginManager: Plugin config for '{}' in [plugins] section is not a table, ignoring", plugin_name);
                     }
                 }
             } else {
-                warn!("PluginManager: [plugins] section exists but is not a table, ignoring");
+                log::warn!("PluginManager: [plugins] section exists but is not a table, ignoring");
             }
         }
 
@@ -608,7 +679,7 @@ impl PluginManager {
     /// Only creates queue consumers for Processing plugins
     pub async fn setup_plugin_consumers(
         &mut self,
-        queue: &std::sync::Arc<QueueManager>,
+        queue: &Arc<QueueManager>,
         plugin_names: &[String],
         plugin_args: &[String],
     ) -> PluginResult<()> {
@@ -620,28 +691,16 @@ impl PluginManager {
                     let plugin_info = plugin.plugin_info();
                     match plugin_info.plugin_type {
                         crate::plugin::types::PluginType::Processing => true,
-                        _ => {
-                            info!(
-                                "Skipping queue consumer for plugin '{}' (type: {:?}) - only Processing plugins get queue subscribers",
-                                plugin_name, plugin_info.plugin_type
-                            );
-                            false
-                        }
+                        _ => false,
                     }
                 } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
                     let plugin_info = consumer_plugin.plugin_info();
                     match plugin_info.plugin_type {
                         crate::plugin::types::PluginType::Processing => true,
-                        _ => {
-                            info!(
-                                "Skipping queue consumer for consumer plugin '{}' (type: {:?}) - only Processing plugins get queue subscribers",
-                                plugin_name, plugin_info.plugin_type
-                            );
-                            false
-                        }
+                        _ => false,
                     }
                 } else {
-                    warn!(
+                    log::warn!(
                         "Plugin '{}' not found in registry, skipping consumer creation",
                         plugin_name
                     );
@@ -658,8 +717,17 @@ impl PluginManager {
                 })?;
 
                 // Store the consumer for later activation
-                self.pending_consumers.insert(plugin_name.clone(), consumer);
-                info!(
+                // Use shared reference if available (for system event handler),
+                // otherwise use local HashMap
+                if let Some(ref shared_consumers) = self.shared_pending_consumers {
+                    // Store in shared reference for system event handler
+                    let mut shared = shared_consumers.lock().await;
+                    shared.insert(plugin_name.clone(), consumer);
+                } else {
+                    // Fallback to local storage (shouldn't happen if system subscriber is set up)
+                    self.pending_consumers.insert(plugin_name.clone(), consumer);
+                }
+                log::trace!(
                     "Created queue consumer for Processing plugin '{}'",
                     plugin_name
                 );
@@ -687,11 +755,10 @@ impl PluginManager {
 
     /// Setup notification subscribers for active plugins during initialization
     pub async fn setup_plugin_notification_subscribers(&mut self) -> PluginResult<()> {
-        use crate::core::services::get_services;
+        use crate::notifications::api::get_notification_service;
         use crate::notifications::api::EventFilter;
 
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = get_notification_service().await;
 
         for active_plugin in &self.active_plugins {
             let subscriber_id = format!("plugin-{}-notifications", active_plugin.plugin_name);
@@ -720,48 +787,89 @@ impl PluginManager {
 
     /// Setup notification subscriber for plugin manager to receive system events
     pub async fn setup_system_notification_subscriber(&mut self) -> PluginResult<()> {
-        use crate::core::services::get_services;
+        use crate::notifications::api::get_notification_service;
         use crate::notifications::api::{Event, EventFilter, SystemEventType};
 
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = get_notification_service().await;
 
         let subscriber_id = "plugin-manager-system".to_string();
         let source = "PluginManager-System".to_string();
 
+        // Clone shared references to data needed by the system event handler
+        let registry = self.registry.clone();
+
+        // Create an Arc<Mutex> wrapper around pending_consumers
+        // that can be shared with the spawned task
+        // We need to wrap the existing HashMap instead of moving
+        // it out since consumers are added later
+        let pending_consumers_ref = Arc::new(Mutex::new(std::mem::replace(
+            &mut self.pending_consumers,
+            HashMap::new(),
+        )));
+
+        // Store the shared reference in the plugin manager for later use
+        self.shared_pending_consumers = Some(pending_consumers_ref.clone());
+
         match notification_manager.subscribe(subscriber_id.clone(), EventFilter::SystemOnly, source)
         {
             Ok(mut receiver) => {
-                // Spawn a task to listen for system events
+                // Spawn a task to listen for system events and handle them directly
                 tokio::spawn(async move {
                     while let Some(event) = receiver.recv().await {
                         if let Event::System(sys_event) = event {
                             if sys_event.event_type == SystemEventType::Startup {
-                                log::trace!("PluginManager: Received system startup event, activating plugin consumers");
+                                log::trace!("PluginManager: Received system startup event");
 
-                                // Get services and plugin manager inside the loop
-                                let services = get_services();
-                                let mut plugin_manager = services.plugin_manager().await;
+                                // Activate plugin consumers directly in this task to avoid deadlock
+                                let mut pending_consumers = pending_consumers_ref.lock().await;
+                                if pending_consumers.is_empty() {
+                                    log::info!("PluginManager: No pending consumers to activate");
+                                } else {
+                                    let consumers_to_activate: Vec<(String, QueueConsumer)> =
+                                        pending_consumers.drain().collect();
 
-                                // Activate plugin consumers
-                                if let Err(e) = plugin_manager.activate_plugin_consumers().await {
-                                    log::error!("Failed to activate plugin consumers: {}", e);
+                                    let mut registry = registry.inner().write().await;
+
+                                    for (plugin_name, consumer) in consumers_to_activate.into_iter()
+                                    {
+                                        log::info!(
+                                            "PluginManager: Activating consumer for plugin '{}'",
+                                            plugin_name
+                                        );
+
+                                        // Find the consumer plugin and start consuming
+                                        if let Some(plugin) =
+                                            registry.get_consumer_plugin_mut(&plugin_name)
+                                        {
+                                            match plugin.start_consuming(consumer).await {
+                                                Ok(()) => {
+                                                    log::info!(
+                                                        "PluginManager: Plugin '{}' is now actively consuming from queue",
+                                                        plugin_name
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    log::error!(
+                                                        "PluginManager: Failed to start consuming for plugin '{}': {}",
+                                                        plugin_name, e
+                                                    );
+                                                }
+                                            }
+                                        } else {
+                                            log::warn!(
+                                                "PluginManager: Consumer plugin '{}' not found during activation",
+                                                plugin_name
+                                            );
+                                        }
+                                    }
                                 }
                             } else if sys_event.event_type == SystemEventType::Shutdown {
-                                log::trace!("PluginManager: Received system shutdown event, notifying plugins");
-
-                                // Get services and plugin manager inside the loop
-                                let services = get_services();
-                                let plugin_manager = services.plugin_manager().await;
-
-                                // Notify all active plugins about shutdown
-                                if let Err(e) = plugin_manager.notify_plugins_shutdown().await {
-                                    log::error!("Failed to notify plugins of shutdown: {}", e);
-                                }
+                                log::trace!("PluginManager: Received system shutdown event");
+                                // Plugin shutdown is handled elsewhere through the shutdown coordination system
                             }
                         }
                     }
-                    info!("PluginManager: System event listener task terminated");
+                    log::info!("PluginManager: System event listener task terminated");
                 });
 
                 Ok(())
@@ -779,14 +887,14 @@ impl PluginManager {
     pub async fn handle_system_started_event(&mut self) -> PluginResult<()> {
         self.activate_plugin_consumers().await?;
 
-        info!("PluginManager: System started event handling completed");
+        log::trace!("PluginManager: System started event handling completed");
         Ok(())
     }
 
     /// Activate all pending plugin consumers (called when system started event is received)
     pub async fn activate_plugin_consumers(&mut self) -> PluginResult<()> {
         if self.pending_consumers.is_empty() {
-            info!("PluginManager: No pending consumers to activate");
+            log::trace!("PluginManager: No pending consumers to activate");
             return Ok(());
         }
 
@@ -797,7 +905,7 @@ impl PluginManager {
         let mut registry = self.registry.inner().write().await;
 
         for (plugin_name, consumer) in consumers_to_activate.into_iter() {
-            info!(
+            log::trace!(
                 "PluginManager: Activating consumer for plugin '{}'",
                 plugin_name
             );
@@ -806,7 +914,7 @@ impl PluginManager {
             if let Some(plugin) = registry.get_consumer_plugin_mut(&plugin_name) {
                 match plugin.start_consuming(consumer).await {
                     Ok(()) => {
-                        info!(
+                        log::trace!(
                             "PluginManager: Plugin '{}' is now actively consuming from queue",
                             plugin_name
                         );
@@ -837,12 +945,11 @@ impl PluginManager {
 
     /// Notify all active plugins about system shutdown
     pub async fn notify_plugins_shutdown(&self) -> PluginResult<()> {
-        use crate::core::services::get_services;
+        use crate::notifications::api::get_notification_service;
         use crate::notifications::api::PluginEvent;
         use crate::notifications::event::{Event, PluginEventType};
 
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = get_notification_service().await;
 
         // Get list of all active plugins
         let registry = self.registry.inner().read().await;
@@ -908,9 +1015,23 @@ impl PluginManager {
     /// It should be called after scanning is complete but before cleanup.
     /// Returns immediately if no plugins are active.
     ///
-    /// This implementation uses the notification system to wait for explicit
-    /// PluginEventType::Completed events from plugins.
+    /// This implementation uses the pre-subscribed event receiver to eliminate race conditions.
+    /// Supports keep-alive events to extend timeout for long-running operations.
     pub async fn await_all_plugins_completion(&self) -> PluginResult<()> {
+        log::trace!("Starting await_all_plugins_completion");
+
+        // Require explicit initialization to avoid masking configuration issues
+        {
+            let receiver_guard = self.plugin_event_receiver.lock().await;
+            if receiver_guard.is_none() {
+                return Err(PluginError::LoadError {
+                    plugin_name: "plugin_manager".to_string(),
+                    cause: "Plugin event subscription not initialized. Call initialize_event_subscription() before awaiting plugin completion.".to_string(),
+                });
+            }
+            log::trace!("Event subscription confirmed initialized");
+        }
+
         let active_plugin_names = {
             let registry = self.registry.inner().read().await;
             registry.get_active_plugins()
@@ -933,26 +1054,16 @@ impl PluginManager {
             }
         }
 
-        // Subscribe to plugin completion events
-        let services = crate::core::services::get_services();
-        let mut notification_manager = services.notification_manager().await;
-
-        let mut event_receiver = notification_manager
-            .subscribe(
-                "plugin_completion_tracker".to_string(),
-                EventFilter::PluginOnly,
-                "PluginManager".to_string(),
-            )
-            .map_err(|e| PluginError::LoadError {
-                plugin_name: "system".to_string(),
-                cause: format!("Failed to subscribe to plugin events: {}", e),
-            })?;
+        // Track timeout with keep-alive support
+        let start_time = std::time::Instant::now();
+        let mut last_keepalive_time = start_time;
+        let plugin_timeout = self.config.plugin_timeout;
 
         // Wait for completion events from all active plugins
-        loop {
+        let completion_result = loop {
             if self.is_shutdown_requested() {
                 log::trace!("Shutdown requested, stopping plugin completion wait");
-                break;
+                break Ok(());
             }
 
             // Check if all plugins have completed
@@ -965,46 +1076,101 @@ impl PluginManager {
 
             if all_completed {
                 log::trace!("All plugins have completed");
-                break;
+                break Ok(());
             }
 
-            // Wait for completion events with timeout
-            let timeout_result =
-                timeout(self.config.completion_event_timeout, event_receiver.recv()).await;
+            // Check timeout (since last keep-alive)
+            let elapsed_since_keepalive = last_keepalive_time.elapsed();
+            if elapsed_since_keepalive > plugin_timeout {
+                log::warn!(
+                    "Plugin completion timeout after {:?} (no keep-alive events received)",
+                    plugin_timeout
+                );
+                // Timeout is not treated as an error to avoid blocking system shutdown.
+                // This allows the system to proceed gracefully even if some plugins
+                // fail to send completion events.
+                // Plugin-specific errors are logged separately.
+                break Ok(());
+            }
+
+            // Calculate remaining timeout
+            let remaining_timeout = plugin_timeout.saturating_sub(elapsed_since_keepalive);
+            let wait_timeout =
+                std::cmp::min(self.config.completion_event_timeout, remaining_timeout);
+
+            // Wait for completion events with timeout using shared access
+            let event_receiver = {
+                let receiver_guard = self.plugin_event_receiver.lock().await;
+                match receiver_guard.as_ref() {
+                    Some(receiver) => receiver.clone(),
+                    None => {
+                        return Err(PluginError::LoadError {
+                            plugin_name: "plugin_manager".to_string(),
+                            cause: "Plugin event receiver became None during completion wait. This indicates a race condition or system error.".to_string(),
+                        });
+                    }
+                }
+            };
+            let timeout_result = timeout(wait_timeout, async {
+                let mut receiver = event_receiver.lock().await;
+                receiver.recv().await
+            })
+            .await;
 
             match timeout_result {
                 Ok(event_result) => {
                     match event_result {
                         Some(event) => {
                             if let Event::Plugin(plugin_event) = event {
-                                if plugin_event.event_type == PluginEventType::Completed {
-                                    // Mark this plugin as completed
-                                    let mut completion = self.plugin_completion.write().await;
-                                    completion.insert(plugin_event.plugin_id.clone(), true);
-                                    log::trace!(
-                                        "Plugin '{}' marked as completed",
-                                        plugin_event.plugin_id
-                                    );
+                                match plugin_event.event_type {
+                                    PluginEventType::Completed => {
+                                        // Mark this plugin as completed
+                                        let mut completion = self.plugin_completion.write().await;
+                                        completion.insert(plugin_event.plugin_id.clone(), true);
+                                        log::trace!(
+                                            "Plugin '{}' marked as completed",
+                                            plugin_event.plugin_id
+                                        );
+                                    }
+                                    PluginEventType::KeepAlive => {
+                                        // Reset timeout on keep-alive
+                                        last_keepalive_time = std::time::Instant::now();
+                                        log::trace!(
+                                            "Plugin '{}' sent keep-alive, resetting timeout",
+                                            plugin_event.plugin_id
+                                        );
+                                    }
+                                    _ => {
+                                        // Other plugin events (Processing, DataReady, etc.)
+                                        log::trace!(
+                                            "Plugin '{}' event: {:?}",
+                                            plugin_event.plugin_id,
+                                            plugin_event.event_type
+                                        );
+                                    }
                                 }
                             }
                         }
                         None => {
                             log::trace!("Plugin event channel closed");
-                            break;
+                            break Ok(());
                         }
                     }
                 }
                 Err(_) => {
-                    // Timeout - continue checking completion status
+                    // Timeout on event receive: continue
+                    // checking completion status and overall timeout
                     continue;
                 }
             }
-        }
+        };
+
+        // No need to put the event receiver back since we used Arc<Mutex<>> for shared access
 
         // Clean up completed plugins from tracking map
         self.cleanup_completed_plugins().await;
 
-        Ok(())
+        completion_result
     }
 
     /// Gracefully stop all active plugins with a timeout
@@ -1272,9 +1438,6 @@ mod tests {
         let manager = PluginManager::new(crate::get_plugin_api_version());
 
         assert_eq!(manager.api_version, crate::get_plugin_api_version());
-        assert_eq!(manager.active_command, None);
-        assert_eq!(manager.next_id, PluginId(1));
-        assert!(manager.plugin_ids.is_empty());
     }
 
     #[test]
@@ -1429,21 +1592,6 @@ mod tests {
         let active_plugins = manager.list_plugins_with_filter(true).await;
         assert_eq!(active_plugins.len(), 1);
         assert_eq!(active_plugins[0].name, "test-plugin");
-    }
-
-    #[test]
-    fn test_plugin_id_generation() {
-        let mut manager = PluginManager::new(crate::get_plugin_api_version());
-
-        let id1 = manager.next_plugin_id();
-        let id2 = manager.next_plugin_id();
-        let id3 = manager.next_plugin_id();
-
-        assert_eq!(id1, PluginId(1));
-        assert_eq!(id2, PluginId(2));
-        assert_eq!(id3, PluginId(3));
-        assert_ne!(id1, id2);
-        assert_ne!(id2, id3);
     }
 
     #[test]

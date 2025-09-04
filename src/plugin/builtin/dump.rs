@@ -34,6 +34,12 @@ pub struct DumpPlugin {
     /// Whether to request file content from scanner (enables checkout mode)
     request_file_content: bool,
 
+    /// Whether to send keep-alive events to prevent timeout
+    send_keepalive: bool,
+
+    /// Keep-alive interval in seconds (default: 10)
+    keepalive_interval_secs: u64,
+
     /// Shutdown sender to signal task termination
     shutdown_tx: Option<oneshot::Sender<()>>,
 }
@@ -46,6 +52,8 @@ impl DumpPlugin {
             output_format: OutputFormat::Text,
             show_headers: true,
             request_file_content: false,
+            send_keepalive: false,       // Default disabled
+            keepalive_interval_secs: 10, // Default 10 seconds
             shutdown_tx: None,
         }
     }
@@ -193,6 +201,8 @@ impl std::fmt::Debug for DumpPlugin {
             .field("output_format", &self.output_format)
             .field("show_headers", &self.show_headers)
             .field("request_file_content", &self.request_file_content)
+            .field("send_keepalive", &self.send_keepalive)
+            .field("keepalive_interval_secs", &self.keepalive_interval_secs)
             .field("shutdown_tx", &self.shutdown_tx.is_some())
             .finish()
     }
@@ -291,6 +301,20 @@ impl Plugin for DumpPlugin {
                 .long("checkout")
                 .action(clap::ArgAction::SetTrue)
                 .help("Request file content from scanner (enables historical file reconstruction testing)"),
+        )
+        .arg(
+            Arg::new("keepalive")
+                .long("keepalive")
+                .action(clap::ArgAction::SetTrue)
+                .help("Send keep-alive events during processing to prevent plugin timeout"),
+        )
+        .arg(
+            Arg::new("keepalive-interval")
+                .long("keepalive-interval")
+                .value_name("SECONDS")
+                .help("Keep-alive interval in seconds (default: 10, minimum: 1)")
+                .value_parser(clap::value_parser!(u64))
+                .default_value("10"),
         );
 
         // Parse arguments using clap
@@ -300,6 +324,26 @@ impl Plugin for DumpPlugin {
         self.output_format = determine_format(&matches, config);
         self.show_headers = !matches.get_flag("no-headers");
         self.request_file_content = matches.get_flag("checkout");
+        self.send_keepalive = matches.get_flag("keepalive");
+
+        // Parse keep-alive interval with validation
+        const MAX_KEEPALIVE_INTERVAL_SECS: u64 = 3600; // 1 hour upper limit
+        if let Some(interval_secs) = matches.get_one::<u64>("keepalive-interval") {
+            if *interval_secs == 0 {
+                return Err(PluginError::Generic {
+                    message: "Keep-alive interval must be at least 1 second".to_string(),
+                });
+            }
+            if *interval_secs > MAX_KEEPALIVE_INTERVAL_SECS {
+                return Err(PluginError::Generic {
+                    message: format!(
+                        "Keep-alive interval must not exceed {} seconds (got {})",
+                        MAX_KEEPALIVE_INTERVAL_SECS, interval_secs
+                    ),
+                });
+            }
+            self.keepalive_interval_secs = *interval_secs;
+        }
 
         Ok(())
     }
@@ -317,14 +361,39 @@ impl ConsumerPlugin for DumpPlugin {
         // Capture plugin settings for the task
         let output_format = self.output_format;
         let show_headers = self.show_headers;
+        let send_keepalive = self.send_keepalive;
+        let keepalive_interval_secs = self.keepalive_interval_secs;
         let plugin_name = self.plugin_info().name;
 
         // Spawn the consumer task that owns the consumer directly
         tokio::spawn(async move {
+            log::trace!(
+                "DumpPlugin: Starting consumer task for plugin '{}'",
+                plugin_name
+            );
             let mut message_count = 0;
             let mut active_scanners = HashSet::new();
             let mut completed_scanners = HashSet::new();
 
+            // Circuit breaker for keep-alive failures
+            let mut consecutive_keepalive_failures = 0;
+            const MAX_CONSECUTIVE_KEEPALIVE_FAILURES: usize = 3;
+
+            // Setup keep-alive timer if enabled
+            let mut keepalive_interval = if send_keepalive {
+                log::trace!(
+                    "DumpPlugin: Keep-alive enabled with interval {}s",
+                    keepalive_interval_secs
+                );
+                Some(tokio::time::interval(tokio::time::Duration::from_secs(
+                    keepalive_interval_secs,
+                )))
+            } else {
+                log::trace!("DumpPlugin: Keep-alive disabled");
+                None
+            };
+
+            log::trace!("DumpPlugin: Entering main message processing loop");
             loop {
                 tokio::select! {
                     // Check for shutdown signal
@@ -341,13 +410,65 @@ impl ConsumerPlugin for DumpPlugin {
                         break;
                     }
 
+                    // Send keep-alive events if enabled
+                    _ = async {
+                        if let Some(ref mut interval) = keepalive_interval {
+                            interval.tick().await;
+                        } else {
+                            // Keep this branch alive but never complete if keep-alive is disabled
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        // Retry keep-alive event publishing up to 3 times with 1s delay between attempts
+                        let mut retries = 0;
+                        let max_retries = 3;
+                        let mut last_err = None;
+                        while retries < max_retries {
+                            match crate::plugin::events::publish_plugin_keepalive_event(
+                                &plugin_name,
+                                &format!("Processed {} messages", message_count)
+                            ).await {
+                                Ok(_) => {
+                                    log::trace!("DumpPlugin: Sent keep-alive event (processed {} messages)", message_count);
+                                    last_err = None;
+                                    break;
+                                }
+                                Err(e) => {
+                                    last_err = Some(e);
+                                    retries += 1;
+                                    if retries < max_retries {
+                                        log::warn!("Failed to publish keep-alive event (attempt {}/{}), retrying: {}", retries, max_retries, last_err.as_ref().unwrap());
+                                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(e) = last_err {
+                            log::error!("Failed to publish keep-alive event after {} attempts: {}", max_retries, e);
+
+                            // Circuit breaker: disable keep-alive after too many consecutive failures
+                            consecutive_keepalive_failures += 1;
+                            if consecutive_keepalive_failures >= MAX_CONSECUTIVE_KEEPALIVE_FAILURES {
+                                log::error!(
+                                    "Circuit breaker triggered: Disabling keep-alive after {} consecutive failed retry cycles",
+                                    consecutive_keepalive_failures
+                                );
+                                keepalive_interval = None; // Disable keep-alive to prevent further failures
+                            }
+                        } else {
+                            // Reset counter on successful keep-alive
+                            consecutive_keepalive_failures = 0;
+                        }
+                    }
+
                     // Try to read a typed message (with timeout to allow shutdown checks)
                     result = tokio::time::timeout(
-                        tokio::time::Duration::from_millis(100),
+                        tokio::time::Duration::from_millis(1000), // Increased from 100ms to reduce busy waiting
                         async { typed_consumer.read_with_header() }
                     ) => {
                         match result {
                             Ok(Ok(Some(typed_msg))) => {
+                                log::trace!("DumpPlugin: Received message #{} of type {:?}", message_count + 1, std::mem::discriminant(&typed_msg.content));
                                 let formatted = DumpPlugin::format_typed_message_direct(&typed_msg, output_format, show_headers);
                                 println!("{}", formatted);
                                 message_count += 1;
@@ -356,48 +477,60 @@ impl ConsumerPlugin for DumpPlugin {
                                 match &typed_msg.content {
                                     ScanMessage::ScanStarted { scanner_id, .. } => {
                                         active_scanners.insert(scanner_id.clone());
-                                        log::debug!("DumpPlugin: Started tracking scanner: {}", scanner_id);
+                                        log::trace!("DumpPlugin: Started tracking scanner: {} (active: {:?})", scanner_id, active_scanners);
                                     }
                                     ScanMessage::ScanCompleted { scanner_id, .. } => {
                                             completed_scanners.insert(scanner_id.clone());
-                                            log::debug!("DumpPlugin: Scanner completed: {}", scanner_id);
+                                            log::trace!("DumpPlugin: Scanner completed: {} (active: {:?}, completed: {:?})", scanner_id, active_scanners, completed_scanners);
 
                                             // Check if all active scanners have completed
-                                            if !active_scanners.is_empty() &&
-                                               active_scanners.iter().all(|id| completed_scanners.contains(id)) {
+                                            let all_completed = !active_scanners.is_empty() &&
+                                               active_scanners.iter().all(|id| completed_scanners.contains(id));
+                                            log::trace!("DumpPlugin: Completion check - active_empty: {}, all_completed: {}", active_scanners.is_empty(), all_completed);
+
+                                            if all_completed {
                                                 log::debug!("DumpPlugin: All scanners completed, finishing...");
 
                                                 // Publish plugin completion event
+                                                log::trace!("DumpPlugin: Publishing plugin completion event");
                                                 if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
                                                     &plugin_name,
                                                     "All scanners completed - plugin processing finished"
                                                 ).await {
                                                     log::error!("Failed to publish plugin completion event: {}", e);
+                                                } else {
+                                                    log::trace!("DumpPlugin: Successfully published plugin completion event");
                                                 }
                                                 break;
                                             }
                                     }
                                     ScanMessage::ScanError { scanner_id, .. } => {
                                         completed_scanners.insert(scanner_id.clone());
-                                        log::debug!("DumpPlugin: Scanner failed: {}", scanner_id);
+                                        log::trace!("DumpPlugin: Scanner failed: {} (active: {:?}, completed: {:?})", scanner_id, active_scanners, completed_scanners);
 
                                         // Check if all active scanners have completed (including errors)
-                                        if !active_scanners.is_empty() &&
-                                           active_scanners.iter().all(|id| completed_scanners.contains(id)) {
+                                        let all_completed = !active_scanners.is_empty() &&
+                                           active_scanners.iter().all(|id| completed_scanners.contains(id));
+                                        log::trace!("DumpPlugin: Error completion check - active_empty: {}, all_completed: {}", active_scanners.is_empty(), all_completed);
+
+                                        if all_completed {
                                             log::debug!("DumpPlugin: All scanners completed (some with errors), finishing...");
 
                                             // Publish plugin completion event
+                                            log::trace!("DumpPlugin: Publishing plugin completion event after errors");
                                             if let Err(e) = crate::plugin::events::publish_plugin_completion_event(
                                                 &plugin_name,
                                                 "All scanners completed - plugin processing finished"
                                             ).await {
                                                 log::error!("Failed to publish plugin completion event: {}", e);
+                                            } else {
+                                                log::trace!("DumpPlugin: Successfully published plugin completion event after errors");
                                             }
                                             break;
                                         }
                                     }
                                     _ => {
-                                        // Other message types don't affect lifecycle
+                                        log::trace!("DumpPlugin: Received non-lifecycle message, continuing");
                                     }
                                 }
                             }
@@ -424,6 +557,7 @@ impl ConsumerPlugin for DumpPlugin {
                 }
             }
 
+            log::trace!("DumpPlugin: Exiting message processing loop. Final state - active_scanners: {:?}, completed_scanners: {:?}", active_scanners, completed_scanners);
             log::info!("DumpPlugin: Processed {} messages total", message_count);
         });
 

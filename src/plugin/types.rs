@@ -64,20 +64,6 @@ pub struct ActivePluginInfo {
     pub args: Vec<String>,
 }
 
-/// Unique identifier for a plugin within the manager
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PluginId(pub u64);
-
-impl PluginId {
-    pub fn new(id: u64) -> Self {
-        PluginId(id)
-    }
-
-    pub fn increment(&mut self) {
-        self.0 += 1;
-    }
-}
-
 /// Discovery result with plugin metadata and loading mechanism
 #[derive(Debug, Clone)]
 pub struct DiscoveredPlugin {

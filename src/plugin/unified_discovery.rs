@@ -277,9 +277,7 @@ mod tests {
     #[test]
     fn test_default_plugin_path() {
         let path = get_default_plugin_path();
-        assert!(path.is_some());
-
-        let path = path.unwrap();
+        let path = path.expect("Plugin discovery path should exist after validation");
         // Should be either config dir with "Repostats" or local plugins
         assert!(path.ends_with("Repostats") || path.ends_with("plugins"));
     }

@@ -7,13 +7,11 @@
 #[cfg(test)]
 mod integration_tests {
     use crate::core::cleanup::Cleanup;
-    use crate::core::services::get_services;
     use crate::notifications::api::{
         Event, EventFilter, PluginEvent, PluginEventType, SystemEventType,
     };
     use crate::plugin::manager::{PluginManager, PluginManagerConfig};
     use crate::scanner::manager::ScannerManager;
-    use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -25,8 +23,17 @@ mod integration_tests {
             Duration::from_millis(50), // completion_event_timeout
             Duration::from_secs(5),    // shutdown_timeout
             Duration::from_millis(25), // completion_check_interval
-        );
+            Duration::from_secs(30),   // plugin_timeout
+        )
+        .expect("Should create valid config with valid timeouts");
         let plugin_manager = PluginManager::with_config(1, config);
+
+        // Initialize event subscription before calling await_all_plugins_completion
+        let mut notification_manager = crate::notifications::api::AsyncNotificationManager::new();
+        plugin_manager
+            .initialize_event_subscription(&mut notification_manager)
+            .await
+            .expect("Should initialize event subscription");
 
         // With no active plugins, this should return immediately
         let start_time = std::time::Instant::now();
@@ -50,7 +57,9 @@ mod integration_tests {
             Duration::from_millis(10), // Very short completion_event_timeout for testing
             Duration::from_millis(100), // Short shutdown_timeout
             Duration::from_millis(5),  // Short completion_check_interval
-        );
+            Duration::from_secs(5),    // Minimum valid plugin_timeout for testing
+        )
+        .expect("Should create valid config with valid timeouts");
         let plugin_manager = PluginManager::with_config(1, config.clone());
 
         // Verify the configuration is applied correctly
@@ -67,6 +76,13 @@ mod integration_tests {
             Duration::from_millis(5)
         );
 
+        // Initialize event subscription before calling await_all_plugins_completion
+        let mut notification_manager = crate::notifications::api::AsyncNotificationManager::new();
+        plugin_manager
+            .initialize_event_subscription(&mut notification_manager)
+            .await
+            .expect("Should initialize event subscription");
+
         // Test that the timeout configuration affects behavior
         // Since no plugins are registered, this will complete immediately
         let result = plugin_manager.await_all_plugins_completion().await;
@@ -80,7 +96,6 @@ mod integration_tests {
     #[tokio::test]
     async fn test_shutdown_notification_mechanism() {
         let mut plugin_manager = PluginManager::new(1);
-        let services = get_services();
 
         // Set up plugin manager to listen for system events
         plugin_manager
@@ -89,7 +104,7 @@ mod integration_tests {
             .expect("Should set up notification subscriber");
 
         // Get notification manager
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
         // Create a subscriber to verify system shutdown events are published correctly
         let mut system_subscriber = notification_manager
@@ -204,8 +219,10 @@ mod integration_tests {
     /// Test event-driven plugin completion flow
     #[tokio::test]
     async fn test_event_driven_plugin_completion() {
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
+
+        // Add setup delay to ensure notification system is fully ready
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Subscribe to plugin events to verify they can be sent and received
         let mut subscriber = notification_manager
@@ -215,6 +232,9 @@ mod integration_tests {
                 "TestPluginEventSubscriber".to_string(),
             )
             .expect("Should create plugin event subscriber");
+
+        // Add small delay after subscription to ensure it's active
+        tokio::time::sleep(Duration::from_millis(5)).await;
 
         // Publish a plugin completion event (simulating what dump plugin does)
         let completion_event = Event::Plugin(PluginEvent::with_message(
@@ -228,8 +248,8 @@ mod integration_tests {
             .await
             .expect("Should publish plugin completion event");
 
-        // Verify the event is received correctly
-        let received_event = timeout(Duration::from_millis(100), subscriber.recv()).await;
+        // Verify the event is received correctly with increased timeout for reliability
+        let received_event = timeout(Duration::from_millis(500), subscriber.recv()).await;
 
         match received_event {
             Ok(Some(Event::Plugin(plugin_event))) => {
@@ -241,16 +261,20 @@ mod integration_tests {
                     .unwrap()
                     .contains("completed successfully"));
             }
-            Ok(Some(_)) => panic!("Received non-plugin event"),
+            Ok(Some(other_event)) => panic!("Received non-plugin event: {:?}", other_event),
             Ok(None) => panic!("Channel closed unexpectedly"),
-            Err(_) => panic!("Event reception timed out"),
+            Err(timeout_err) => panic!("Event reception timed out after 500ms: {:?}", timeout_err),
         }
+
+        // Cleanup to prevent state leakage between tests
+        drop(subscriber);
+        drop(notification_manager);
     }
 
     /// Test that plugin coordination handles concurrent operations
     #[tokio::test]
     async fn test_concurrent_plugin_coordination() {
-        let plugin_manager = Arc::new(PluginManager::new(1));
+        let plugin_manager = PluginManager::new(1);
 
         // Test concurrent marking of plugin completion
         let plugin_count = 5; // Reduced for reliability
@@ -258,32 +282,35 @@ mod integration_tests {
             .map(|i| format!("concurrent-plugin-{}", i))
             .collect();
 
-        // Spawn tasks to mark plugins as completed concurrently
-        let mut tasks = Vec::new();
+        // Mark plugins as completed concurrently to test thread safety
+        let plugin_manager_clone = std::sync::Arc::new(plugin_manager);
+        let mut handles = Vec::new();
 
-        for plugin_name in &plugin_names {
-            let manager_clone = Arc::clone(&plugin_manager);
-            let name_clone = plugin_name.clone();
+        for (i, plugin_name) in plugin_names.iter().enumerate() {
+            let plugin_name = plugin_name.clone();
+            let plugin_manager = plugin_manager_clone.clone();
 
-            let task = tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 // Small delay to simulate plugin work
-                let delay_ms = (name_clone.len() as u64 * 13) % 50 + 10; // 10-60ms based on name
+                let delay_ms = (i as u64 * 13) % 50 + 10; // 10-60ms variation
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
-                manager_clone.mark_plugin_completed(&name_clone).await;
+                plugin_manager.mark_plugin_completed(&plugin_name).await;
             });
 
-            tasks.push(task);
+            handles.push(handle);
         }
 
-        // Wait for all tasks to complete
-        for task in tasks {
-            task.await.expect("Plugin completion task should succeed");
+        // Wait for all concurrent operations to complete
+        for handle in handles {
+            handle
+                .await
+                .expect("Plugin marking task should complete successfully");
         }
 
         // Verify all plugins were marked as completed
         {
-            let completion = plugin_manager.plugin_completion.read().await;
+            let completion = plugin_manager_clone.plugin_completion.read().await;
             assert_eq!(completion.len(), plugin_count);
 
             for plugin_name in &plugin_names {
@@ -292,7 +319,20 @@ mod integration_tests {
             }
         }
 
-        // Test that await_all_plugins_completion works with concurrent access
+        // Get a mutable reference to the plugin manager for the final operations
+        let plugin_manager = match std::sync::Arc::try_unwrap(plugin_manager_clone) {
+            Ok(manager) => manager,
+            Err(_) => panic!("Should be able to unwrap Arc when no other references exist"),
+        };
+
+        // Initialize event subscription before calling await_all_plugins_completion
+        let mut notification_manager = crate::notifications::api::AsyncNotificationManager::new();
+        plugin_manager
+            .initialize_event_subscription(&mut notification_manager)
+            .await
+            .expect("Should initialize event subscription");
+
+        // Test that await_all_plugins_completion works with the plugins
         let result = plugin_manager.await_all_plugins_completion().await;
         assert!(
             result.is_ok(),

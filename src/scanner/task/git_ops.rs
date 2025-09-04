@@ -1222,7 +1222,12 @@ impl ScannerTask {
     /// Create a checkout directory for a specific commit when FILE_CONTENT is required
     async fn create_checkout_for_commit(&self, commit_info: &CommitInfo) -> ScanResult<PathBuf> {
         if let Some(checkout_manager) = self.checkout_manager() {
-            let mut manager = checkout_manager.lock().unwrap();
+            let mut manager = checkout_manager.lock().map_err(|_| ScanError::Repository {
+                message: format!(
+                    "Failed to acquire checkout manager lock for commit {} (mutex poisoned by previous panic)",
+                    commit_info.hash
+                ),
+            })?;
             let vars = crate::scanner::checkout::manager::TemplateVars::for_commit_checkout(
                 &commit_info.hash,
                 self.scanner_id(),

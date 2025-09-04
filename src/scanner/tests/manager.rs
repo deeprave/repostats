@@ -252,12 +252,8 @@ async fn test_queue_publisher_creation() {
         .await
         .unwrap();
 
-    // Create queue publisher - should succeed now
-    let result = scanner_task.create_queue_publisher().await;
-
-    assert!(result.is_ok(), "Queue publisher creation should succeed");
-
-    let publisher = result.unwrap();
+    // Get the injected queue publisher - should work now
+    let publisher = scanner_task.get_queue_publisher();
 
     // Verify the publisher uses the scanner ID as producer ID
     assert_eq!(
@@ -266,8 +262,8 @@ async fn test_queue_publisher_creation() {
         "Publisher producer ID should match scanner ID"
     );
 
-    // Test that we can create multiple publishers for the same scanner
-    let second_publisher = scanner_task.create_queue_publisher().await.unwrap();
+    // Test that we can get the same publisher reference multiple times
+    let second_publisher = scanner_task.get_queue_publisher();
     assert_eq!(
         second_publisher.producer_id(),
         scanner_task.scanner_id(),
@@ -391,11 +387,21 @@ async fn test_commit_traversal_and_message_creation() {
         let scanner_id = manager.generate_scanner_id(&repo_id).unwrap();
 
         use crate::scanner::types::ScanRequires;
-        crate::scanner::task::ScannerTask::builder(scanner_id, current_path.to_string(), repo)
-            .with_requirements(
-                ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
-            )
-            .build()
+        // Create test queue publisher
+        let queue_service = crate::queue::api::get_queue_service();
+        let test_publisher = queue_service
+            .create_publisher(scanner_id.clone())
+            .expect("Failed to create test queue publisher");
+
+        crate::scanner::task::ScannerTask::new(
+            scanner_id,
+            current_path.to_string(),
+            repo,
+            ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
+            test_publisher,
+            None,
+            None,
+        )
     };
 
     // Scan commits and capture messages for testing

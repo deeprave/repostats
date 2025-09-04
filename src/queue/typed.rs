@@ -19,22 +19,22 @@ use std::sync::Arc;
 /// * `T` - The message type to deserialize to (must implement `DeserializeOwned`)
 ///
 /// # Example
-/// ```rust
-/// use crate::scanner::api::ScanMessage;
-///
+/// ```rust,no_run
+/// # use repostats::scanner::api::ScanMessage;
+/// # use repostats::queue::api::{TypedQueueConsumer, QueueConsumer};
+/// # fn example(base_consumer: QueueConsumer) -> Result<(), Box<dyn std::error::Error>> {
 /// let typed_consumer: TypedQueueConsumer<ScanMessage> =
 ///     TypedQueueConsumer::new(base_consumer);
 ///
 /// // Direct typed message reading - no manual deserialization needed!
 /// match typed_consumer.read()? {
-///     Some(ScanMessage::ScanStarted { repository_path, .. }) => {
-///         println!("Scan started for: {}", repository_path);
-///     }
-///     Some(ScanMessage::ScanCompleted { scanner_id, .. }) => {
-///         println!("Scan completed: {}", scanner_id);
+///     Some(scan_message) => {
+///         println!("Received scan message: {:?}", scan_message);
 ///     }
 ///     None => println!("No messages available"),
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct TypedQueueConsumer<T> {
     inner: QueueConsumer,
@@ -160,11 +160,14 @@ pub trait TypedQueueManagerExt {
     /// * `consumer_id` - Unique identifier for this consumer
     ///
     /// # Example
-    /// ```rust
-    /// use crate::scanner::api::ScanMessage;
-    /// use std::sync::Arc;
-    ///
+    /// ```rust,no_run
+    /// # use repostats::scanner::api::ScanMessage;
+    /// # use repostats::queue::api::{QueueManager, TypedQueueManagerExt};
+    /// # use std::sync::Arc;
+    /// # fn example(queue_manager: Arc<QueueManager>) -> Result<(), Box<dyn std::error::Error>> {
     /// let scan_consumer = queue_manager.create_typed_consumer::<ScanMessage>("plugin-name".to_string())?;
+    /// # Ok(())
+    /// # }
     /// ```
     fn create_typed_consumer<T>(&self, consumer_id: String) -> QueueResult<TypedQueueConsumer<T>>
     where

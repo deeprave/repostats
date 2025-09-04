@@ -3,7 +3,6 @@
 //! Event and notification-related operations for scanner lifecycle management.
 
 use super::core::ScannerTask;
-use crate::core::services::get_services;
 use crate::notifications::api::{
     Event, EventFilter, EventReceiver, QueueEventType, ScanEvent, ScanEventType, SystemEvent,
     SystemEventType,
@@ -15,8 +14,7 @@ impl ScannerTask {
     /// Create a notification subscriber for this scanner task
     pub async fn create_notification_subscriber(&self) -> ScanResult<EventReceiver> {
         // Get the notification manager from services
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
         // Create a subscriber using the scanner ID with queue event filter
         let subscriber_id = format!("{}-notifications", self.scanner_id());
@@ -39,8 +37,7 @@ impl ScannerTask {
         message: Option<String>,
     ) -> ScanResult<()> {
         // Get the notification manager from services
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
         // Create scanner event
         let scan_event = ScanEvent {
@@ -66,8 +63,7 @@ impl ScannerTask {
 
     /// Subscribe to queue events to trigger scanning operations
     pub async fn subscribe_to_queue_events(&self) -> ScanResult<EventReceiver> {
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
         // Subscribe to queue events only
         let receiver = notification_manager
@@ -114,8 +110,7 @@ impl ScannerTask {
 
     /// Handle scanner shutdown via system events
     pub async fn handle_shutdown_event(&self, timeout: std::time::Duration) -> ScanResult<bool> {
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
         // Only publish shutdown event for testing - prevent production side effects
         #[cfg(test)]
