@@ -3,6 +3,7 @@
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
 use crate::core::query::QueryParams;
+use crate::queue::api::QueuePublisher;
 use crate::scanner::types::ScanRequires;
 use std::sync::{Arc, Mutex};
 
@@ -26,77 +27,89 @@ pub struct ScannerTask {
     query_params: Option<QueryParams>,
     /// Injected checkout manager for FILE_CONTENT operations (None if no checkout required)
     checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
+    /// Injected queue publisher (shared by scanner manager)
+    pub(crate) queue_publisher: QueuePublisher,
 }
 
-/// Builder for creating ScannerTask instances with optional parameters
-pub struct ScannerTaskBuilder {
-    scanner_id: String,
-    repository_path: String,
-    repository: gix::Repository,
-    requirements: ScanRequires,
-    query_params: Option<QueryParams>,
-    checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
-}
+impl ScannerTask {
+    /// Create a new ScannerTask with dependency injection
+    pub fn new(
+        scanner_id: String,
+        repository_path: String,
+        repository: gix::Repository,
+        requirements: ScanRequires,
+        queue_publisher: QueuePublisher,
+        query_params: Option<QueryParams>,
+        checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
+    ) -> Self {
+        let is_remote = Self::is_remote_path(&repository_path);
 
-impl ScannerTaskBuilder {
-    /// Create a new builder with required parameters
-    pub fn new(scanner_id: String, repository_path: String, repository: gix::Repository) -> Self {
         Self {
             scanner_id,
             repository_path,
             repository,
-            requirements: ScanRequires::NONE,
-            query_params: None,
-            checkout_manager: None,
+            is_remote,
+            requirements,
+            query_params,
+            checkout_manager,
+            queue_publisher,
         }
     }
 
-    /// Set the requirements for the scanner
+    /// Create a simple builder for backward compatibility with tests
+    /// This is deprecated in favor of direct constructor injection
+    #[cfg(test)]
+    pub fn builder(
+        scanner_id: String,
+        repository_path: String,
+        repository: gix::Repository,
+    ) -> TestScannerTaskBuilder {
+        TestScannerTaskBuilder {
+            scanner_id,
+            repository_path,
+            repository,
+            requirements: ScanRequires::NONE,
+        }
+    }
+}
+
+/// Simplified builder for test compatibility only
+/// Production code should use ScannerTask::new() directly
+#[cfg(test)]
+pub struct TestScannerTaskBuilder {
+    scanner_id: String,
+    repository_path: String,
+    repository: gix::Repository,
+    requirements: ScanRequires,
+}
+
+#[cfg(test)]
+impl TestScannerTaskBuilder {
     pub fn with_requirements(mut self, requirements: ScanRequires) -> Self {
         self.requirements = requirements;
         self
     }
 
-    /// Set the query parameters for the scanner
-    pub fn with_query_params(mut self, query_params: QueryParams) -> Self {
-        self.query_params = Some(query_params);
-        self
-    }
-
-    /// Set the checkout manager for FILE_CONTENT operations
-    pub fn with_checkout_manager(
-        mut self,
-        checkout_manager: Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>,
-    ) -> Self {
-        self.checkout_manager = Some(checkout_manager);
-        self
-    }
-
-    /// Build the ScannerTask
     pub fn build(self) -> ScannerTask {
-        let is_remote = ScannerTask::is_remote_path(&self.repository_path);
-        ScannerTask {
-            scanner_id: self.scanner_id,
-            repository_path: self.repository_path,
-            repository: self.repository,
-            is_remote,
-            requirements: self.requirements,
-            query_params: self.query_params,
-            checkout_manager: self.checkout_manager,
-        }
+        // Create test queue publisher automatically
+        let queue_service = crate::queue::api::get_queue_service();
+        let test_publisher = queue_service
+            .create_publisher(self.scanner_id.clone())
+            .expect("Failed to create test queue publisher");
+
+        ScannerTask::new(
+            self.scanner_id,
+            self.repository_path,
+            self.repository,
+            self.requirements,
+            test_publisher,
+            None,
+            None,
+        )
     }
 }
 
 impl ScannerTask {
-    /// Create a builder for constructing ScannerTask instances
-    pub fn builder(
-        scanner_id: String,
-        repository_path: String,
-        repository: gix::Repository,
-    ) -> ScannerTaskBuilder {
-        ScannerTaskBuilder::new(scanner_id, repository_path, repository)
-    }
-
     /// Create a new ScannerTask with repository (for test compatibility)
     #[cfg(test)]
     pub fn new_with_repository(
@@ -104,7 +117,21 @@ impl ScannerTask {
         repository_path: String,
         repository: gix::Repository,
     ) -> Self {
-        Self::builder(scanner_id, repository_path, repository).build()
+        // Create a test queue publisher for test scenarios
+        let queue_service = crate::queue::api::get_queue_service();
+        let test_publisher = queue_service
+            .create_publisher(scanner_id.clone())
+            .expect("Failed to create test queue publisher");
+
+        Self::new(
+            scanner_id,
+            repository_path,
+            repository,
+            ScanRequires::NONE,
+            test_publisher,
+            None,
+            None,
+        )
     }
 
     /// Determine if a repository path represents a remote repository

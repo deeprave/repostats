@@ -330,8 +330,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_consumer_plugin_trait() {
-        use crate::core::services::get_services;
-
         let mut consumer_plugin = MockConsumerPlugin::new();
 
         // Initialize first
@@ -339,8 +337,7 @@ mod tests {
         assert!(consumer_plugin.base.initialized);
 
         // Test consumer creation and consumption start
-        let services = get_services();
-        let queue_manager = services.queue_manager();
+        let queue_manager = crate::queue::api::get_queue_service();
         let consumer = queue_manager
             .create_consumer("test-plugin".to_string())
             .unwrap();
@@ -356,13 +353,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_consumer_plugin_requires_initialization() {
-        use crate::core::services::get_services;
-
         let mut consumer_plugin = MockConsumerPlugin::new();
 
         // Try to start consuming without initialization
-        let services = get_services();
-        let queue_manager = services.queue_manager();
+        let queue_manager = crate::queue::api::get_queue_service();
         let consumer = queue_manager
             .create_consumer("test-plugin".to_string())
             .unwrap();

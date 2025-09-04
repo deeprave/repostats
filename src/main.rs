@@ -96,8 +96,29 @@ async fn run_scanner_with_coordination(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) -> Result<(), ScanError> {
     // Get services for plugin coordination
-    let services = core::services::get_services();
-    let plugin_manager = services.plugin_manager().await;
+    log::trace!("Getting notification manager for plugin initialization");
+    let mut notification_manager = core::services::get_notification_service().await;
+    log::trace!("Acquired notification manager lock successfully");
+
+    log::trace!("Getting plugin manager for initialization");
+    let mut plugin_manager = core::services::get_plugin_service().await;
+    log::trace!("Acquired plugin manager lock successfully");
+
+    // Initialize event subscription for plugin coordination (prevents race conditions)
+    log::trace!("Initializing plugin event subscription");
+    if let Err(e) = plugin_manager
+        .initialize_event_subscription(&mut notification_manager)
+        .await
+    {
+        log::error!("Failed to initialize plugin event subscription: {}", e);
+        return Err(ScanError::Configuration {
+            message: format!("Plugin coordination setup failed: {}", e),
+        });
+    }
+    log::trace!("Plugin event subscription initialization completed");
+
+    // Drop notification manager lock early to avoid potential conflicts
+    drop(notification_manager);
 
     // Clone scanner_manager for the select block
     let scanner_manager_for_start = scanner_manager.clone();
@@ -146,7 +167,7 @@ async fn run_scanner_with_coordination(
 
 async fn system_start(pid: u32) -> Result<(), NotificationError> {
     // Get notification manager and process ID once
-    let mut notification_manager = core::services::get_services().notification_manager().await;
+    let mut notification_manager = core::services::get_notification_service().await;
 
     // Publish system startup event
     let startup_event = Event::System(SystemEvent::with_message(
@@ -157,7 +178,7 @@ async fn system_start(pid: u32) -> Result<(), NotificationError> {
 }
 
 async fn system_stop(pid: u32) -> Result<(), NotificationError> {
-    let mut notification_manager = core::services::get_services().notification_manager().await;
+    let mut notification_manager = core::services::get_notification_service().await;
     let shutdown_event = Event::System(SystemEvent::with_message(
         SystemEventType::Shutdown,
         format!("System shutting down, pid={pid}"),

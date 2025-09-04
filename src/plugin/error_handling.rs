@@ -19,9 +19,8 @@ use crate::plugin::error::PluginError;
 /// * `operation_context` - Human-readable description of the operation that failed
 ///
 /// # Examples
-/// ```rust
-/// use crate::plugin::error_handling::log_plugin_error_with_context;
-/// use crate::plugin::error::PluginError;
+/// ```rust,no_run
+/// # use repostats::plugin::api::{log_plugin_error_with_context, PluginError};
 ///
 /// // User-actionable error shows specific message
 /// let err = PluginError::Generic { message: "Invalid argument '--foo'".to_string() };

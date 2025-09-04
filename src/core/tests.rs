@@ -1,52 +1,43 @@
-//! Tests for the core services module
+//! Tests for the core services re-exports
 
-use super::services::{get_services, SERVICES};
+use crate::notifications::api::get_notification_service;
+use crate::plugin::api::get_plugin_service;
+use crate::queue::api::get_queue_service;
 
 #[tokio::test]
-async fn test_service_registry_initialization() {
-    let services = get_services();
-
-    // Test that notification manager is accessible
-    let notification_manager = services.notification_manager().await;
-
-    // The notification manager is wrapped in the ServiceRegistry
-    // We need to test that we can access its functionality
+async fn test_service_initialization() {
+    // Test that notification service is accessible
+    let notification_manager = get_notification_service().await;
     let count = notification_manager.subscriber_count();
     // Don't assert specific count since tests may run in parallel and share state
     println!(
-        "Service registry initialization test: current subscriber count: {}",
+        "Service initialization test: current subscriber count: {}",
         count
     );
 }
 
 #[test]
-fn test_lazy_lock_singleton_behavior() {
-    // Test that SERVICES is a singleton
-    let services1 = get_services();
-    let services2 = get_services();
+fn test_queue_service_singleton_behavior() {
+    // Test that queue service returns same instance
+    let queue_service1 = get_queue_service();
+    let queue_service2 = get_queue_service();
 
-    // They should be the same instance (same address)
-    assert!(std::ptr::eq(services1, services2));
-
-    // Direct access should also be the same
-    let services3 = &*SERVICES;
-    assert!(std::ptr::eq(services1, services3));
+    // Should be same Arc instance
+    assert!(std::sync::Arc::ptr_eq(&queue_service1, &queue_service2));
 }
 
 #[tokio::test]
 async fn test_async_notification_manager_access() {
-    let services = get_services();
-
     // Test async access works properly
     {
-        let manager = services.notification_manager().await;
+        let manager = get_notification_service().await;
         let count = manager.subscriber_count();
         println!("Async access works, current subscriber count: {}", count);
     }
 
     // Test multiple async access calls work consistently
-    let async_count1 = services.notification_manager().await.subscriber_count();
-    let async_count2 = services.notification_manager().await.subscriber_count();
+    let async_count1 = get_notification_service().await.subscriber_count();
+    let async_count2 = get_notification_service().await.subscriber_count();
     assert_eq!(async_count1, async_count2);
 }
 
@@ -58,8 +49,7 @@ async fn test_concurrent_service_access() {
     let tasks: Vec<_> = (0..10)
         .map(|i| {
             task::spawn(async move {
-                let services = get_services();
-                let _notification_manager = services.notification_manager().await;
+                let _notification_manager = get_notification_service().await;
 
                 // Each task gets the notification manager
                 // Return the task ID to verify all completed
@@ -80,11 +70,9 @@ async fn test_concurrent_service_access() {
 }
 
 #[tokio::test]
-async fn test_queue_manager_access_via_service_registry() {
-    let services = get_services();
-
-    // Test that queue manager is accessible via ServiceRegistry
-    let queue_manager = services.queue_manager();
+async fn test_queue_manager_access() {
+    // Test that queue manager is accessible
+    let queue_manager = get_queue_service();
 
     // Test that we can create publishers and consumers through the global service
     let publisher = queue_manager
@@ -105,11 +93,9 @@ async fn test_queue_manager_access_via_service_registry() {
 }
 
 #[tokio::test]
-async fn test_plugin_manager_access_via_service_registry() {
-    let services = get_services();
-
-    // Test that plugin manager is accessible via ServiceRegistry
-    let plugin_manager = services.plugin_manager().await;
+async fn test_plugin_manager_access() {
+    // Test that plugin manager is accessible
+    let plugin_manager = get_plugin_service().await;
 
     // Test that plugin manager has the correct API version
     assert_eq!(

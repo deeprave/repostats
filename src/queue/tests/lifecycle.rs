@@ -2,15 +2,13 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::core::services::get_services;
     use crate::notifications::api::{Event, EventFilter, QueueEvent, QueueEventType};
     use crate::queue::api::QueueManager;
     use tokio::time::{timeout, Duration};
 
     #[tokio::test]
     async fn test_notification_system_basic_functionality() {
-        let services = get_services();
-        let mut notification_manager = services.notification_manager().await;
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
         // Subscribe to queue events
         let mut subscriber = notification_manager
@@ -54,11 +52,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_started_event_published_on_creation() {
-        let services = get_services();
-
         // Subscribe to queue events BEFORE creating the manager
         let mut subscriber = {
-            let mut notification_manager = services.notification_manager().await;
+            let mut notification_manager =
+                crate::notifications::api::get_notification_service().await;
             notification_manager
                 .subscribe(
                     "test-queue-lifecycle".to_string(),

@@ -40,6 +40,7 @@ use std::sync::Weak;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug, Clone)]
 pub struct QueuePublisher {
     producer_id: String,
     manager: Weak<QueueManager>,

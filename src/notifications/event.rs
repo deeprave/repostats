@@ -33,6 +33,7 @@ pub enum PluginEventType {
     Completed,
     Error,
     Unregistered,
+    KeepAlive,
 }
 
 #[derive(Clone, Debug, PartialEq)]

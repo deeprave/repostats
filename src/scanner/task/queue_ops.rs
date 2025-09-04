@@ -2,7 +2,6 @@
 //!
 //! Queue-related operations including publishers and message publishing.
 
-use crate::core::services::get_services;
 use crate::queue::api::{Message, QueuePublisher};
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::ScanMessage;
@@ -11,20 +10,9 @@ use serde_json;
 use super::core::ScannerTask;
 
 impl ScannerTask {
-    /// Create a queue publisher for this scanner task
-    pub async fn create_queue_publisher(&self) -> ScanResult<QueuePublisher> {
-        // Get the queue manager from services
-        let services = get_services();
-        let queue_manager = services.queue_manager();
-
-        // Create a publisher using the scanner ID as the producer ID
-        let publisher = queue_manager
-            .create_publisher(self.scanner_id().to_string())
-            .map_err(|e| ScanError::Configuration {
-                message: format!("Failed to create queue publisher: {}", e),
-            })?;
-
-        Ok(publisher)
+    /// Get the injected queue publisher for this scanner task
+    pub fn get_queue_publisher(&self) -> &QueuePublisher {
+        &self.queue_publisher
     }
 
     /// Create a queue message from a scan message (reusable helper)
@@ -49,7 +37,7 @@ impl ScannerTask {
 
     /// Publish a single scan message to the queue
     pub async fn publish_message(&self, message: ScanMessage) -> ScanResult<()> {
-        let publisher = self.create_queue_publisher().await?;
+        let publisher = self.get_queue_publisher();
         let queue_message = self.create_queue_message(&message)?;
 
         publisher
@@ -67,7 +55,7 @@ impl ScannerTask {
             return Ok(());
         }
 
-        let publisher = self.create_queue_publisher().await?;
+        let publisher = self.get_queue_publisher();
         let scanner_id = self.scanner_id().to_string();
 
         // Process in smaller chunks with async yields to prevent memory buildup
