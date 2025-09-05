@@ -92,14 +92,14 @@ pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result
     let mut table = Table::new(table_data);
     table
         .with(Style::empty())
-        .with(Modify::new(Columns::single(0)).with(Width::wrap(PLUGIN_COLUMN_WIDTH)))
-        .with(Modify::new(Columns::single(0)).with(Alignment::left()));
+        .with(Modify::new(Columns::new(0..1)).with(Width::wrap(PLUGIN_COLUMN_WIDTH)))
+        .with(Modify::new(Columns::new(0..1)).with(Alignment::left()));
 
     // Apply colors if requested
     if use_color {
         table
-            .with(Modify::new(Rows::single(0)).with(Color::FG_CYAN))
-            .with(Modify::new(Columns::single(0).not(Rows::single(0))).with(Color::FG_BLUE));
+            .with(Modify::new(Rows::new(0..1)).with(Color::FG_CYAN))
+            .with(Modify::new(Columns::new(0..1).not(Rows::new(0..1))).with(Color::FG_BLUE));
     }
 
     // Output with custom separator

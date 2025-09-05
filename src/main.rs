@@ -93,6 +93,16 @@ async fn main() {
 
             log::info!("{command_name}: ✅ Repository Statistics Tool starting");
 
+            // Spawn spinner task if appropriate
+            if app::spinner::should_show_spinner() {
+                let spinner_shutdown = shutdown_rx.resubscribe();
+                tokio::spawn(async move {
+                    if let Err(e) = app::spinner::run_spinner(spinner_shutdown).await {
+                        log::debug!("Spinner task failed: {}", e);
+                    }
+                });
+            }
+
             // Handle scanner execution if configured
             let final_result = if let Some(scanner_manager) = scanner_manager {
                 run_scanner_with_coordination(

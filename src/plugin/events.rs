@@ -20,20 +20,7 @@ use crate::plugin::error::{PluginError, PluginResult};
 /// # Returns
 /// * `PluginResult<()>` - Success or error result
 ///
-/// # Example
-/// ```rust,no_run
-/// # use repostats::plugin::api::publish_plugin_event;
-/// # use repostats::notifications::api::PluginEventType;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Publish a completion event
-/// publish_plugin_event(
-///     PluginEventType::Completed,
-///     "dump",
-///     "Plugin processing completed successfully"
-/// ).await?;
-/// # Ok(())
-/// # }
-/// ```
+/// (Usage examples removed – internal helper, not part of public API surface.)
 pub async fn publish_plugin_event(
     event_type: PluginEventType,
     plugin_name: &str,
@@ -70,14 +57,7 @@ pub async fn publish_plugin_event(
 /// * `plugin_name` - The name of the plugin that completed
 /// * `message` - Optional message describing the completion
 ///
-/// # Example
-/// ```rust,no_run
-/// # use repostats::plugin::api::publish_plugin_completion_event;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// publish_plugin_completion_event("dump", "All scanners processed").await?;
-/// # Ok(())
-/// # }
-/// ```
+/// (Usage example removed – internal helper.)
 pub async fn publish_plugin_completion_event(plugin_name: &str, message: &str) -> PluginResult<()> {
     publish_plugin_event(PluginEventType::Completed, plugin_name, message).await
 }
@@ -90,14 +70,7 @@ pub async fn publish_plugin_completion_event(plugin_name: &str, message: &str) -
 /// * `plugin_name` - The name of the plugin that encountered an error
 /// * `error_message` - Description of the error
 ///
-/// # Example
-/// ```rust,no_run
-/// # use repostats::plugin::api::publish_plugin_error_event;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// publish_plugin_error_event("dump", "Failed to process scanner output").await?;
-/// # Ok(())
-/// # }
-/// ```
+/// (Usage example removed – internal helper.)
 pub async fn publish_plugin_error_event(
     plugin_name: &str,
     error_message: &str,
@@ -114,14 +87,7 @@ pub async fn publish_plugin_error_event(
 /// * `plugin_name` - The name of the plugin sending the keep-alive signal
 /// * `status_message` - Current status or progress message
 ///
-/// # Example
-/// ```rust,no_run
-/// # use repostats::plugin::api::publish_plugin_keepalive_event;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// publish_plugin_keepalive_event("dump", "Processed 1500 messages").await?;
-/// # Ok(())
-/// # }
-/// ```
+/// (Usage example removed – internal helper.)
 pub async fn publish_plugin_keepalive_event(
     plugin_name: &str,
     status_message: &str,
