@@ -109,8 +109,8 @@ impl QueueManager {
                 Ok(())
             }
             Ok(Err(e)) => {
-                log::debug!(
-                    "Failed to publish queue lifecycle event ({}) for {} - non-fatal: {:?}",
+                log::error!(
+                    "Failed to publish queue lifecycle event ({}) for {} - notification system may be degraded: {:?}",
                     event_type_str,
                     context,
                     e
@@ -158,7 +158,14 @@ impl QueueManager {
         let manager = Arc::new(Self::new());
 
         // Publish Started event with timeout protection
-        let _ = Self::publish_lifecycle_event(QueueEventType::Started, "queue creation").await;
+        if let Err(e) =
+            Self::publish_lifecycle_event(QueueEventType::Started, "queue creation").await
+        {
+            log::error!(
+                "Queue creation notification failed - monitoring may be impacted: {:?}",
+                e
+            );
+        }
 
         manager
     }
@@ -419,6 +426,13 @@ impl QueueManager {
     /// ```
     pub async fn shutdown(&self) {
         // Publish Shutdown event with timeout protection
-        let _ = Self::publish_lifecycle_event(QueueEventType::Shutdown, "queue shutdown").await;
+        if let Err(e) =
+            Self::publish_lifecycle_event(QueueEventType::Shutdown, "queue shutdown").await
+        {
+            log::error!(
+                "Queue shutdown notification failed - monitoring may miss shutdown event: {:?}",
+                e
+            );
+        }
     }
 }
