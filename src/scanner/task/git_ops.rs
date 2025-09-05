@@ -590,6 +590,11 @@ impl ScannerTask {
         let mut file_change_messages = Vec::new();
 
         for diff_file in diff_files {
+            // Create full file path for checkout_path (not just base directory)
+            let file_checkout_path = checkout_path
+                .as_ref()
+                .map(|base_dir| base_dir.join(&diff_file.new_path));
+
             let file_change_data = FileChangeData {
                 change_type: diff_file.change_type,
                 old_path: diff_file.old_path,
@@ -597,7 +602,7 @@ impl ScannerTask {
                 insertions: diff_file.insertions,
                 deletions: diff_file.deletions,
                 is_binary: diff_file.is_binary,
-                checkout_path: checkout_path.clone(),
+                checkout_path: file_checkout_path,
             };
 
             file_change_messages.push(ScanMessage::FileChange {
@@ -1234,19 +1239,261 @@ impl ScannerTask {
                 &commit_info.hash,
                 self.scanner_id(),
             );
-            manager
-                .create_checkout(&vars, Some(&commit_info.hash))
+            // Step 1: Prepare directory (CheckoutManager responsibility)
+            let target_dir =
+                manager
+                    .prepare_checkout_directory(&vars)
+                    .map_err(|e| ScanError::Repository {
+                        message: format!(
+                            "Failed to prepare checkout directory for commit {}: {}",
+                            commit_info.hash, e
+                        ),
+                    })?;
+
+            // Step 2: Extract Git files (ScannerTask responsibility)
+            self.extract_commit_files_to_directory(&commit_info.hash, &target_dir, None)
+                .await
                 .map_err(|e| ScanError::Repository {
                     message: format!(
-                        "Failed to create checkout for commit {}: {}",
+                        "Failed to extract files for commit {}: {}",
                         commit_info.hash, e
                     ),
-                })
+                })?;
+
+            Ok(target_dir)
         } else {
             Err(ScanError::Configuration {
                 message: "No checkout manager available for file content operations".to_string(),
             })
         }
+    }
+
+    /// Extract commit files to a target directory
+    /// This replaces the Git operations previously in CheckoutManager
+    pub async fn extract_commit_files_to_directory(
+        &self,
+        commit_sha: &str,
+        target_dir: &std::path::Path,
+        progress_callback: Option<&dyn Fn(usize, usize)>,
+    ) -> ScanResult<usize> {
+        log::debug!(
+            "extract_commit_files_to_directory: Extracting files from revision '{}' to '{}'",
+            commit_sha,
+            target_dir.display()
+        );
+
+        // Parse the revision to get commit SHA
+        let parsed_ref =
+            self.repository()
+                .rev_parse(commit_sha)
+                .map_err(|e| ScanError::Repository {
+                    message: format!("Failed to resolve revision '{}': {}", commit_sha, e),
+                })?;
+
+        let commit_id = parsed_ref.single().ok_or_else(|| ScanError::Repository {
+            message: format!(
+                "Revision '{}' could not be resolved to a single object",
+                commit_sha
+            ),
+        })?;
+
+        // Get the commit object
+        let commit =
+            self.repository()
+                .find_commit(commit_id)
+                .map_err(|e| ScanError::Repository {
+                    message: format!("Failed to find commit '{}': {}", commit_id, e),
+                })?;
+
+        // Get the tree from the commit
+        let tree = commit.tree().map_err(|e| ScanError::Repository {
+            message: format!("Failed to get tree for commit '{}': {}", commit_id, e),
+        })?;
+
+        // Count total entries for progress reporting
+        let total_entries = self.count_tree_entries(&tree)?;
+        let mut extracted_count = 0;
+
+        // Extract all files recursively
+        self.extract_tree_recursive(
+            &tree,
+            target_dir,
+            "",
+            &mut extracted_count,
+            total_entries,
+            progress_callback,
+        )?;
+
+        Ok(extracted_count)
+    }
+
+    /// Count total entries in a Git tree recursively
+    fn count_tree_entries(&self, tree: &gix::Tree) -> ScanResult<usize> {
+        let mut count = 0;
+        for entry_result in tree.iter() {
+            let entry = entry_result.map_err(|e| ScanError::Repository {
+                message: format!("Failed to read tree entry: {}", e),
+            })?;
+
+            if entry.mode().is_tree() {
+                // Recursively count subtree entries
+                let subtree = entry
+                    .object()
+                    .map_err(|e| ScanError::Repository {
+                        message: format!("Failed to get subtree: {}", e),
+                    })?
+                    .try_into_tree()
+                    .map_err(|_| ScanError::Repository {
+                        message: "Expected tree object".to_string(),
+                    })?;
+                count += self.count_tree_entries(&subtree)?;
+            } else {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    /// Recursively extract tree contents to directory
+    fn extract_tree_recursive(
+        &self,
+        tree: &gix::Tree,
+        base_dir: &std::path::Path,
+        relative_path: &str,
+        extracted_count: &mut usize,
+        total_entries: usize,
+        progress_callback: Option<&dyn Fn(usize, usize)>,
+    ) -> ScanResult<()> {
+        for entry_result in tree.iter() {
+            let entry = entry_result.map_err(|e| ScanError::Repository {
+                message: format!("Failed to read tree entry: {}", e),
+            })?;
+
+            let entry_name =
+                std::str::from_utf8(entry.filename()).map_err(|e| ScanError::Repository {
+                    message: format!("Invalid UTF-8 in filename: {}", e),
+                })?;
+
+            let entry_path = if relative_path.is_empty() {
+                entry_name.to_string()
+            } else {
+                format!("{}/{}", relative_path, entry_name)
+            };
+
+            let target_path = base_dir.join(&entry_path);
+
+            if entry.mode().is_tree() {
+                // Create directory and recurse
+                std::fs::create_dir_all(&target_path).map_err(|e| ScanError::Repository {
+                    message: format!(
+                        "Failed to create directory '{}': {}",
+                        target_path.display(),
+                        e
+                    ),
+                })?;
+
+                let subtree = entry
+                    .object()
+                    .map_err(|e| ScanError::Repository {
+                        message: format!("Failed to get subtree: {}", e),
+                    })?
+                    .try_into_tree()
+                    .map_err(|_| ScanError::Repository {
+                        message: "Expected tree object".to_string(),
+                    })?;
+
+                self.extract_tree_recursive(
+                    &subtree,
+                    base_dir,
+                    &entry_path,
+                    extracted_count,
+                    total_entries,
+                    progress_callback,
+                )?;
+            } else {
+                // Extract file
+                let blob = entry
+                    .object()
+                    .map_err(|e| ScanError::Repository {
+                        message: format!("Failed to get blob: {}", e),
+                    })?
+                    .try_into_blob()
+                    .map_err(|_| ScanError::Repository {
+                        message: "Expected blob object".to_string(),
+                    })?;
+
+                // Create parent directory if needed
+                if let Some(parent) = target_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| ScanError::Repository {
+                        message: format!(
+                            "Failed to create parent directory '{}': {}",
+                            parent.display(),
+                            e
+                        ),
+                    })?;
+                }
+
+                // Write file content
+                std::fs::write(&target_path, &blob.data).map_err(|e| ScanError::Repository {
+                    message: format!("Failed to write file '{}': {}", target_path.display(), e),
+                })?;
+
+                *extracted_count += 1;
+
+                // Report progress if callback provided
+                if let Some(callback) = progress_callback {
+                    callback(*extracted_count, total_entries);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve a revision (branch, tag, or commit SHA) to a commit SHA
+    /// Moved from CheckoutManager to maintain SRP - Git operations belong in ScannerTask
+    pub async fn resolve_revision(&self, revision: Option<&str>) -> ScanResult<String> {
+        let revision_str = revision.unwrap_or("HEAD");
+
+        log::debug!(
+            "resolve_revision: Resolving revision '{}' to commit SHA",
+            revision_str
+        );
+
+        // Use gix to resolve the revision to a commit object
+        let parsed_ref =
+            self.repository()
+                .rev_parse(revision_str)
+                .map_err(|e| ScanError::Repository {
+                    message: format!("Failed to resolve revision '{}': {}", revision_str, e),
+                })?;
+
+        let commit_id = parsed_ref.single().ok_or_else(|| ScanError::Repository {
+            message: format!(
+                "Revision '{}' could not be resolved to a single object",
+                revision_str
+            ),
+        })?;
+
+        // Verify the resolved object is actually a commit
+        let commit =
+            self.repository()
+                .find_commit(commit_id)
+                .map_err(|e| ScanError::Repository {
+                    message: format!(
+                        "Revision '{}' (SHA: {}) is not a valid commit: {}",
+                        revision_str, commit_id, e
+                    ),
+                })?;
+
+        let commit_sha = commit.id().to_string();
+
+        log::debug!(
+            "resolve_revision: Successfully resolved '{}' to commit SHA '{}'",
+            revision_str,
+            commit_sha
+        );
+
+        Ok(commit_sha)
     }
 }
 

@@ -372,6 +372,10 @@ impl AsyncNotificationManager {
         Ok(())
     }
 
+    pub fn clear_subscribers(&mut self) {
+        self.subscribers.clear();
+    }
+
     pub async fn publish(&mut self, event: Event) -> Result<(), NotificationError> {
         let mut failed_subscribers = Vec::new();
         let mut full_channel_subscribers = Vec::new();

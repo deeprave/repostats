@@ -185,7 +185,7 @@ pub struct FileChangeData {
     pub insertions: usize,
     pub deletions: usize,
     pub is_binary: bool,
-    /// Path to checkout directory where file content is available (if FILE_CONTENT requirement is active)
+    /// Full path to the specific checked-out file (if FILE_CONTENT requirement is active)
     pub checkout_path: Option<PathBuf>,
 }
 
