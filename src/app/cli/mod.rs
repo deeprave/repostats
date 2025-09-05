@@ -4,8 +4,14 @@ use std::path::PathBuf;
 
 pub mod args;
 pub mod command_segmenter;
+pub mod config;
 pub mod date_parser;
 pub mod display;
+pub mod parsing;
+pub mod validation;
+
+#[cfg(test)]
+pub mod tests;
 
 // Re-export commonly used types
 pub use args::CheckoutSettings;

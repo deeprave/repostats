@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 /// Individual scanner task for a specific repository
 #[derive(Debug)]
 pub struct ScannerTask {
-    /// Unique scanner ID (scan-<12_char_sha256>)
-    /// Uses first 12 characters of SHA256 hash for readability while maintaining
+    /// Unique scanner ID (scan-<16_char_sha256>)
+    /// Uses first 16 characters of SHA256 hash for strong collision resistance while maintaining
     /// sufficient uniqueness for typical repository scanning workflows.
-    /// Collision probability: ~1 in 16^12 (281 trillion) - acceptable for expected usage scale.
+    /// Collision probability: ~1 in 16^16 (2^64) - extremely low for practical use cases.
     scanner_id: String,
     /// Repository path (local or remote URL - normalized)
     repository_path: String,
@@ -193,6 +193,11 @@ impl ScannerTask {
         &self,
     ) -> Option<&Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>> {
         self.checkout_manager.as_ref()
+    }
+
+    /// Get reference to the query parameters if available
+    pub fn query_params(&self) -> Option<&QueryParams> {
+        self.query_params.as_ref()
     }
 }
 

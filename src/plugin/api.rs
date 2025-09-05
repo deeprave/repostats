@@ -11,14 +11,11 @@ use tokio::sync::Mutex;
 // Core plugin management
 pub use crate::plugin::manager::PluginManager;
 
-// Error handling
-// (unused imports removed for cleaner API)
-
-// Plugin metadata and information
-// (unused imports removed for cleaner API)
-
-// Plugin event utilities
-// (unused imports removed for cleaner API)
+// Note: Direct plugin utilities have been moved to their respective modules
+// Use crate::plugin::error::PluginError for error handling
+// Use crate::plugin::events:: for plugin event publishing
+// Use crate::plugin::types::PluginInfo for plugin metadata
+// See plugin/manager.rs for core management functionality
 
 /// Global plugin service instance
 static PLUGIN_SERVICE: LazyLock<Arc<Mutex<PluginManager>>> = LazyLock::new(|| {

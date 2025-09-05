@@ -129,7 +129,7 @@ mod tests {
         }
 
         // Verify system statistics
-        let memory_stats = manager.memory_stats();
+        let memory_stats = manager.memory_stats().unwrap();
         // Don't assert on memory since garbage collection may have occurred
 
         // Note: consumers may have been dropped by now, affecting lag stats
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(consumed, 5, "Should consume all lifecycle messages");
 
         // Verify the queue manager is functional after event integration
-        let stats = manager.memory_stats();
+        let stats = manager.memory_stats().unwrap();
         assert!(stats.total_bytes > 0); // Should have some memory usage
 
         let active_consumers = manager.active_consumer_count().unwrap();

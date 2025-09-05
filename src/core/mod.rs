@@ -9,6 +9,7 @@ pub mod retry;
 pub mod services;
 pub mod shutdown;
 pub mod strings;
+pub mod sync;
 pub mod time;
 pub mod validation;
 

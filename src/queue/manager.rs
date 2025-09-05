@@ -4,9 +4,10 @@
 //! It manages a single global queue that all producers publish to and all consumers
 //! read from, with each consumer maintaining its own independent position.
 
+use crate::core::sync::{handle_rwlock_read, handle_rwlock_write};
 use crate::notifications::api::{Event, QueueEvent, QueueEventType};
 use crate::queue::consumer::QueueConsumer;
-use crate::queue::error::QueueResult;
+use crate::queue::error::{QueueError, QueueResult};
 use crate::queue::internal::MultiConsumerQueue;
 use crate::queue::publisher::QueuePublisher;
 use crate::queue::types::{LagStats, MemoryStats, StaleConsumerInfo};
@@ -42,7 +43,7 @@ use std::time::SystemTime;
 /// manager.set_memory_threshold_bytes(1_000_000)?;
 ///
 /// // Monitor memory usage
-/// let stats = manager.memory_stats();
+/// let stats = manager.memory_stats()?;
 /// println!("Messages: {}, Memory: {} bytes",
 ///          stats.total_messages, stats.total_bytes);
 /// # Ok(())
@@ -136,7 +137,7 @@ impl QueueManager {
     }
 
     /// Get total number of messages in the global queue
-    pub fn total_message_count(&self) -> usize {
+    pub fn total_message_count(&self) -> QueueResult<usize> {
         self.global_queue.size()
     }
 
@@ -148,17 +149,24 @@ impl QueueManager {
 
     /// Get memory usage in bytes for the global queue
     pub fn memory_usage_bytes(&self) -> usize {
-        self.global_queue.memory_stats().total_bytes
+        self.global_queue
+            .memory_stats()
+            .map(|stats| stats.total_bytes)
+            .unwrap_or(0)
     }
 
     /// Get detailed memory statistics for the global queue
-    pub fn memory_stats(&self) -> MemoryStats {
+    pub fn memory_stats(&self) -> QueueResult<MemoryStats> {
         self.global_queue.memory_stats()
     }
 
     /// Set memory threshold for automatic garbage collection
     pub fn set_memory_threshold_bytes(&self, threshold: usize) -> QueueResult<()> {
-        let mut threshold_lock = self.memory_threshold_bytes.write().unwrap();
+        let mut threshold_lock = handle_rwlock_write(self.memory_threshold_bytes.write(), |msg| {
+            QueueError::OperationFailed {
+                message: format!("Failed to acquire memory threshold lock: {}", msg),
+            }
+        })?;
         *threshold_lock = Some(threshold);
         Ok(())
     }
@@ -171,7 +179,11 @@ impl QueueManager {
     /// Check if memory pressure exists and trigger automatic garbage collection if needed
     pub fn check_memory_pressure(&self) -> QueueResult<bool> {
         let threshold = {
-            let threshold_lock = self.memory_threshold_bytes.read().unwrap();
+            let threshold_lock = handle_rwlock_read(self.memory_threshold_bytes.read(), |msg| {
+                QueueError::OperationFailed {
+                    message: format!("Failed to acquire memory threshold lock: {}", msg),
+                }
+            })?;
             match *threshold_lock {
                 Some(threshold) => threshold,
                 None => return Ok(false), // No threshold set, no pressure
@@ -191,7 +203,7 @@ impl QueueManager {
     /// Get lag for a specific consumer (messages behind current head)
     pub fn get_consumer_lag(&self, consumer: &QueueConsumer) -> QueueResult<usize> {
         let consumer_id = consumer.internal_consumer_id();
-        let current_head = self.global_queue.head_sequence();
+        let current_head = self.global_queue.head_sequence()?;
 
         match self.global_queue.consumer_position(consumer_id) {
             Some(consumer_position) => {
@@ -213,8 +225,8 @@ impl QueueManager {
 
     /// Get lag statistics for all registered consumers
     pub fn get_lag_statistics(&self) -> QueueResult<LagStats> {
-        let consumer_ids = self.global_queue.consumer_ids();
-        let current_head = self.global_queue.head_sequence();
+        let consumer_ids = self.global_queue.consumer_ids()?;
+        let current_head = self.global_queue.head_sequence()?;
 
         if consumer_ids.is_empty() {
             return Ok(LagStats {
@@ -261,7 +273,7 @@ impl QueueManager {
 
     /// Get the number of active consumers
     pub fn active_consumer_count(&self) -> QueueResult<usize> {
-        let consumer_ids = self.global_queue.consumer_ids();
+        let consumer_ids = self.global_queue.consumer_ids()?;
         Ok(consumer_ids.len())
     }
 
@@ -270,15 +282,15 @@ impl QueueManager {
         &self,
         _stale_threshold_seconds: u64,
     ) -> QueueResult<Vec<StaleConsumerInfo>> {
-        let consumer_ids = self.global_queue.consumer_ids();
-        let current_head = self.global_queue.head_sequence();
+        let consumer_ids = self.global_queue.consumer_ids()?;
+        let current_head = self.global_queue.head_sequence()?;
         let now = SystemTime::now();
 
         let mut stale_consumers = Vec::new();
 
         for consumer_id in consumer_ids {
             let consumer_position = self.global_queue.consumer_position(consumer_id);
-            let last_read_time = self.global_queue.consumer_last_read_time(consumer_id);
+            let last_read_time = self.global_queue.consumer_last_read_time(consumer_id)?;
 
             if let (Some(position), Some(last_time)) = (consumer_position, last_read_time) {
                 let lag = if current_head >= position {

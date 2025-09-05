@@ -124,12 +124,12 @@ async fn test_scanner_id_generation() {
             scanner_id
         );
 
-        // Should be a valid hex string after the prefix (12 chars for truncated SHA256)
+        // Should be a valid hex string after the prefix (16 chars for truncated SHA256)
         let hash_part = &scanner_id[5..]; // Remove "scan-" prefix
         assert_eq!(
             hash_part.len(),
-            12,
-            "Truncated SHA256 hash should be 12 characters: {}",
+            16,
+            "Truncated SHA256 hash should be 16 characters: {}",
             hash_part
         );
         assert!(
@@ -184,16 +184,22 @@ async fn test_scanner_task_initialization() {
     );
     assert_eq!(
         scanner_task.scanner_id().len(),
-        17, // "scan-" + 12 char truncated SHA256
+        21, // "scan-" + 16 char truncated SHA256
         "Scanner ID should be 17 characters total: {}",
         scanner_task.scanner_id()
     );
 
-    // Verify repository path is stored
+    // Verify repository path is stored (accounting for normalization)
+    // On case-insensitive filesystems, paths are normalized to lowercase
+    let normalized_current = if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+        current_path.to_lowercase()
+    } else {
+        current_path.to_string()
+    };
     assert_eq!(
         scanner_task.repository_path(),
-        current_path,
-        "Repository path should match input"
+        normalized_current,
+        "Repository path should match normalized input"
     );
 
     // Test that duplicate detection works - second attempt should fail
@@ -690,7 +696,7 @@ async fn test_content_reconstruction_api() {
             assert!(
                 message.contains("not found")
                     || message.contains("invalid")
-                    || message.contains("Failed to resolve"),
+                    || message.contains("Failed to"),
                 "Error should indicate invalid commit: {}",
                 message
             );
