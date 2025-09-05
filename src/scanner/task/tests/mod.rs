@@ -6,6 +6,7 @@
 pub mod author_filtering;
 pub mod commit_traversal;
 pub mod diff_analysis;
+pub mod file_extraction;
 pub mod git_reference_resolution;
 pub mod helpers;
 pub mod requirements;

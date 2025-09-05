@@ -13,7 +13,8 @@ use crate::queue::publisher::QueuePublisher;
 use crate::queue::types::{LagStats, MemoryStats, StaleConsumerInfo};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
+use tokio::time::timeout;
 
 /// Central queue manager providing producer/consumer coordination
 ///
@@ -58,22 +59,87 @@ pub struct QueueManager {
 }
 
 impl QueueManager {
+    const GLOBAL_QUEUE_ID: &'static str = "global";
+    const EVENT_PUBLISH_TIMEOUT: Duration = Duration::from_millis(100);
+
     pub fn new() -> Self {
         Self {
             next_consumer_id: AtomicU64::new(0),
             global_queue: Arc::new(MultiConsumerQueue::new(
-                "global".to_string(), // Single global queue name
-                10000,                // Default queue size
+                Self::GLOBAL_QUEUE_ID.to_string(), // Single global queue name
+                10000,                             // Default queue size
             )),
             memory_threshold_bytes: RwLock::new(None), // No automatic garbage collection by default
         }
     }
 
-    /// Create a QueueManager and publish Started event
+    /// Publish a queue lifecycle event with timeout protection
+    ///
+    /// This method publishes lifecycle events with a timeout to prevent deadlocks.
+    /// Event publishing failures are logged but do not prevent queue operations.
+    async fn publish_lifecycle_event(
+        event_type: QueueEventType,
+        context: &str,
+    ) -> Result<(), crate::notifications::error::NotificationError> {
+        let event_type_str = match event_type {
+            QueueEventType::Started => "Started",
+            QueueEventType::Shutdown => "Shutdown",
+            _ => "Other",
+        };
+
+        let mut notification_manager = crate::notifications::api::get_notification_service().await;
+        let event = Event::Queue(QueueEvent::new(
+            event_type,
+            Self::GLOBAL_QUEUE_ID.to_string(),
+        ));
+
+        let publish_result = timeout(
+            Self::EVENT_PUBLISH_TIMEOUT,
+            notification_manager.publish(event),
+        )
+        .await;
+
+        match publish_result {
+            Ok(Ok(_)) => {
+                log::trace!(
+                    "Queue lifecycle event published successfully: {} for {}",
+                    event_type_str,
+                    context
+                );
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                log::debug!(
+                    "Failed to publish queue lifecycle event ({}) for {} - non-fatal: {:?}",
+                    event_type_str,
+                    context,
+                    e
+                );
+                Err(e)
+            }
+            Err(_) => {
+                log::warn!(
+                    "Timeout publishing queue lifecycle event ({}) for {} - continuing operation",
+                    event_type_str,
+                    context
+                );
+                Err(
+                    crate::notifications::error::NotificationError::ChannelClosed(
+                        "Event publish timeout".to_string(),
+                    ),
+                )
+            }
+        }
+    }
+
+    /// Create a QueueManager and publish Started lifecycle event
     ///
     /// This method creates a new QueueManager instance and publishes
     /// a Started lifecycle event to the notification system, allowing
     /// other components to react to queue system initialization.
+    ///
+    /// Event publishing is protected by timeout and failures are logged
+    /// but do not prevent queue system startup.
     ///
     /// # Returns
     ///
@@ -91,16 +157,8 @@ impl QueueManager {
     pub async fn create() -> Arc<Self> {
         let manager = Arc::new(Self::new());
 
-        // Publish Started event
-        let mut notification_manager = crate::notifications::api::get_notification_service().await;
-        let started_event = Event::Queue(QueueEvent::new(
-            QueueEventType::Started,
-            "global".to_string(),
-        ));
-        match notification_manager.publish(started_event).await {
-            Ok(_) => println!("✓ Started event published successfully"),
-            Err(e) => println!("✗ Failed to publish Started event: {:?}", e),
-        }
+        // Publish Started event with timeout protection
+        let _ = Self::publish_lifecycle_event(QueueEventType::Started, "queue creation").await;
 
         manager
     }
@@ -338,5 +396,29 @@ impl QueueManager {
         }
 
         Ok(cleanup_count)
+    }
+
+    /// Shutdown the QueueManager and publish Shutdown lifecycle event
+    ///
+    /// This method performs a graceful shutdown of the queue manager,
+    /// publishing a Shutdown lifecycle event to notify other components
+    /// that the queue system is shutting down.
+    ///
+    /// Event publishing is protected by timeout and failures are logged
+    /// but do not prevent queue system shutdown.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use repostats::queue::api::QueueManager;
+    /// # async fn example() {
+    /// let manager = QueueManager::create().await;
+    /// // Use the queue manager...
+    /// manager.shutdown().await;
+    /// # }
+    /// ```
+    pub async fn shutdown(&self) {
+        // Publish Shutdown event with timeout protection
+        let _ = Self::publish_lifecycle_event(QueueEventType::Shutdown, "queue shutdown").await;
     }
 }

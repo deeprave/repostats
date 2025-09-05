@@ -487,11 +487,15 @@ impl ScannerManager {
             // Create the checkout manager using existing logic
             let checkout_manager = if let Some(ref settings) = checkout_settings {
                 CheckoutManager::with_settings(
-                    &normalised_path,
-                    settings.checkout_template.clone(),
+                    settings.checkout_template.clone().unwrap_or_else(|| {
+                        format!(
+                            "{}/repostats-checkout-{}/{{commit-id}}",
+                            std::env::temp_dir().display(),
+                            &scanner_id
+                        )
+                    }),
                     settings.keep_checkouts,
                     settings.force_overwrite,
-                    settings.default_revision.clone(),
                 )
             } else {
                 // Create default checkout manager for FILE_CONTENT requirement
@@ -501,11 +505,15 @@ impl ScannerManager {
                     &scanner_id
                 ));
                 CheckoutManager::with_settings(
-                    &normalised_path,
-                    template,
+                    template.unwrap_or_else(|| {
+                        format!(
+                            "{}/repostats-checkout-{}/{{commit-id}}",
+                            std::env::temp_dir().display(),
+                            &scanner_id
+                        )
+                    }),
                     false, // don't keep files by default
                     true,  // force overwrite
-                    None,  // no default revision
                 )
             };
 
