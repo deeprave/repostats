@@ -44,7 +44,7 @@ mod tests {
         let manager = Arc::new(QueueManager::new());
 
         // Get initial stats
-        let initial_stats = manager.memory_stats();
+        let initial_stats = manager.memory_stats().unwrap();
         assert_eq!(initial_stats.total_messages, 0);
         assert_eq!(initial_stats.total_bytes, 0);
 
@@ -65,12 +65,12 @@ mod tests {
         );
 
         publisher.publish(msg1).unwrap();
-        let stats_after_one = manager.memory_stats();
+        let stats_after_one = manager.memory_stats().unwrap();
         assert_eq!(stats_after_one.total_messages, 1);
         assert!(stats_after_one.total_bytes > 0);
 
         publisher.publish(msg2).unwrap();
-        let stats_after_two = manager.memory_stats();
+        let stats_after_two = manager.memory_stats().unwrap();
         assert_eq!(stats_after_two.total_messages, 2);
         assert!(stats_after_two.total_bytes > stats_after_one.total_bytes);
     }
@@ -108,7 +108,7 @@ mod tests {
         publisher.publish(msg3).unwrap();
 
         // Initial state: 3 messages
-        assert_eq!(manager.total_message_count(), 3);
+        assert_eq!(manager.total_message_count().unwrap(), 3);
 
         // Consumer 1 reads first two messages
         consumer1.read().unwrap();
@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(collected, 1); // One message collected
 
         // Should have 2 messages remaining (message 2 not read by consumer2, message 3 not read by either)
-        assert_eq!(manager.total_message_count(), 2);
+        assert_eq!(manager.total_message_count().unwrap(), 2);
 
         // Consumer 2 reads message 2
         consumer2.read().unwrap();
@@ -130,7 +130,7 @@ mod tests {
         // Run garbage collection again - should remove message 2
         let collected = manager.collect_garbage().unwrap();
         assert_eq!(collected, 1);
-        assert_eq!(manager.total_message_count(), 1);
+        assert_eq!(manager.total_message_count().unwrap(), 1);
     }
 
     #[test]
@@ -156,12 +156,12 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(manager.total_message_count(), 2);
+        assert_eq!(manager.total_message_count().unwrap(), 2);
 
         // Garbage collection with no consumers should remove nothing
         let collected = manager.collect_garbage().unwrap();
         assert_eq!(collected, 0);
-        assert_eq!(manager.total_message_count(), 2);
+        assert_eq!(manager.total_message_count().unwrap(), 2);
     }
 
     #[test]
@@ -186,7 +186,7 @@ mod tests {
             publisher.publish(msg).unwrap();
         }
 
-        let initial_count = manager.total_message_count();
+        let initial_count = manager.total_message_count().unwrap();
         assert_eq!(initial_count, 50);
 
         // Read first 25 messages
@@ -203,7 +203,7 @@ mod tests {
         publisher.publish(large_msg).unwrap();
 
         // Queue should have automatically collected garbage
-        let final_count = manager.total_message_count();
+        let final_count = manager.total_message_count().unwrap();
         assert!(final_count < initial_count); // Should have cleaned up some messages
         assert!(final_count >= 26); // Should have at least 25 unread + 1 new message
     }

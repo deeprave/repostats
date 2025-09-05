@@ -5,6 +5,7 @@
 
 use crate::core::cleanup::Cleanup;
 use crate::core::query::QueryParams;
+use crate::core::retry::RetryPolicy;
 use crate::scanner::checkout::manager::CheckoutManager;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
@@ -41,11 +42,34 @@ pub struct ScannerManager {
     checkout_managers: Mutex<HashMap<String, CheckoutState>>,
     /// Mapping of plugin ID to scanner IDs they're using checkouts from
     plugin_to_scanners: Mutex<HashMap<String, HashSet<String>>>,
+    /// Track if cleanup has already occurred to prevent double cleanup
+    cleanup_done: Mutex<bool>,
+    /// Override for filesystem case sensitivity detection (None = use platform heuristic)
+    case_insensitive_override: Option<bool>,
 }
 
 impl ScannerManager {
-    /// Length of scanner ID hash portion (12 characters for balance of uniqueness and readability)
-    const SCANNER_ID_HASH_LENGTH: usize = 12;
+    /// Length of scanner ID hash portion (16 characters for strong collision resistance)
+    const SCANNER_ID_HASH_LENGTH: usize = 16;
+
+    /// Reservation timeout for repository scanning
+    const RESERVATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Retry policy for local queue operations
+    const QUEUE_RETRY_POLICY: RetryPolicy = RetryPolicy {
+        max_attempts: 2,
+        delay: Duration::from_millis(100),
+    };
+
+    /// Emergency cleanup timeout for checkout managers
+    const EMERGENCY_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
+
+    /// Helper method to handle poisoned mutex cases (wraps core utility)
+    fn handle_mutex_poison<T>(result: std::sync::LockResult<T>) -> ScanResult<T> {
+        crate::core::sync::handle_mutex_poison(result, |msg| ScanError::Configuration {
+            message: msg,
+        })
+    }
 
     /// Create a new ScannerManager instance
     pub fn new() -> Self {
@@ -54,6 +78,20 @@ impl ScannerManager {
             repo_states: Mutex::new(HashMap::new()),
             checkout_managers: Mutex::new(HashMap::new()),
             plugin_to_scanners: Mutex::new(HashMap::new()),
+            cleanup_done: Mutex::new(false),
+            case_insensitive_override: None,
+        }
+    }
+
+    /// Create a new ScannerManager instance with case sensitivity override
+    pub fn with_case_sensitivity(case_insensitive_override: Option<bool>) -> Self {
+        Self {
+            _scanner_tasks: Mutex::new(HashMap::new()),
+            repo_states: Mutex::new(HashMap::new()),
+            checkout_managers: Mutex::new(HashMap::new()),
+            plugin_to_scanners: Mutex::new(HashMap::new()),
+            cleanup_done: Mutex::new(false),
+            case_insensitive_override,
         }
     }
 
@@ -65,22 +103,22 @@ impl ScannerManager {
     /// Try to reserve a repository for scanning
     /// Returns true if reservation successful, false if already active/reserved
     fn try_reserve_repository(&self, repo_id: &str) -> bool {
-        let mut repo_states = self.repo_states.lock().unwrap();
-
-        // Clean up expired reservations (older than 30 seconds)
-        let now = Instant::now();
-        let expiry_threshold = Duration::from_secs(30);
-        repo_states.retain(|_, state| {
-            match state {
-                RepoState::Active => true, // Keep active entries
-                RepoState::Reserved(timestamp) => now.duration_since(*timestamp) < expiry_threshold,
+        let mut repo_states = match Self::handle_mutex_poison(self.repo_states.lock()) {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire repo_states lock: {}", e);
+                return false;
             }
-        });
+        };
+
+        // Clean up expired reservations (older than reservation timeout)
+        self.cleanup_expired_reservations_internal(&mut repo_states);
 
         // Try to reserve if not already active or reserved
         match repo_states.get(repo_id) {
             Some(RepoState::Active) | Some(RepoState::Reserved(_)) => false,
             None => {
+                let now = Instant::now();
                 repo_states.insert(repo_id.to_string(), RepoState::Reserved(now));
                 true
             }
@@ -89,7 +127,13 @@ impl ScannerManager {
 
     /// Confirm a reservation by marking repository as active
     fn confirm_reservation(&self, repo_id: &str) -> bool {
-        let mut repo_states = self.repo_states.lock().unwrap();
+        let mut repo_states = match Self::handle_mutex_poison(self.repo_states.lock()) {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire repo_states lock: {}", e);
+                return false;
+            }
+        };
         match repo_states.get(repo_id) {
             Some(RepoState::Reserved(_)) => {
                 repo_states.insert(repo_id.to_string(), RepoState::Active);
@@ -101,13 +145,73 @@ impl ScannerManager {
 
     /// Cancel a reservation
     fn cancel_reservation(&self, repo_id: &str) {
-        let mut repo_states = self.repo_states.lock().unwrap();
+        let mut repo_states = match Self::handle_mutex_poison(self.repo_states.lock()) {
+            Ok(guard) => guard,
+            Err(e) => {
+                log::error!("Failed to acquire repo_states lock for cancellation: {}", e);
+                return;
+            }
+        };
         if let Some(RepoState::Reserved(_)) = repo_states.get(repo_id) {
             repo_states.remove(repo_id);
         }
     }
 
-    /// Validate a repository path using gix and return the Repository and normalized path
+    /// Internal helper for cleaning up expired reservations
+    fn cleanup_expired_reservations_internal(&self, repo_states: &mut HashMap<String, RepoState>) {
+        let now = Instant::now();
+        let expiry_threshold = Self::RESERVATION_TIMEOUT;
+        repo_states.retain(|_, state| {
+            match state {
+                RepoState::Active => true, // Keep active entries
+                RepoState::Reserved(timestamp) => now.duration_since(*timestamp) < expiry_threshold,
+            }
+        });
+    }
+
+    /// Normalize path case for case-insensitive filesystems
+    ///
+    /// On case-insensitive filesystems (Windows, macOS default), paths that
+    /// differ only in case refer to the same location.
+    /// This method normalizes paths to lowercase on such systems
+    /// to ensure consistent deduplication.
+    fn normalize_path_case(&self, path: &str) -> String {
+        // Determine if we're likely on a case-insensitive filesystem
+        if self.is_case_insensitive_filesystem() {
+            // Convert to lowercase for consistent comparison
+            // This handles the common case where paths differ only in case
+            path.to_lowercase()
+        } else {
+            // On case-sensitive filesystems, preserve original case
+            path.to_string()
+        }
+    }
+
+    /// Check if we're likely on a case-insensitive filesystem, or use configured override
+    ///
+    /// This is a heuristic based on the target platform, as direct
+    /// filesystem capability detection would be complex and potentially slow.
+    /// The override allows handling edge cases where platforms differ from defaults.
+    fn is_case_insensitive_filesystem(&self) -> bool {
+        if let Some(override_value) = self.case_insensitive_override {
+            return override_value;
+        }
+
+        // Windows filesystems (NTFS, FAT32) are case-insensitive by default
+        #[cfg(target_os = "windows")]
+        return true;
+
+        // macOS filesystems can be case-insensitive (HFS+, APFS default)
+        // We err on the side of caution and assume case-insensitive
+        #[cfg(target_os = "macos")]
+        return true;
+
+        // Linux and other Unix systems are typically case-sensitive
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        return false;
+    }
+
+    /// Validate a repository path using gix and return the Repository and normalised path
     /// Also validates that specified git refs exist in the repository
     pub fn validate_repository(
         &self,
@@ -139,13 +243,13 @@ impl ScannerManager {
                     }
                 }
 
-                // Get the normalized path (the actual git directory)
+                // Get the normalised path (the actual git directory)
                 let git_dir = repo.git_dir().to_path_buf();
 
-                // Try to canonicalize to resolve symlinks and normalize
-                let normalized_path = git_dir.canonicalize().unwrap_or_else(|_| git_dir.clone());
+                // Try to canonicalise to resolve symlinks and normalise
+                let normalised_path = git_dir.canonicalize().unwrap_or_else(|_| git_dir.clone());
 
-                Ok((repo, normalized_path))
+                Ok((repo, normalised_path))
             }
             Err(e) => {
                 // Repository validation failed
@@ -186,12 +290,38 @@ impl ScannerManager {
     }
 
     /// Normalise a repository path/URL for consistent hashing and deduplication
+    /// Handles:
+    /// - Trimming whitespace
+    /// - Removing trailing slashes
+    /// - Lowercasing hostnames in URLs
+    /// - Removing authentication info and .git extensions
+    /// - Normalising port specifications
+    /// - Handling scp-like git URLs (e.g., git@host:path/repo.git)
     pub fn normalise_repository_path(&self, repository_path: &str) -> ScanResult<String> {
-        let path = repository_path.trim();
+        let path = repository_path.trim().trim_end_matches('/');
+
+        // Handle scp-like URLs: git@host:path/repo(.git)
+        if let Some(idx) = path.find(':') {
+            // Check for scp-like pattern (user@host:path)
+            if path[..idx].contains('@') && !path[..idx].contains('/') {
+                let mut parts = path.splitn(2, ':');
+                let user_host = parts.next().unwrap();
+                let repo_path = parts.next().unwrap();
+
+                // Remove authentication info (user@)
+                let host = user_host.split('@').last().unwrap().to_lowercase();
+
+                // Remove .git extension if present
+                let repo_path = repo_path.trim_end_matches(".git");
+
+                // Normalise: host:path
+                return Ok(format!("{}:{}", host, repo_path));
+            }
+        }
 
         // Check if it's a URL (contains scheme://)
         if let Some(scheme_end) = path.find("://") {
-            // It's a remote URL - extract hostname + path only
+            let scheme = &path[..scheme_end].to_ascii_lowercase();
             let after_scheme = &path[scheme_end + 3..];
 
             // Remove authentication info if present (user@host -> host)
@@ -201,14 +331,41 @@ impl ScannerManager {
                 after_scheme
             };
 
-            // Remove .git extension if present
-            let normalised = if let Some(stripped) = host_path.strip_suffix(".git") {
-                stripped
+            // Parse host and path components
+            let (host_with_port, repo_path) = if let Some(slash_pos) = host_path.find('/') {
+                (&host_path[..slash_pos], &host_path[slash_pos..])
             } else {
-                host_path
+                (host_path, "")
             };
 
-            Ok(normalised.to_string())
+            // Separate host from port and normalise
+            let normalised_host = if let Some(colon_pos) = host_with_port.find(':') {
+                let host = &host_with_port[..colon_pos];
+                let port = &host_with_port[colon_pos + 1..];
+
+                // Only include non-default ports
+                match (scheme.as_str(), port) {
+                    ("http", "80") | ("https", "443") | ("ssh", "22") => host.to_ascii_lowercase(),
+                    _ => format!("{}:{}", host.to_ascii_lowercase(), port),
+                }
+            } else {
+                host_with_port.to_ascii_lowercase()
+            };
+
+            // Clean up the repository path
+            let clean_repo_path = repo_path
+                .trim_end_matches('/')
+                .strip_suffix(".git")
+                .unwrap_or(repo_path.trim_end_matches('/'));
+
+            // Reconstruct the normalised URL
+            let normalised = if clean_repo_path.is_empty() {
+                normalised_host
+            } else {
+                format!("{}{}", normalised_host, clean_repo_path)
+            };
+
+            Ok(normalised)
         } else {
             // It's a local path - resolve to absolute path and remove .git extension
             let path_buf = PathBuf::from(path);
@@ -229,7 +386,13 @@ impl ScannerManager {
                 path_str = path_str[..path_str.len() - 4].to_string();
             }
 
-            Ok(path_str)
+            // Normalise path separators and remove trailing slashes
+            let normalised = path_str.trim_end_matches('/').trim_end_matches('\\');
+
+            // Handle case sensitivity based on filesystem characteristics
+            let final_normalised = self.normalize_path_case(normalised);
+
+            Ok(final_normalised)
         }
     }
 
@@ -251,8 +414,9 @@ impl ScannerManager {
 
     /// Generate SHA256-based scanner ID for a repository (now using repo_id)
     ///
-    /// Creates a 12-character truncated SHA256 hash providing sufficient uniqueness
-    /// (collision probability ~1 in 281 trillion) while maintaining readability.
+    /// Creates a 16-character truncated SHA256 hash providing strong collision resistance.
+    /// With 64 bits of hash space (2^64), collisions become likely only after ~4.3 billion
+    /// different repositories due to birthday paradox, making this safe for practical use.
     pub fn generate_scanner_id(&self, repo_id: &str) -> ScanResult<String> {
         // Generate SHA256 hash of the unique repo ID
         let mut hasher = Sha256::new();
@@ -262,7 +426,10 @@ impl ScannerManager {
         // Convert to hex string and truncate to configured length for readability
         // SHA256 always produces 64 hex characters, so truncation is always safe
         let hash_hex = format!("{:x}", hash_result);
-        let truncated_hash = &hash_hex[..Self::SCANNER_ID_HASH_LENGTH];
+
+        // Ensure we don't exceed the actual hash length (defensive programming)
+        let truncate_length = std::cmp::min(Self::SCANNER_ID_HASH_LENGTH, hash_hex.len());
+        let truncated_hash = &hash_hex[..truncate_length];
         Ok(format!("scan-{}", truncated_hash))
     }
 
@@ -273,11 +440,11 @@ impl ScannerManager {
         query_params: Option<&QueryParams>,
         checkout_settings: Option<&crate::app::cli::CheckoutSettings>,
     ) -> ScanResult<Arc<ScannerTask>> {
-        // First normalize the path
-        let normalized_path = self.normalise_repository_path(repository_path)?;
+        // First normalise the path
+        let normalised_path = self.normalise_repository_path(repository_path)?;
 
         // Validate the repository and get the gix::Repository instance
-        let path = Path::new(&normalized_path);
+        let path = Path::new(&normalised_path);
         let (repo, _git_dir) = self.validate_repository(path, query_params, checkout_settings)?;
 
         // Get the unique repository ID
@@ -320,7 +487,7 @@ impl ScannerManager {
             // Create the checkout manager using existing logic
             let checkout_manager = if let Some(ref settings) = checkout_settings {
                 CheckoutManager::with_settings(
-                    &normalized_path,
+                    &normalised_path,
                     settings.checkout_template.clone(),
                     settings.keep_checkouts,
                     settings.force_overwrite,
@@ -334,7 +501,7 @@ impl ScannerManager {
                     &scanner_id
                 ));
                 CheckoutManager::with_settings(
-                    &normalized_path,
+                    &normalised_path,
                     template,
                     false, // don't keep files by default
                     true,  // force overwrite
@@ -350,39 +517,49 @@ impl ScannerManager {
                 manager: shared_manager.clone(),
             };
 
-            self.checkout_managers
-                .lock()
-                .unwrap()
-                .insert(scanner_id.clone(), checkout_state);
+            match Self::handle_mutex_poison(self.checkout_managers.lock()) {
+                Ok(mut managers) => {
+                    managers.insert(scanner_id.clone(), checkout_state);
+                }
+                Err(e) => {
+                    self.cancel_reservation(&repo_id);
+                    return Err(ScanError::Configuration {
+                        message: format!("Failed to register checkout manager: {}", e),
+                    });
+                }
+            }
             Some(shared_manager)
         } else {
             None
         };
 
-        // Create shared queue publisher with retry utility
-        use crate::core::retry::{retry_async, RetryPolicy};
-        let queue_publisher = retry_async("create_queue_publisher", RetryPolicy::default(), || {
-            let scanner_id = scanner_id.clone();
-            async move { crate::queue::api::get_queue_service().create_publisher(scanner_id) }
-        })
-        .await
-        .map_err(|e| {
-            // Cancel reservation on failure
-            self.cancel_reservation(&repo_id);
-            ScanError::Configuration {
-                message: format!(
-                    "Failed to create queue publisher for '{}' after {} attempts: {}",
-                    repository_path,
-                    RetryPolicy::default().max_attempts,
-                    e
-                ),
-            }
-        })?;
+        // Create shared queue publisher with optimized retry policy for local operations
+        use crate::core::retry::retry_async;
+
+        // Use configured retry policy for queue operations - failures are likely permanent
+        let queue_publisher =
+            retry_async("create_queue_publisher", Self::QUEUE_RETRY_POLICY, || {
+                let scanner_id = scanner_id.clone();
+                async move { crate::queue::api::get_queue_service().create_publisher(scanner_id) }
+            })
+            .await
+            .map_err(|e| {
+                // Cancel reservation on failure
+                self.cancel_reservation(&repo_id);
+                ScanError::Configuration {
+                    message: format!(
+                        "Failed to create queue publisher for '{}' after {} attempts: {}",
+                        repository_path,
+                        Self::QUEUE_RETRY_POLICY.max_attempts,
+                        e
+                    ),
+                }
+            })?;
 
         // Create scanner task with simple dependency injection
         let scanner_task = ScannerTask::new(
             scanner_id.clone(),
-            normalized_path.clone(),
+            normalised_path.clone(),
             repo,
             requirements,
             queue_publisher,
@@ -392,10 +569,17 @@ impl ScannerManager {
         let scanner_task = Arc::new(scanner_task);
 
         // Store the scanner task in the manager for later use
-        self._scanner_tasks
-            .lock()
-            .unwrap()
-            .insert(scanner_id.clone(), scanner_task.clone());
+        match Self::handle_mutex_poison(self._scanner_tasks.lock()) {
+            Ok(mut tasks) => {
+                tasks.insert(scanner_id.clone(), scanner_task.clone());
+            }
+            Err(e) => {
+                self.cancel_reservation(&repo_id);
+                return Err(ScanError::Configuration {
+                    message: format!("Failed to register scanner task: {}", e),
+                });
+            }
+        }
 
         // Create notification subscriber with retry utility
         let _subscriber = retry_async(
@@ -494,11 +678,41 @@ impl ScannerManager {
                 let scanner_id = scanner.scanner_id();
 
                 // Remove from active scanners map
-                self._scanner_tasks.lock().unwrap().remove(scanner_id);
+                if let Ok(mut tasks) = Self::handle_mutex_poison(self._scanner_tasks.lock()) {
+                    tasks.remove(scanner_id);
+                } else {
+                    log::error!("Failed to acquire lock for scanner cleanup");
+                }
 
                 // Cancel repository reservation if applicable
                 if let Ok(repo_id) = self.get_unique_repo_id(scanner.repository()) {
                     self.cancel_reservation(&repo_id);
+                }
+
+                // Remove checkout manager if it exists
+                if let Ok(mut checkout_managers) =
+                    Self::handle_mutex_poison(self.checkout_managers.lock())
+                {
+                    if let Some(checkout_state) = checkout_managers.remove(scanner_id) {
+                        // Perform cleanup on the checkout manager
+                        if let Ok(mut manager) =
+                            Self::handle_mutex_poison(checkout_state.manager.lock())
+                        {
+                            if !manager.keep_files {
+                                if let Err(e) = manager.cleanup_all() {
+                                    log::warn!(
+                                        "Failed to cleanup checkout files for scanner '{}': {}",
+                                        scanner_id,
+                                        e
+                                    );
+                                }
+                            }
+                        } else {
+                            log::error!("Failed to acquire checkout manager lock during cleanup for scanner '{}'", scanner_id);
+                        }
+                    }
+                } else {
+                    log::error!("Failed to acquire checkout_managers lock during scanner cleanup");
                 }
 
                 log::trace!("Cleaned up scanner: {}", scanner_id);
@@ -529,7 +743,12 @@ impl ScannerManager {
     pub async fn start_scanning(&self) -> Result<(), ScanError> {
         // Collect all scanner tasks first, then drop the lock
         let scanner_tasks_vec = {
-            let scanner_tasks = self._scanner_tasks.lock().unwrap();
+            let scanner_tasks =
+                Self::handle_mutex_poison(self._scanner_tasks.lock()).map_err(|e| {
+                    ScanError::Repository {
+                        message: format!("Failed to access scanner tasks: {}", e),
+                    }
+                })?;
 
             if scanner_tasks.is_empty() {
                 return Err(ScanError::Repository {
@@ -594,32 +813,168 @@ impl ScannerManager {
     /// Get the current number of active scanners (for testing)
     #[cfg(test)]
     pub fn scanner_count(&self) -> usize {
-        self._scanner_tasks.lock().unwrap().len()
+        Self::handle_mutex_poison(self._scanner_tasks.lock())
+            .map(|tasks| tasks.len())
+            .unwrap_or_else(|e| {
+                log::error!("Failed to get scanner count: {}", e);
+                0
+            })
     }
 
     // ===== Checkout Management Methods =====
 
     /// Cleanup all checkouts when shutting down
     pub fn cleanup_all_checkouts(&self) {
-        let mut checkout_managers = self.checkout_managers.lock().unwrap();
+        // Collect managers to clean up while holding the lock, then release lock before cleanup
+        let managers_to_cleanup = {
+            match Self::handle_mutex_poison(self.checkout_managers.lock()) {
+                Ok(mut checkout_managers) => checkout_managers.drain().collect::<Vec<_>>(),
+                Err(e) => {
+                    log::error!(
+                        "Failed to acquire checkout_managers lock for cleanup: {}",
+                        e
+                    );
+                    return;
+                }
+            }
+        };
 
-        for (scanner_id, state) in checkout_managers.drain() {
-            if !state.manager.lock().unwrap().keep_files {
-                if let Err(e) = state.manager.lock().unwrap().cleanup_all() {
-                    log::warn!(
-                        "Failed to cleanup checkouts for scanner '{}': {}",
+        // Now cleanup each manager without holding the lock
+        for (scanner_id, state) in managers_to_cleanup {
+            match Self::handle_mutex_poison(state.manager.lock()) {
+                Ok(mut manager) => {
+                    if !manager.keep_files {
+                        if let Err(e) = manager.cleanup_all() {
+                            log::warn!(
+                                "Failed to cleanup checkouts for scanner '{}': {}",
+                                scanner_id,
+                                e
+                            );
+                        } else {
+                            log::trace!("Cleaned up checkouts for scanner '{}'", scanner_id);
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!(
+                        "Failed to acquire manager lock for scanner '{}': {}",
                         scanner_id,
                         e
                     );
-                } else {
-                    log::trace!("Cleaned up checkouts for scanner '{}'", scanner_id);
                 }
             }
         }
 
         // Clear plugin mappings
-        let mut plugin_to_scanners = self.plugin_to_scanners.lock().unwrap();
-        plugin_to_scanners.clear();
+        if let Ok(mut plugin_to_scanners) =
+            Self::handle_mutex_poison(self.plugin_to_scanners.lock())
+        {
+            plugin_to_scanners.clear();
+        } else {
+            log::error!("Failed to clear plugin mappings during cleanup");
+        }
+
+        // Mark cleanup as done
+        if let Ok(mut cleanup_done) = Self::handle_mutex_poison(self.cleanup_done.lock()) {
+            *cleanup_done = true;
+        }
+    }
+
+    /// Cleanup all checkouts with bounded blocking time
+    ///
+    /// Balances cleanup guarantees with performance by using timeouts.
+    /// This prevents Drop from hanging indefinitely on slow I/O while still
+    /// ensuring cleanup attempts are made.
+    fn cleanup_all_checkouts_with_timeout(&self, timeout: Duration) {
+        // Collect managers to clean up while holding the lock, then release lock before cleanup
+        let managers_to_cleanup = {
+            match Self::handle_mutex_poison(self.checkout_managers.lock()) {
+                Ok(mut checkout_managers) => checkout_managers.drain().collect::<Vec<_>>(),
+                Err(e) => {
+                    log::error!(
+                        "Failed to acquire checkout_managers lock for timeout cleanup: {}",
+                        e
+                    );
+                    return;
+                }
+            }
+        };
+
+        // Clear plugin mappings immediately (fast operation)
+        if let Ok(mut plugin_to_scanners) =
+            Self::handle_mutex_poison(self.plugin_to_scanners.lock())
+        {
+            plugin_to_scanners.clear();
+        } else {
+            log::error!("Failed to clear plugin mappings during timeout cleanup");
+        }
+
+        // Mark cleanup as done immediately (fast operation)
+        if let Ok(mut cleanup_done) = Self::handle_mutex_poison(self.cleanup_done.lock()) {
+            *cleanup_done = true;
+        } else {
+            log::error!("Failed to mark cleanup as done during timeout cleanup");
+        }
+
+        // Perform file cleanup with overall timeout
+        if !managers_to_cleanup.is_empty() {
+            let cleanup_start = Instant::now();
+            let mut completed_count = 0;
+
+            for (scanner_id, state) in managers_to_cleanup.iter() {
+                // Check if we've exceeded our overall timeout budget
+                if cleanup_start.elapsed() >= timeout {
+                    log::warn!(
+                        "Cleanup timeout exceeded after {}ms; {} of {} managers cleaned up",
+                        timeout.as_millis(),
+                        completed_count,
+                        managers_to_cleanup.len()
+                    );
+                    break;
+                }
+
+                match Self::handle_mutex_poison(state.manager.lock()) {
+                    Ok(mut manager) => {
+                        if !manager.keep_files {
+                            let per_manager_start = Instant::now();
+
+                            if let Err(e) = manager.cleanup_all() {
+                                log::warn!(
+                                    "Timeout cleanup failed for scanner '{}': {}",
+                                    scanner_id,
+                                    e
+                                );
+                            } else {
+                                completed_count += 1;
+                                let cleanup_duration = per_manager_start.elapsed();
+                                if cleanup_duration.as_millis() > 50 {
+                                    log::debug!(
+                                        "Cleanup for scanner '{}' took {}ms",
+                                        scanner_id,
+                                        cleanup_duration.as_millis()
+                                    );
+                                }
+                            }
+                        } else {
+                            completed_count += 1; // Still count it as completed
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to acquire manager lock for timeout cleanup of scanner '{}': {}", scanner_id, e);
+                    }
+                }
+            }
+
+            let total_duration = cleanup_start.elapsed();
+            if total_duration.as_millis() > 100 {
+                log::debug!(
+                    "Timeout cleanup completed {} of {} managers in {}ms",
+                    completed_count,
+                    managers_to_cleanup.len(),
+                    total_duration.as_millis()
+                );
+            }
+        }
     }
 
     /// Get an opaque cleanup handle for main.rs coordination
@@ -635,42 +990,44 @@ impl ScannerManager {
 impl Cleanup for ScannerManager {
     fn cleanup(&self) {
         // Delegate to the existing implementation
-        let mut checkout_managers = self.checkout_managers.lock().unwrap();
-
-        for (scanner_id, state) in checkout_managers.drain() {
-            // Acquire the manager lock once to avoid potential deadlock
-            let mut manager = state.manager.lock().unwrap();
-            if !manager.keep_files {
-                if let Err(e) = manager.cleanup_all() {
-                    log::trace!(
-                        "Failed to cleanup checkouts for scanner '{}': {}",
-                        scanner_id,
-                        e
-                    );
-                }
-            }
-        }
-
-        // Clear plugin mappings
-        let mut plugin_to_scanners = self.plugin_to_scanners.lock().unwrap();
-        plugin_to_scanners.clear();
+        self.cleanup_all_checkouts();
     }
 }
 
 impl Drop for ScannerManager {
     fn drop(&mut self) {
-        // Cleanup all checkouts when the manager is dropped
-        // This ensures cleanup even on panic or unexpected termination
-        let checkout_managers = self.checkout_managers.lock().unwrap();
-        let active_count = checkout_managers.len();
+        // Prevent double cleanup by checking the flag
+        let cleanup_already_done = match Self::handle_mutex_poison(self.cleanup_done.lock()) {
+            Ok(guard) => *guard,
+            Err(e) => {
+                log::error!("Mutex poisoned during drop cleanup check: {}", e);
+                log::warn!("Proceeding with cleanup to avoid resource leaks");
+                false // Proceed with cleanup when in doubt to avoid resource leaks
+            }
+        };
 
-        if active_count > 0 {
-            log::info!(
-                "ScannerManager dropping: cleaning up {} active checkout managers",
-                active_count
-            );
-            drop(checkout_managers); // Release lock before cleanup
-            self.cleanup_all_checkouts();
+        if !cleanup_already_done {
+            // Get active checkout count for logging
+            let active_count = Self::handle_mutex_poison(self.checkout_managers.lock())
+                .map(|managers| managers.len())
+                .unwrap_or_else(|e| {
+                    log::error!("Failed to get checkout manager count during drop: {}", e);
+                    0
+                });
+
+            if active_count > 0 {
+                log::warn!(
+                    "ScannerManager Drop: {} checkouts not cleaned up by shutdown coordinator - performing emergency cleanup with timeout",
+                    active_count
+                );
+
+                // Emergency cleanup with strict timeout as safety net
+                // This should rarely be needed
+                // if shutdown coordinator works properly
+                self.cleanup_all_checkouts_with_timeout(Self::EMERGENCY_CLEANUP_TIMEOUT);
+            }
+        } else {
+            log::trace!("ScannerManager drop: cleanup already completed, skipping");
         }
     }
 }

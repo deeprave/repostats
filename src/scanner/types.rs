@@ -193,19 +193,29 @@ pub struct FileChangeData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryData {
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_branch: Option<String>,
     pub is_bare: bool,
     pub is_shallow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub work_dir: Option<String>,
     pub git_dir: String,
     // Query parameters (only included if they are not filtering/restrictive)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub git_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date_range: Option<String>, // Human-readable date range
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_paths: Option<String>, // Comma-separated paths if not restrictive
-    pub authors: Option<String>,    // Comma-separated authors if not restrictive
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authors: Option<String>, // Comma-separated authors if not restrictive
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_commits: Option<usize>, // Only if not restrictive (None or very large)
 }
 
@@ -254,7 +264,12 @@ impl RepositoryDataBuilder {
         // Extract repository metadata
         self.url = config.string("remote.origin.url").map(|s| s.to_string());
         self.git_dir = Some(repo.git_dir().to_string_lossy().to_string());
-        self.work_dir = repo.workdir().map(|p| p.to_string_lossy().to_string());
+        // Preserve original path case by using the path from with_repository(),
+        // falling back to repo.workdir() only if no path was set
+        self.work_dir = self
+            .path
+            .clone()
+            .or_else(|| repo.workdir().map(|p| p.to_string_lossy().to_string()));
 
         // Get repository name from URL or path
         if let Some(ref url_str) = self.url {

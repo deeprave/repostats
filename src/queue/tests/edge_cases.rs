@@ -37,7 +37,7 @@ mod tests {
         assert_eq!(ack_result, 0, "Acknowledging empty batch should return 0");
 
         // Test statistics on empty queue
-        let memory_stats = manager.memory_stats();
+        let memory_stats = manager.memory_stats().unwrap();
         assert_eq!(memory_stats.total_messages, 0);
 
         let lag_stats = manager.get_lag_statistics().unwrap();
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(read_message.data, large_data);
 
         // Memory stats should reflect the large message
-        let memory_stats = manager.memory_stats();
+        let memory_stats = manager.memory_stats().unwrap();
         assert!(
             memory_stats.total_bytes > 1024 * 1024,
             "Memory usage should reflect large message"
@@ -119,7 +119,7 @@ mod tests {
             "Should read all flooded messages"
         );
 
-        let memory_stats = manager.memory_stats();
+        let memory_stats = manager.memory_stats().unwrap();
         println!("✓ Message flood handled correctly");
         println!(
             "  Messages: {}, Memory: {} bytes",
@@ -356,7 +356,7 @@ mod tests {
             "All consumers should be cleaned up"
         );
 
-        let memory_stats = manager.memory_stats();
+        let memory_stats = manager.memory_stats().unwrap();
         assert!(
             memory_stats.total_bytes > 0,
             "Should still have messages in queue"

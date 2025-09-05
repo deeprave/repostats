@@ -34,13 +34,18 @@ impl ShutdownCoordinator {
 
     /// Trigger shutdown
     pub fn trigger_shutdown(&self) {
-        self.shutdown_requested.store(true, Ordering::Relaxed);
+        // Use Release ordering to synchronize-with all Acquire loads
+        // This ensures that any thread checking is_shutdown_requested()
+        // will see this store and any previous memory operations
+        self.shutdown_requested.store(true, Ordering::Release);
         let _ = self.shutdown_tx.send(());
     }
 
     /// Check if shutdown has been requested
     pub fn is_shutdown_requested(&self) -> bool {
-        self.shutdown_requested.load(Ordering::Relaxed)
+        // Use Acquire ordering to synchronize-with Release stores
+        // This ensures we see the most up-to-date shutdown state
+        self.shutdown_requested.load(Ordering::Acquire)
     }
 
     /// Guard execution of a future with shutdown coordination
@@ -109,7 +114,7 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
             tokio::spawn(async move {
                 if let Ok(mut sig) = signal(kind) {
                     sig.recv().await;
-                    requested.store(true, Ordering::Relaxed);
+                    requested.store(true, Ordering::Release);
                     let _ = tx.send(());
                 }
             });
@@ -120,7 +125,7 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
     {
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
-                shutdown_requested.store(true, Ordering::Relaxed);
+                shutdown_requested.store(true, Ordering::Release);
                 let _ = shutdown_tx.send(());
             }
         });

@@ -39,50 +39,80 @@ async fn main() {
     let pid = std::process::id();
 
     // Use shutdown coordinator to guard the entire application execution
-    let result = ShutdownCoordinator::guard(|mut shutdown_rx| async move {
-        // Application startup with shutdown checking
-        let scanner_manager = tokio::select! {
-            result = app::startup::startup(command_name) => {
-                match result {
-                    Ok(scanner_manager) => scanner_manager,
-                    Err(e) => {
-                        log_error_with_context(&e, "Application startup");
+    let result =
+        ShutdownCoordinator::guard_with_coordinator(|coordinator, mut shutdown_rx| async move {
+            // Application startup with shutdown checking
+            let scanner_manager = tokio::select! {
+                result = app::startup::startup(command_name) => {
+                    match result {
+                        Ok(scanner_manager) => scanner_manager,
+                        Err(e) => {
+                            log_error_with_context(&e, "Application startup");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                shutdown_result = shutdown_rx.recv() => {
+                    match shutdown_result {
+                        Ok(_) => std::process::exit(0),
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            log::warn!("Shutdown channel closed during startup; exiting");
+                            std::process::exit(0)
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            log::warn!("Missed shutdown signals during startup; exiting");
+                            std::process::exit(0)
+                        }
+                    }
+                }
+            };
+
+            // System start with shutdown checking
+            let mut shutdown_check = shutdown_rx.resubscribe();
+            tokio::select! {
+                result = system_start(pid) => {
+                    if let Err(e) = result {
+                        log::error!("Failed to start system: {e}");
                         std::process::exit(1);
                     }
                 }
-            }
-            _ = shutdown_rx.recv() => std::process::exit(0)
-        };
-
-        // System start with shutdown checking
-        let mut shutdown_check = shutdown_rx.resubscribe();
-        tokio::select! {
-            result = system_start(pid) => {
-                if let Err(e) = result {
-                    log::error!("Failed to start system: {e}");
-                    std::process::exit(1);
+                shutdown_result = shutdown_check.recv() => {
+                    match shutdown_result {
+                        Ok(_) => std::process::exit(0),
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            log::warn!("Shutdown channel closed during system start; exiting");
+                            std::process::exit(0)
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            log::warn!("Missed shutdown signals during system start; exiting");
+                            std::process::exit(0)
+                        }
+                    }
                 }
+            };
+
+            log::info!("{command_name}: ✅ Repository Statistics Tool starting");
+
+            // Handle scanner execution if configured
+            let final_result = if let Some(scanner_manager) = scanner_manager {
+                run_scanner_with_coordination(
+                    scanner_manager,
+                    shutdown_rx,
+                    coordinator.shutdown_requested.clone(),
+                )
+                .await
+            } else {
+                Ok(())
+            };
+
+            // System shutdown
+            if let Err(e) = system_stop(pid).await {
+                log::warn!("Error stopping system: {e}");
             }
-            _ = shutdown_check.recv() => std::process::exit(0)
-        };
 
-        log::info!("{command_name}: ✅ Repository Statistics Tool starting");
-
-        // Handle scanner execution if configured
-        let final_result = if let Some(scanner_manager) = scanner_manager {
-            run_scanner_with_coordination(scanner_manager, shutdown_rx).await
-        } else {
-            Ok(())
-        };
-
-        // System shutdown
-        if let Err(e) = system_stop(pid).await {
-            log::warn!("Error stopping system: {e}");
-        }
-
-        final_result
-    })
-    .await;
+            final_result
+        })
+        .await;
 
     if let Err(e) = result {
         log::error!("Application error: {e}");
@@ -94,28 +124,31 @@ async fn main() {
 async fn run_scanner_with_coordination(
     scanner_manager: std::sync::Arc<scanner::api::ScannerManager>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), ScanError> {
     // Get services for plugin coordination
     log::trace!("Getting notification manager for plugin initialization");
     let mut notification_manager = core::services::get_notification_service().await;
     log::trace!("Acquired notification manager lock successfully");
 
-    log::trace!("Getting plugin manager for initialization");
-    let mut plugin_manager = core::services::get_plugin_service().await;
-    log::trace!("Acquired plugin manager lock successfully");
-
-    // Initialize event subscription for plugin coordination (prevents race conditions)
+    // Initialize plugin event subscription for coordination (prevents race conditions)
     log::trace!("Initializing plugin event subscription");
-    if let Err(e) = plugin_manager
-        .initialize_event_subscription(&mut notification_manager)
-        .await
     {
-        log::error!("Failed to initialize plugin event subscription: {}", e);
-        return Err(ScanError::Configuration {
-            message: format!("Plugin coordination setup failed: {}", e),
-        });
+        let mut plugin_manager = core::services::get_plugin_service().await;
+        log::trace!("Acquired plugin manager lock for initialization");
+
+        if let Err(e) = plugin_manager
+            .initialize_event_subscription(&mut notification_manager)
+            .await
+        {
+            log::error!("Failed to initialize plugin event subscription: {}", e);
+            return Err(ScanError::Configuration {
+                message: format!("Plugin coordination setup failed: {}", e),
+            });
+        }
+        log::trace!("Plugin event subscription initialization completed");
+        // Plugin manager lock drops here automatically
     }
-    log::trace!("Plugin event subscription initialization completed");
 
     // Drop notification manager lock early to avoid potential conflicts
     drop(notification_manager);
@@ -132,8 +165,32 @@ async fn run_scanner_with_coordination(
             // Normal completion path: wait for plugins then cleanup
             match result {
                 Ok(()) => {
-                    if let Err(e) = plugin_manager.await_all_plugins_completion().await {
-                        log::trace!("Plugin completion wait failed: {}", e);
+                    // Check if shutdown was already requested before resubscription
+                    let should_stop_immediately = shutdown_requested.load(std::sync::atomic::Ordering::Acquire);
+
+                    if should_stop_immediately {
+                        // Shutdown already triggered, proceed with graceful stop
+                        log::trace!("Shutdown already requested, proceeding with graceful plugin stop");
+                        let timeout = std::time::Duration::from_secs(30);
+
+                        // Scope plugin manager access for graceful stop
+                        let mut plugin_mgr = core::services::get_plugin_service().await;
+                        if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
+                            if !summary.all_completed() {
+                                log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
+                            }
+                        }
+                        // Drop lock automatically at end of scope
+                    } else {
+                        // Use shutdown-integrated plugin completion wait to handle signals
+                        let shutdown_rx = shutdown_rx.resubscribe();
+
+                        // Scope plugin manager access for completion wait
+                        let mut plugin_mgr = core::services::get_plugin_service().await;
+                        if let Err(e) = plugin_mgr.await_all_plugins_completion_with_shutdown(shutdown_rx).await {
+                            log::trace!("Plugin completion wait failed: {}", e);
+                        }
+                        // Drop lock automatically at end of scope
                     }
                     cleanup_handle.cleanup();
                     Ok(())
@@ -141,26 +198,50 @@ async fn run_scanner_with_coordination(
                 Err(e) => {
                     // Scanner failed, still need to coordinate shutdown
                     let timeout = std::time::Duration::from_secs(30);
-                    if let Ok(summary) = plugin_manager.graceful_stop_all(timeout).await {
+
+                    // Scope plugin manager access for graceful stop after scanner failure
+                    let mut plugin_mgr = core::services::get_plugin_service().await;
+                    if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                         if !summary.all_completed() {
                             log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
                         }
                     }
+                    // Drop lock automatically at end of scope
+
                     cleanup_handle.cleanup();
                     Err(e)
                 }
             }
         }
-        _ = shutdown_rx.recv() => {
-            // Signal interruption path: graceful plugin stop then cleanup
-            let timeout = std::time::Duration::from_secs(30);
-            if let Ok(summary) = plugin_manager.graceful_stop_all(timeout).await {
-                if !summary.all_completed() {
-                    log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
+        shutdown_result = shutdown_rx.recv() => {
+            match shutdown_result {
+                Ok(_) => {
+                    // Signal interruption path: graceful plugin stop then cleanup
+                    let timeout = std::time::Duration::from_secs(30);
+
+                    // Scope plugin manager access for signal-triggered graceful stop
+                    let mut plugin_mgr = core::services::get_plugin_service().await;
+                    if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
+                        if !summary.all_completed() {
+                            log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
+                        }
+                    }
+                    // Drop lock automatically at end of scope
+
+                    cleanup_handle.cleanup();
+                    Ok(())
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    log::warn!("Shutdown channel closed during execution; performing cleanup");
+                    cleanup_handle.cleanup();
+                    Ok(())
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    log::warn!("Missed shutdown signals during execution; performing cleanup");
+                    cleanup_handle.cleanup();
+                    Ok(())
                 }
             }
-            cleanup_handle.cleanup();
-            Ok(())
         }
     }
 }

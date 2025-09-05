@@ -4,6 +4,7 @@
 
 use crate::core::pattern_parser::AuthorPatternMatcher;
 use crate::core::query::QueryParams;
+use crate::core::sync::handle_mutex_poison;
 use crate::notifications::api::ScanEventType;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::{
@@ -88,7 +89,7 @@ impl ScannerTask {
 
     /// Scan commits and publish messages incrementally to avoid memory buildup
     pub async fn scan_commits_and_publish_incrementally(&self) -> ScanResult<()> {
-        self.scan_commits_and_publish_incrementally_with_query(None)
+        self.scan_commits_and_publish_incrementally_with_query(self.query_params())
             .await
     }
 
@@ -1222,12 +1223,13 @@ impl ScannerTask {
     /// Create a checkout directory for a specific commit when FILE_CONTENT is required
     async fn create_checkout_for_commit(&self, commit_info: &CommitInfo) -> ScanResult<PathBuf> {
         if let Some(checkout_manager) = self.checkout_manager() {
-            let mut manager = checkout_manager.lock().map_err(|_| ScanError::Repository {
-                message: format!(
-                    "Failed to acquire checkout manager lock for commit {} (mutex poisoned by previous panic)",
-                    commit_info.hash
-                ),
-            })?;
+            let mut manager =
+                handle_mutex_poison(checkout_manager.lock(), |msg| ScanError::Repository {
+                    message: format!(
+                        "Failed to acquire checkout manager lock for commit {}: {}",
+                        commit_info.hash, msg
+                    ),
+                })?;
             let vars = crate::scanner::checkout::manager::TemplateVars::for_commit_checkout(
                 &commit_info.hash,
                 self.scanner_id(),

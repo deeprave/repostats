@@ -15,7 +15,7 @@ pub use crate::queue::publisher::QueuePublisher;
 pub use crate::queue::message::Message;
 
 // Typed queue consumers for compile-time type safety
-// (unused imports removed for cleaner API)
+pub use crate::queue::typed::{TypedQueueConsumer, TypedQueueManagerExt};
 
 // Internal queue implementation (may be needed by some components)
 

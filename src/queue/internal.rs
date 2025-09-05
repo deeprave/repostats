@@ -6,6 +6,7 @@
 //! - Per-consumer position tracking
 //! - Memory management and garbage collection
 
+use crate::core::sync::{handle_mutex_poison, handle_rwlock_read};
 use crate::queue::error::{QueueError, QueueResult};
 use crate::queue::message::{Message, MessageHeader};
 use crate::queue::types::MemoryStats;
@@ -65,27 +66,51 @@ impl MultiConsumerQueue {
     }
 
     /// Get current queue size (number of messages)
-    pub fn size(&self) -> usize {
-        self.messages.read().unwrap().len()
+    pub fn size(&self) -> QueueResult<usize> {
+        let messages =
+            handle_mutex_poison(self.messages.read(), |msg| QueueError::OperationFailed {
+                message: format!("Failed to read message queue size: {}", msg),
+            })?;
+        Ok(messages.len())
     }
 
     /// Get the current head sequence number (next message to be assigned)
-    pub fn head_sequence(&self) -> u64 {
-        *self.next_sequence.read().unwrap()
+    pub fn head_sequence(&self) -> QueueResult<u64> {
+        let sequence = handle_mutex_poison(self.next_sequence.read(), |msg| {
+            QueueError::OperationFailed {
+                message: format!("Failed to read head sequence: {}", msg),
+            }
+        })?;
+        Ok(*sequence)
     }
 
     /// Get the minimum sequence across all consumers (for garbage collection)
-    pub fn min_consumer_sequence(&self) -> Option<u64> {
-        let positions = self.consumer_positions.read().unwrap();
-        positions.values().map(|pos| pos.current_sequence).min()
+    pub fn min_consumer_sequence(&self) -> QueueResult<Option<u64>> {
+        let positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
+            QueueError::OperationFailed {
+                message: format!("Failed to read consumer positions: {}", msg),
+            }
+        })?;
+        Ok(positions.values().map(|pos| pos.current_sequence).min())
     }
 
     /// Register a new consumer with this queue
     pub fn register_consumer(&self, consumer_id: u64) -> QueueResult<()> {
-        let mut positions = self.consumer_positions.write().unwrap();
+        let mut positions = handle_mutex_poison(self.consumer_positions.write(), |msg| {
+            QueueError::OperationFailed {
+                message: format!(
+                    "Failed to acquire consumer positions for registration: {}",
+                    msg
+                ),
+            }
+        })?;
 
         // Start consumer at current head sequence (won't receive historical messages)
-        let current_sequence = *self.next_sequence.read().unwrap();
+        let current_sequence = *handle_mutex_poison(self.next_sequence.read(), |msg| {
+            QueueError::OperationFailed {
+                message: format!("Failed to read sequence number: {}", msg),
+            }
+        })?;
 
         positions.insert(
             consumer_id,
@@ -100,26 +125,36 @@ impl MultiConsumerQueue {
 
     /// Unregister a consumer from this queue
     pub fn unregister_consumer(&self, consumer_id: u64) -> QueueResult<()> {
-        let mut positions = self.consumer_positions.write().unwrap();
+        let mut positions = handle_mutex_poison(self.consumer_positions.write(), |msg| {
+            QueueError::OperationFailed {
+                message: format!(
+                    "Failed to acquire consumer positions for unregistration: {}",
+                    msg
+                ),
+            }
+        })?;
         positions.remove(&consumer_id);
         Ok(())
     }
 
     /// Get all registered consumer IDs
-    pub fn consumer_ids(&self) -> Vec<u64> {
-        self.consumer_positions
-            .read()
-            .unwrap()
-            .keys()
-            .copied()
-            .collect()
+    pub fn consumer_ids(&self) -> QueueResult<Vec<u64>> {
+        let positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
+            QueueError::OperationFailed {
+                message: format!("Failed to read consumer positions: {}", msg),
+            }
+        })?;
+        Ok(positions.keys().copied().collect())
     }
 
     /// Publish a message to the queue
     pub fn publish(&self, mut message: Message) -> QueueResult<u64> {
         // Check queue size limit
         {
-            let messages = self.messages.read().unwrap();
+            let messages =
+                handle_mutex_poison(self.messages.read(), |msg| QueueError::OperationFailed {
+                    message: format!("Failed to read message queue for size check: {}", msg),
+                })?;
             if messages.len() >= self.max_size {
                 return Err(QueueError::QueueFull {
                     max_size: self.max_size,
@@ -129,7 +164,11 @@ impl MultiConsumerQueue {
 
         // Get next sequence number atomically
         let sequence = {
-            let mut next_seq = self.next_sequence.write().unwrap();
+            let mut next_seq = handle_mutex_poison(self.next_sequence.write(), |msg| {
+                QueueError::OperationFailed {
+                    message: format!("Failed to acquire next sequence lock: {}", msg),
+                }
+            })?;
             let current = *next_seq;
             *next_seq += 1;
             current
@@ -145,7 +184,10 @@ impl MultiConsumerQueue {
         };
 
         {
-            let mut messages = self.messages.write().unwrap();
+            let mut messages =
+                handle_mutex_poison(self.messages.write(), |msg| QueueError::OperationFailed {
+                    message: format!("Failed to acquire message queue for publishing: {}", msg),
+                })?;
             messages.push_back(entry);
         }
 
@@ -156,7 +198,14 @@ impl MultiConsumerQueue {
     pub fn read_next(&self, consumer_id: u64) -> QueueResult<Option<Arc<Message>>> {
         // Get current consumer position
         let current_position = {
-            let positions = self.consumer_positions.read().unwrap();
+            let positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
+                QueueError::OperationFailed {
+                    message: format!(
+                        "Failed to read consumer positions for consumer {}: {}",
+                        consumer_id, msg
+                    ),
+                }
+            })?;
             positions
                 .get(&consumer_id)
                 .ok_or_else(|| QueueError::ConsumerNotFound {
@@ -167,7 +216,13 @@ impl MultiConsumerQueue {
 
         // Find next message at or after consumer's position
         let next_message = {
-            let messages = self.messages.read().unwrap();
+            let messages =
+                handle_mutex_poison(self.messages.read(), |msg| QueueError::OperationFailed {
+                    message: format!(
+                        "Failed to read messages for consumer {}: {}",
+                        consumer_id, msg
+                    ),
+                })?;
             messages
                 .iter()
                 .find(|entry| entry.sequence >= current_position)
@@ -177,7 +232,14 @@ impl MultiConsumerQueue {
         if let Some(entry) = next_message {
             // Update consumer position to next expected sequence
             {
-                let mut positions = self.consumer_positions.write().unwrap();
+                let mut positions = handle_mutex_poison(self.consumer_positions.write(), |msg| {
+                    QueueError::OperationFailed {
+                        message: format!(
+                            "Failed to update consumer {} position: {}",
+                            consumer_id, msg
+                        ),
+                    }
+                })?;
                 if let Some(pos) = positions.get_mut(&consumer_id) {
                     pos.current_sequence = entry.sequence + 1;
                     pos.last_read_timestamp = std::time::SystemTime::now();
@@ -192,34 +254,58 @@ impl MultiConsumerQueue {
 
     /// Check if consumer exists
     pub fn has_consumer(&self, consumer_id: u64) -> bool {
-        self.consumer_positions
-            .read()
-            .unwrap()
-            .contains_key(&consumer_id)
+        handle_rwlock_read(self.consumer_positions.read(), |_| {
+            QueueError::OperationFailed {
+                message: "Failed to read consumer positions".to_string(),
+            }
+        })
+        .map(|guard| guard.contains_key(&consumer_id))
+        .unwrap_or(false) // Return false on poison error
     }
 
     /// Get consumer position information
     pub fn consumer_position(&self, consumer_id: u64) -> Option<u64> {
-        self.consumer_positions
-            .read()
-            .unwrap()
-            .get(&consumer_id)
-            .map(|pos| pos.current_sequence)
+        handle_rwlock_read(self.consumer_positions.read(), |_| {
+            QueueError::OperationFailed {
+                message: format!(
+                    "Failed to read consumer positions for consumer {}",
+                    consumer_id
+                ),
+            }
+        })
+        .ok()
+        .and_then(|guard| guard.get(&consumer_id).map(|pos| pos.current_sequence))
     }
 
     /// Get consumer's last read timestamp
-    pub fn consumer_last_read_time(&self, consumer_id: u64) -> Option<std::time::SystemTime> {
-        self.consumer_positions
-            .read()
-            .unwrap()
+    pub fn consumer_last_read_time(
+        &self,
+        consumer_id: u64,
+    ) -> QueueResult<Option<std::time::SystemTime>> {
+        let positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
+            QueueError::OperationFailed {
+                message: format!("Failed to read consumer positions for timestamp: {}", msg),
+            }
+        })?;
+        Ok(positions
             .get(&consumer_id)
-            .map(|pos| pos.last_read_timestamp)
+            .map(|pos| pos.last_read_timestamp))
     }
 
     /// Calculate memory usage statistics for this queue
-    pub fn memory_stats(&self) -> MemoryStats {
-        let messages = self.messages.read().unwrap();
-        let consumer_positions = self.consumer_positions.read().unwrap();
+    pub fn memory_stats(&self) -> QueueResult<MemoryStats> {
+        let messages =
+            handle_mutex_poison(self.messages.read(), |msg| QueueError::OperationFailed {
+                message: format!("Failed to read messages for memory stats: {}", msg),
+            })?;
+        let consumer_positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
+            QueueError::OperationFailed {
+                message: format!(
+                    "Failed to read consumer positions for memory stats: {}",
+                    msg
+                ),
+            }
+        })?;
 
         let message_count = messages.len();
 
@@ -240,12 +326,12 @@ impl MultiConsumerQueue {
 
         let overhead_bytes = arc_overhead + entry_overhead + consumer_overhead;
 
-        MemoryStats {
+        Ok(MemoryStats {
             total_messages: message_count,
             total_bytes: message_data_bytes + overhead_bytes,
             message_data_bytes,
             overhead_bytes,
-        }
+        })
     }
 
     /// Calculate the approximate memory size of a Message
@@ -264,13 +350,19 @@ impl MultiConsumerQueue {
     /// Returns the number of messages collected
     pub fn collect_garbage(&self) -> QueueResult<usize> {
         // Find the minimum sequence number across all consumers
-        let min_sequence = match self.min_consumer_sequence() {
+        let min_sequence = match self.min_consumer_sequence()? {
             Some(seq) => seq,
             None => return Ok(0), // No consumers, can't collect anything
         };
 
         // Remove messages with sequence < min_sequence
-        let mut messages = self.messages.write().unwrap();
+        let mut messages =
+            handle_mutex_poison(self.messages.write(), |msg| QueueError::OperationFailed {
+                message: format!(
+                    "Failed to acquire message queue for garbage collection: {}",
+                    msg
+                ),
+            })?;
         let original_len = messages.len();
 
         // Keep messages that are >= min_sequence (not yet read by all consumers)
@@ -290,9 +382,9 @@ mod tests {
         let queue = MultiConsumerQueue::new("test-queue".to_string(), 1000);
 
         assert_eq!(queue.queue_id(), "test-queue");
-        assert_eq!(queue.size(), 0);
-        assert_eq!(queue.head_sequence(), 1);
-        assert_eq!(queue.consumer_ids().len(), 0);
+        assert_eq!(queue.size().unwrap(), 0);
+        assert_eq!(queue.head_sequence().unwrap(), 1);
+        assert_eq!(queue.consumer_ids().unwrap().len(), 0);
     }
 
     #[test]
@@ -308,7 +400,7 @@ mod tests {
         assert!(queue.has_consumer(2));
         assert!(!queue.has_consumer(3));
 
-        let consumer_ids = queue.consumer_ids();
+        let consumer_ids = queue.consumer_ids().unwrap();
         assert_eq!(consumer_ids.len(), 2);
         assert!(consumer_ids.contains(&1));
         assert!(consumer_ids.contains(&2));
@@ -326,7 +418,7 @@ mod tests {
 
         assert!(!queue.has_consumer(1));
         assert!(queue.has_consumer(2));
-        assert_eq!(queue.consumer_ids().len(), 1);
+        assert_eq!(queue.consumer_ids().unwrap().len(), 1);
     }
 
     #[test]
@@ -351,8 +443,8 @@ mod tests {
 
         assert_eq!(seq1, 1);
         assert_eq!(seq2, 2);
-        assert_eq!(queue.size(), 2);
-        assert_eq!(queue.head_sequence(), 3); // Next sequence to be assigned
+        assert_eq!(queue.size().unwrap(), 2);
+        assert_eq!(queue.head_sequence().unwrap(), 3); // Next sequence to be assigned
     }
 
     #[test]

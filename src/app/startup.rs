@@ -266,12 +266,20 @@ pub async fn startup(
     // Extract checkout settings from CLI arguments
     let checkout_settings = final_args.checkout_settings();
 
+    // Extract case sensitivity override from CLI arguments
+    let case_sensitivity_override = final_args.resolve_case_sensitivity_override();
+
     log::debug!(
         "Starting scanner configuration with {} repositories",
         normalized_repositories.len()
     );
-    let scanner_manager_opt =
-        configure_scanner(&normalized_repositories, query_params, checkout_settings).await;
+    let scanner_manager_opt = configure_scanner(
+        &normalized_repositories,
+        query_params,
+        checkout_settings,
+        case_sensitivity_override,
+    )
+    .await;
 
     // Return the configured scanner manager for main.rs to use, or None if no valid scanners
     match scanner_manager_opt {
@@ -595,14 +603,19 @@ async fn configure_scanner(
     repositories: &[std::path::PathBuf],
     query_params: crate::core::query::QueryParams,
     checkout_settings: Option<crate::app::cli::CheckoutSettings>,
+    case_sensitivity_override: Option<bool>,
 ) -> Option<std::sync::Arc<crate::scanner::api::ScannerManager>> {
     use crate::scanner::api::ScannerManager;
 
     // Repository list is already normalized upstream to include default current directory
     let repositories_to_scan = repositories.to_vec();
 
-    // Step 1: Create ScannerManager
-    let scanner_manager = ScannerManager::create().await;
+    // Step 1: Create ScannerManager with case sensitivity override
+    let scanner_manager = if let Some(override_value) = case_sensitivity_override {
+        std::sync::Arc::new(ScannerManager::with_case_sensitivity(Some(override_value)))
+    } else {
+        ScannerManager::create().await
+    };
 
     // Step 2: Get plugin manager and check for active processing plugins
     let plugin_names = {

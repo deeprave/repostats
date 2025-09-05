@@ -29,8 +29,8 @@ mod tests {
 
         // Get the single global queue and verify the message is there
         let queue = manager.get_global_queue().unwrap();
-        assert_eq!(queue.size(), 1);
-        assert_eq!(queue.head_sequence(), 2); // Next sequence should be 2
+        assert_eq!(queue.size().unwrap(), 1);
+        assert_eq!(queue.head_sequence().unwrap(), 2); // Next sequence should be 2
 
         // There should be only one queue total
         assert_eq!(manager.queue_count(), 1);
@@ -71,7 +71,7 @@ mod tests {
 
         // Verify single global queue has all messages
         let queue = manager.get_global_queue().unwrap();
-        assert_eq!(queue.size(), 3);
+        assert_eq!(queue.size().unwrap(), 3);
         assert_eq!(manager.queue_count(), 1); // Still only one queue
     }
 
@@ -104,7 +104,7 @@ mod tests {
 
         // Both messages in the single global queue
         let queue = manager.get_global_queue().unwrap();
-        assert_eq!(queue.size(), 2);
+        assert_eq!(queue.size().unwrap(), 2);
         assert_eq!(manager.queue_count(), 1); // Still only one queue
     }
 
@@ -137,10 +137,10 @@ mod tests {
 
         // There should be only ONE queue with both messages
         assert_eq!(manager.queue_count(), 1);
-        assert_eq!(manager.total_message_count(), 2);
+        assert_eq!(manager.total_message_count().unwrap(), 2);
 
         // The single global queue should have 2 messages
         let queue = manager.get_global_queue().unwrap();
-        assert_eq!(queue.size(), 2);
+        assert_eq!(queue.size().unwrap(), 2);
     }
 }

@@ -39,7 +39,7 @@ mod queue_manager_tests {
         // Test initial state - single global queue always exists
         assert_eq!(manager.queue_count(), 1); // Global queue exists on creation
         assert_eq!(manager.producer_ids().len(), 1); // Returns ["global"]
-        assert_eq!(manager.total_message_count(), 0); // No messages yet
+        assert_eq!(manager.total_message_count().unwrap(), 0); // No messages yet
 
         // Creating publishers doesn't create new queues - they all use the same global queue
         let _publisher1 = manager
