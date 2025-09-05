@@ -124,9 +124,10 @@ impl QueueManager {
                     context
                 );
                 Err(
-                    crate::notifications::error::NotificationError::ChannelClosed(
-                        "Event publish timeout".to_string(),
-                    ),
+                    crate::notifications::error::NotificationError::ChannelClosed(format!(
+                        "Queue lifecycle event publish timeout: {} for {}",
+                        event_type_str, context
+                    )),
                 )
             }
         }

@@ -1251,7 +1251,8 @@ impl ScannerTask {
                     })?;
 
             // Step 2: Extract Git files (ScannerTask responsibility)
-            self.extract_commit_files_to_directory(&commit_info.hash, &target_dir, None)
+            let files_extracted = self
+                .extract_commit_files_to_directory(&commit_info.hash, &target_dir, None)
                 .await
                 .map_err(|e| ScanError::Repository {
                     message: format!(
@@ -1259,6 +1260,13 @@ impl ScannerTask {
                         commit_info.hash, e
                     ),
                 })?;
+
+            log::debug!(
+                "Successfully extracted {} files for commit {} to checkout directory: {}",
+                files_extracted,
+                commit_info.hash,
+                target_dir.display()
+            );
 
             Ok(target_dir)
         } else {
