@@ -18,23 +18,7 @@ use crate::plugin::error::PluginError;
 /// * `error` - The plugin error to handle
 /// * `operation_context` - Human-readable description of the operation that failed
 ///
-/// # Examples
-/// ```rust,no_run
-/// # use repostats::plugin::api::{log_plugin_error_with_context, PluginError};
-///
-/// // User-actionable error shows specific message
-/// let err = PluginError::Generic { message: "Invalid argument '--foo'".to_string() };
-/// log_plugin_error_with_context(&err, "Command line parsing");
-/// // Logs: "FATAL: Invalid argument '--foo'"
-///
-/// // System error shows generic context with debug details
-/// let err = PluginError::LoadError {
-///     plugin_name: "test".to_string(),
-///     cause: "Library not found".to_string()
-/// };
-/// log_plugin_error_with_context(&err, "Plugin loading");
-/// // Logs: "FATAL: Plugin loading" + debug details
-/// ```
+/// (Example usage removed – helper not exposed publicly.)
 pub fn log_plugin_error_with_context(error: &PluginError, operation_context: &str) {
     log_error_with_context(error, operation_context);
 }

@@ -101,28 +101,23 @@ impl Args {
         ignore_errors: bool,
         include_help_version: bool,
     ) -> clap::Command {
+        let star = Self::get_colored_star(color_enabled);
+
         let mut cmd = clap::Command::new(command_name.to_string())
             .about("Repository statistics and analysis tool")
             .version(env!("CARGO_PKG_VERSION"))
-            .after_help(Self::get_after_help(color_enabled))
             .disable_version_flag(true)
             .disable_help_flag(true)
-            .styles(Self::get_help_styles(color_enabled))
             .help_template("{before-help}{name} {version}\n{author-with-newline}{about-with-newline}\n{usage-heading} {usage}\n\n{all-args}{after-help}")
-            .override_usage("repostats [OPTIONS] [COMMAND]");
-
-        // Apply color configuration - always set to respect NO_COLOR environment variable
-        let star = Self::get_colored_star(color_enabled);
-        cmd = cmd.color(color_choice);
+            .override_usage("repostats [OPTIONS] COMMAND [ARGS]...")
+            .after_help(Self::get_after_help(color_enabled))
+            .color(color_choice)
+            .styles(Self::get_help_styles(color_enabled))
+            .ignore_errors(ignore_errors);
 
         // Apply external subcommands configuration
         if allow_external_subcommands {
             cmd = cmd.allow_external_subcommands(true);
-        }
-
-        // Apply error handling configuration
-        if ignore_errors {
-            cmd = cmd.ignore_errors(true);
         }
 
         // Add argument definitions - non-filter options first (lowercase short forms)
@@ -500,41 +495,16 @@ impl Args {
         } else {
             // Create styled output with enhanced asterisk highlighting
             clap::builder::Styles::styled()
-                .usage(
-                    Style::new()
-                        .bold()
-                        .underline()
-                        .fg_color(Some(Color::Ansi(AnsiColor::Yellow))),
-                )
                 .header(
                     Style::new()
                         .bold()
                         .fg_color(Some(Color::Ansi(AnsiColor::Yellow))),
                 )
-                // .literal(
-                // Style::new()
-                //     .fg_color(Some(Color::Ansi(AnsiColor::)))
-                // )
-                .invalid(
-                    Style::new()
-                        .bold()
-                        .fg_color(Some(Color::Ansi(AnsiColor::Red))),
-                )
-                .error(
-                    Style::new()
-                        .bold()
-                        .fg_color(Some(Color::Ansi(AnsiColor::Red))),
-                )
-                .valid(
-                    Style::new()
-                        .bold()
-                        .fg_color(Some(Color::Ansi(AnsiColor::Green))),
-                )
-                .placeholder(
-                    Style::new()
-                        .bold()
-                        .fg_color(Some(Color::Ansi(AnsiColor::BrightCyan))), // Brown-ish alternative
-                )
+                .literal(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan))))
+                .placeholder(Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightGreen))))
+                .valid(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green))))
+                .invalid(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red))))
+                .error(Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightRed))))
         }
     }
 
