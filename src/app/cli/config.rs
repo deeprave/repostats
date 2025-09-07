@@ -145,10 +145,13 @@ impl Args {
             args.plugin_exclusions.extend(deduplicated);
         }
         if let Some(color) = config.get("color").and_then(|v| v.as_bool()) {
-            args.color = color;
+            args.color = Some(color);
         }
-        if let Some(no_color) = config.get("no-color").and_then(|v| v.as_bool()) {
-            args.no_color = no_color;
+        if let Some(no_color_enabled) = config.get("no-color").and_then(|v| v.as_bool()) {
+            // Legacy support: Convert no-color=true to color=Some(false), no-color=false to color=Some(true)
+            // This maintains backward compatibility while providing clear semantics
+            let color_enabled = !no_color_enabled;
+            args.color = Some(color_enabled);
         }
         if let Some(log_level) = config.get("log-level").and_then(|v| v.as_str()) {
             args.log_level = Some(log_level.to_string());

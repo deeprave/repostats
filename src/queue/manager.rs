@@ -56,6 +56,9 @@ pub struct QueueManager {
     global_queue: Arc<MultiConsumerQueue>,
     /// Memory threshold in bytes for automatic garbage collection
     memory_threshold_bytes: RwLock<Option<usize>>,
+    #[cfg(test)]
+    notification_manager:
+        Option<Arc<tokio::sync::Mutex<crate::notifications::manager::AsyncNotificationManager>>>,
 }
 
 impl QueueManager {
@@ -70,6 +73,22 @@ impl QueueManager {
                 10000,                             // Default queue size
             )),
             memory_threshold_bytes: RwLock::new(None), // No automatic garbage collection by default
+            #[cfg(test)]
+            notification_manager: None,
+        }
+    }
+    #[cfg(test)]
+    pub fn new_with_notification_manager(
+        manager: Arc<tokio::sync::Mutex<crate::notifications::manager::AsyncNotificationManager>>,
+    ) -> Self {
+        Self {
+            next_consumer_id: AtomicU64::new(0),
+            global_queue: Arc::new(MultiConsumerQueue::new(
+                Self::GLOBAL_QUEUE_ID.to_string(), // Single global queue name
+                10000,                             // Default queue size
+            )),
+            memory_threshold_bytes: RwLock::new(None), // No automatic garbage collection by default
+            notification_manager: Some(manager),
         }
     }
 
@@ -78,6 +97,7 @@ impl QueueManager {
     /// This method publishes lifecycle events with a timeout to prevent deadlocks.
     /// Event publishing failures are logged but do not prevent queue operations.
     async fn publish_lifecycle_event(
+        &self,
         event_type: QueueEventType,
         context: &str,
     ) -> Result<(), crate::notifications::error::NotificationError> {
@@ -86,13 +106,18 @@ impl QueueManager {
             QueueEventType::Shutdown => "Shutdown",
             _ => "Other",
         };
-
+        #[cfg(test)]
+        let mut notification_manager = if let Some(ref nm) = self.notification_manager {
+            nm.lock().await
+        } else {
+            crate::notifications::api::get_notification_service().await
+        };
+        #[cfg(not(test))]
         let mut notification_manager = crate::notifications::api::get_notification_service().await;
         let event = Event::Queue(QueueEvent::new(
             event_type,
             Self::GLOBAL_QUEUE_ID.to_string(),
         ));
-
         let publish_result = timeout(
             Self::EVENT_PUBLISH_TIMEOUT,
             notification_manager.publish(event),
@@ -157,18 +182,25 @@ impl QueueManager {
     /// ```
     pub async fn create() -> Arc<Self> {
         let manager = Arc::new(Self::new());
-
         // Publish Started event with timeout protection
-        if let Err(e) =
-            Self::publish_lifecycle_event(QueueEventType::Started, "queue creation").await
-        {
-            log::error!(
-                "Queue creation notification failed - monitoring may be impacted: {:?}",
-                e
-            );
-        }
-
+        let _ = manager
+            .publish_lifecycle_event(QueueEventType::Started, "queue creation")
+            .await;
         manager
+    }
+    #[cfg(test)]
+    pub async fn create_with_notification_manager(
+        manager: Arc<tokio::sync::Mutex<crate::notifications::manager::AsyncNotificationManager>>,
+    ) -> Arc<Self> {
+        let manager_arc = Arc::new(Self::new_with_notification_manager(manager.clone()));
+        // Publish Started event with timeout protection
+        let _ = manager_arc
+            .publish_lifecycle_event(
+                QueueEventType::Started,
+                "QueueManager::create_with_notification_manager",
+            )
+            .await;
+        manager_arc
     }
 
     /// Create a publisher for a specific producer_id (publishes to global queue)
@@ -427,13 +459,8 @@ impl QueueManager {
     /// ```
     pub async fn shutdown(&self) {
         // Publish Shutdown event with timeout protection
-        if let Err(e) =
-            Self::publish_lifecycle_event(QueueEventType::Shutdown, "queue shutdown").await
-        {
-            log::error!(
-                "Queue shutdown notification failed - monitoring may miss shutdown event: {:?}",
-                e
-            );
-        }
+        let _ = self
+            .publish_lifecycle_event(QueueEventType::Shutdown, "queue shutdown")
+            .await;
     }
 }

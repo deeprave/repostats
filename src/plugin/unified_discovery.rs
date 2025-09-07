@@ -249,7 +249,10 @@ mod tests {
 
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].info.name, "dump");
-        assert_eq!(plugins[0].info.api_version, crate::get_plugin_api_version());
+        assert_eq!(
+            plugins[0].info.api_version,
+            crate::core::version::get_api_version()
+        );
     }
 
     #[tokio::test]

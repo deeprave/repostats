@@ -16,7 +16,8 @@ pub struct ShutdownCoordinator {
 impl ShutdownCoordinator {
     /// Create a new shutdown coordinator
     pub fn new() -> (Self, broadcast::Receiver<()>) {
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        // Use a larger channel to avoid dropping bursts of shutdown signals
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(8);
         let shutdown_requested = Arc::new(AtomicBool::new(false));
 
         let coordinator = Self {
@@ -99,7 +100,9 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
             libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         }
 
+        use std::sync::atomic::AtomicUsize;
         use tokio::signal::unix::{signal, SignalKind};
+        let signal_count = Arc::new(AtomicUsize::new(0));
         let signals = [
             SignalKind::interrupt(),
             SignalKind::terminate(),
@@ -110,12 +113,38 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
         for kind in signals {
             let tx = shutdown_tx.clone();
             let requested = shutdown_requested.clone();
+            let sig_ctr = signal_count.clone();
 
             tokio::spawn(async move {
                 if let Ok(mut sig) = signal(kind) {
-                    sig.recv().await;
+                    while sig.recv().await.is_some() {
+                        let prev = sig_ctr.fetch_add(1, Ordering::AcqRel);
+                        requested.store(true, Ordering::Release);
+                        let _ = tx.send(());
+                        if prev >= 1 {
+                            std::process::exit(130);
+                        }
+                        // After first signal break to avoid busy loop for same kind
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Fallback generic ctrl_c handler (covers terminals where specific UNIX signals not delivered as expected)
+        {
+            let tx = shutdown_tx.clone();
+            let requested = shutdown_requested.clone();
+            let sig_ctr = signal_count.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    let prev = sig_ctr.fetch_add(1, Ordering::AcqRel);
                     requested.store(true, Ordering::Release);
                     let _ = tx.send(());
+                    if prev >= 1 {
+                        log::warn!("Second Ctrl-C received; forcing immediate exit");
+                        std::process::exit(130);
+                    }
                 }
             });
         }

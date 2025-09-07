@@ -430,7 +430,7 @@ impl ScannerManager {
         // Ensure we don't exceed the actual hash length (defensive programming)
         let truncate_length = std::cmp::min(Self::SCANNER_ID_HASH_LENGTH, hash_hex.len());
         let truncated_hash = &hash_hex[..truncate_length];
-        Ok(format!("scan-{}", truncated_hash))
+        Ok(truncated_hash.to_string())
     }
 
     /// Create a scanner for a repository with queue integration
@@ -486,33 +486,30 @@ impl ScannerManager {
         let checkout_manager = if needs_checkout {
             // Create the checkout manager using existing logic
             let checkout_manager = if let Some(ref settings) = checkout_settings {
+                // Use provided template or a concise default: <tmp>/checkout/<scanner>/<commit>
+                // (Removed long 'repostats-checkout-<hash>' segment for brevity.)
+                let default_template = format!(
+                    "{}/checkout/{}/{{commit-id}}",
+                    std::env::temp_dir().display(),
+                    &scanner_id
+                );
                 CheckoutManager::with_settings(
-                    settings.checkout_template.clone().unwrap_or_else(|| {
-                        format!(
-                            "{}/repostats-checkout-{}/{{commit-id}}",
-                            std::env::temp_dir().display(),
-                            &scanner_id
-                        )
-                    }),
+                    settings
+                        .checkout_template
+                        .clone()
+                        .unwrap_or_else(|| default_template),
                     settings.keep_checkouts,
                     settings.force_overwrite,
                 )
             } else {
                 // Create default checkout manager for FILE_CONTENT requirement
-                let template = Some(format!(
-                    "{}/repostats-checkout-{}/{{commit-id}}",
+                let template = format!(
+                    "{}/checkout/{}/{{commit-id}}",
                     std::env::temp_dir().display(),
                     &scanner_id
-                ));
+                );
                 CheckoutManager::with_settings(
-                    template.unwrap_or_else(|| {
-                        format!(
-                            "{}/repostats-checkout-{}/{{commit-id}}",
-                            std::env::temp_dir().display(),
-                            &scanner_id
-                        )
-                    }),
-                    false, // don't keep files by default
+                    template, false, // don't keep files by default
                     true,  // force overwrite
                 )
             };

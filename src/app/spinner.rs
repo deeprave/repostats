@@ -71,7 +71,7 @@ pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) 
             event = event_receiver.recv() => {
                 match event {
                     Some(Event::Scan(ScanEvent { event_type: ScanEventType::Progress, .. })) => {
-                        //spinner.tick();
+                        spinner.tick();
                     }
                     Some(Event::System(SystemEvent { event_type: SystemEventType::Shutdown, .. })) => {
                         spinner.finish();
@@ -120,11 +120,19 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Integration test that requires exclusive access to global notification service"]
     async fn test_spinner_lifecycle_integration() {
-        // This test should FAIL until we integrate spinner into main.rs
+        // Don't clear subscribers to avoid race conditions with other tests
+        let notification_manager = get_notification_service().await;
 
         // Create shutdown channel
         let (_shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+
+        // Start spinner task before publishing events
+        let spinner_task = tokio::spawn(async move { run_spinner(shutdown_rx).await });
+
+        // Give the spinner a moment to subscribe
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Publish a progress event
         let mut notification_manager = get_notification_service().await;
@@ -133,18 +141,10 @@ mod tests {
             "test-scanner".to_string(),
             "Test progress message".to_string(),
         ));
-
-        // This should work but spinner won't be running in main.rs yet
         notification_manager
             .publish(progress_event.clone())
             .await
             .unwrap();
-
-        // Try to start spinner task directly
-        let spinner_task = tokio::spawn(async move { run_spinner(shutdown_rx).await });
-
-        // Give it a moment to start
-        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Publish another progress event
         notification_manager.publish(progress_event).await.unwrap();

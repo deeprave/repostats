@@ -17,6 +17,62 @@ use std::time::SystemTime;
 
 use super::core::ScannerTask;
 
+/**
+ * Normalize a path by removing redundant separators and current directory components.
+ * Keeps relative/absolute semantics intact.
+ *
+ * # Limitations
+ * - Does not resolve symlinks or canonicalize the path
+ * - Does not handle UNC paths (Windows network paths) or platform-specific quirks beyond separator normalization
+ * - Does not validate path existence or accessibility
+ * - For full normalization (including symlink and UNC handling), use std::fs::canonicalize, but note that it requires the path to exist
+ *
+ * # Examples
+ * - `./foo/../bar` becomes `bar`
+ * - `foo//bar` becomes `foo/bar`
+ * - `/./foo/./bar` becomes `/foo/bar`
+ * - Absolute paths remain absolute, relative paths remain relative
+ *
+ * # Arguments
+ * * `p` - The path to normalize
+ *
+ * # Returns
+ * A new PathBuf with normalized components
+ */
+fn normalize_path(p: &std::path::Path) -> std::path::PathBuf {
+    use std::path::{Component, PathBuf};
+    let mut buf = PathBuf::new();
+
+    for comp in p.components() {
+        match comp {
+            Component::RootDir => {
+                // Preserve root directory for absolute paths
+                buf.push(std::path::MAIN_SEPARATOR.to_string());
+            }
+            Component::CurDir => {
+                // Skip current directory components (.)
+            }
+            Component::ParentDir => {
+                // Always preserve parent directory components (..)
+                // Note: We don't try to resolve .. against previous components
+                // as this could change semantics in the presence of symlinks
+                buf.push("..");
+            }
+            Component::Prefix(prefix) => {
+                // Handle Windows drive letters and UNC prefixes
+                // This preserves platform-specific path prefixes as-is
+                buf.push(prefix.as_os_str());
+            }
+            Component::Normal(name) => {
+                // Regular path component
+                buf.push(name);
+            }
+        }
+    }
+
+    buf
+}
+
 /// Internal structure for holding diff file information during analysis
 #[derive(Debug, Clone)]
 pub(crate) struct DiffFileInfo {
@@ -26,6 +82,30 @@ pub(crate) struct DiffFileInfo {
     pub insertions: usize,
     pub deletions: usize,
     pub is_binary: bool,
+    pub mode: Option<String>,
+}
+
+/// Map a git tree entry mode to a concise string label
+fn format_entry_mode(mode: gix::object::tree::EntryMode) -> &'static str {
+    // Methods confirmed available: is_blob, is_executable, is_tree. Symlink/submodule require pattern match on Debug.
+    if mode.is_blob() && !mode.is_executable() {
+        return "file";
+    }
+    if mode.is_blob() && mode.is_executable() {
+        return "exec";
+    }
+    if mode.is_tree() {
+        return "tree";
+    }
+    // Fallback heuristic via Debug formatting
+    let dbg = format!("{:?}", mode);
+    if dbg.contains("Link") {
+        return "symlink";
+    }
+    if dbg.contains("Commit") {
+        return "submodule";
+    }
+    "unknown"
 }
 
 /// Trait for error types that can handle Git repository operation failures
@@ -255,6 +335,7 @@ impl ScannerTask {
             }
         };
 
+        let start_commit_id = start_commit.id();
         let walk = start_commit
             .ancestors()
             .all()
@@ -356,10 +437,20 @@ impl ScannerTask {
                 committer_name: committer.name.to_string(),
                 committer_email: committer.email.to_string(),
                 timestamp: Self::git_time_to_system_time(&time),
-                message: message
-                    .body()
-                    .map(|b| b.to_string())
-                    .unwrap_or_else(|| message.summary().to_string()),
+                // Reconstruct full commit message: summary + blank line + body (if present)
+                message: {
+                    let summary = message.summary().to_string();
+                    if let Some(body_ref) = message.body() {
+                        let body_str = body_ref.to_string();
+                        if !body_str.trim().is_empty() {
+                            format!("{}\n\n{}", summary, body_str)
+                        } else {
+                            summary
+                        }
+                    } else {
+                        summary
+                    }
+                },
                 parent_hashes: commit.parent_ids().map(|id| id.to_string()).collect(),
                 insertions: commit_insertions,
                 deletions: commit_deletions,
@@ -372,23 +463,28 @@ impl ScannerTask {
             })
             .await?;
 
+            // Always accumulate line statistics from commit summary stats.
+            total_insertions += commit_insertions;
+            total_deletions += commit_deletions;
+
             // Process file changes if required
             if self.requirements().requires_file_changes() {
-                let file_changes = self.analyze_commit_diff(&commit).await?;
+                let is_checkout_target = commit.id() == start_commit_id;
+                let file_changes = self
+                    .analyze_commit_diff(&commit, is_checkout_target)
+                    .await?;
 
                 // Accumulate statistics from file changes
                 let mut unique_files = std::collections::HashSet::new();
                 for file_change_msg in file_changes {
                     if let ScanMessage::FileChange {
                         file_path,
-                        change_data,
+                        change_data: _change_data,
                         ..
                     } = &file_change_msg
                     {
                         unique_files.insert(file_path.clone());
-                        total_insertions += change_data.insertions;
-                        total_deletions += change_data.deletions;
-
+                        // Do NOT add insertions/deletions here; already counted via commit summary to avoid double counting
                         // Forward the file change message
                         message_handler(file_change_msg).await?;
                     }
@@ -549,6 +645,7 @@ impl ScannerTask {
     pub async fn analyze_commit_diff(
         &self,
         commit: &gix::Commit<'_>,
+        is_checkout_target: bool,
     ) -> ScanResult<Vec<ScanMessage>> {
         // Get diff between this commit and its parent(s) first to calculate statistics
         let diff_files = self.get_commit_diff_files(commit).await?;
@@ -563,16 +660,19 @@ impl ScannerTask {
         let commit_info =
             self.extract_commit_info_with_stats(commit, total_insertions, total_deletions)?;
 
-        // Create checkout path if FILE_CONTENT is required
-        let checkout_path = if self.requirements().requires_file_content() {
+        // Establish checkout root exactly once on the target commit; reuse afterward.
+        if is_checkout_target
+            && self.requirements().requires_file_content()
+            && self.checkout_root.lock().unwrap().is_none()
+        {
             match self.create_checkout_for_commit(&commit_info).await {
-                Ok(path) => {
+                Ok(dir) => {
                     log::debug!(
-                        "Created checkout for commit {} at: {}",
+                        "Initialized checkout root for target commit {} at {}",
                         commit_info.hash,
-                        path.display()
+                        dir.display()
                     );
-                    Some(path)
+                    *self.checkout_root.lock().unwrap() = Some(dir);
                 }
                 Err(e) => {
                     log::error!(
@@ -583,17 +683,30 @@ impl ScannerTask {
                     return Err(e);
                 }
             }
-        } else {
-            None
-        };
+        }
 
         let mut file_change_messages = Vec::new();
 
         for diff_file in diff_files {
-            // Create full file path for checkout_path (not just base directory)
-            let file_checkout_path = checkout_path
-                .as_ref()
-                .map(|base_dir| base_dir.join(&diff_file.new_path));
+            // Attach checkout_path only the first (newest) time we see a file, skip Deleted
+            let mut file_checkout_path = None;
+            // Snapshot root (clone PathBuf) to drop lock quickly
+            let root_opt = self.checkout_root.lock().unwrap().clone();
+            if let Some(root) = root_opt.as_ref() {
+                if !matches!(
+                    diff_file.change_type,
+                    crate::scanner::types::ChangeType::Deleted
+                ) {
+                    let mut seen = self.seen_checkout_files.lock().unwrap();
+                    if !seen.contains(&diff_file.new_path) {
+                        // Use join then normalize to avoid duplicate separators (//) if any
+                        let raw_path = root.join(&diff_file.new_path);
+                        let normalized = normalize_path(&raw_path);
+                        file_checkout_path = Some(normalized);
+                        seen.insert(diff_file.new_path.clone());
+                    }
+                }
+            }
 
             let file_change_data = FileChangeData {
                 change_type: diff_file.change_type,
@@ -603,6 +716,14 @@ impl ScannerTask {
                 deletions: diff_file.deletions,
                 is_binary: diff_file.is_binary,
                 checkout_path: file_checkout_path,
+                file_modified_epoch: Some(
+                    commit_info
+                        .timestamp
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                ),
+                file_mode: diff_file.mode.clone(),
             };
 
             file_change_messages.push(ScanMessage::FileChange {
@@ -613,6 +734,8 @@ impl ScannerTask {
                 timestamp: std::time::SystemTime::now(),
             });
         }
+
+        // No synthetic events: only diff-originating file changes have checkout_path.
 
         // If no files changed, return empty list (not placeholder data)
         Ok(file_change_messages)
@@ -759,6 +882,8 @@ impl ScannerTask {
                             insertions,
                             deletions: 0,
                             is_binary,
+                            // gix EntryMode doesn't expose direct numeric; use its raw value via into() if possible or fallback
+                            mode: Some(format!("{:?}", entry.mode())),
                         });
 
                         files_analyzed += 1;
@@ -861,9 +986,11 @@ impl ScannerTask {
     ) -> ScanResult<()> {
         use std::collections::BTreeMap;
 
-        // Collect entries from both trees for comparison
-        let mut parent_entries = BTreeMap::new();
-        let mut commit_entries = BTreeMap::new();
+        // Collect entries from both trees for comparison (store oid + mode)
+        let mut parent_entries: BTreeMap<String, (gix::ObjectId, gix::object::tree::EntryMode)> =
+            BTreeMap::new();
+        let mut commit_entries: BTreeMap<String, (gix::ObjectId, gix::object::tree::EntryMode)> =
+            BTreeMap::new();
 
         // Recursively traverse parent tree
         Self::traverse_tree_recursive(repo, parent_tree, String::new(), &mut parent_entries)?;
@@ -879,11 +1006,11 @@ impl ScannerTask {
 
         // Analyze differences
         for path in all_paths {
-            let parent_oid = parent_entries.get(&path);
-            let commit_oid = commit_entries.get(&path);
+            let parent_entry = parent_entries.get(&path);
+            let commit_entry = commit_entries.get(&path);
 
-            match (parent_oid, commit_oid) {
-                (None, Some(oid)) => {
+            match (parent_entry, commit_entry) {
+                (None, Some((oid, mode))) => {
                     // File added
                     let is_binary = Self::get_binary_status(repo, &path, *oid);
                     let insertions = if !is_binary {
@@ -899,9 +1026,10 @@ impl ScannerTask {
                         insertions,
                         deletions: 0,
                         is_binary,
+                        mode: Some(format_entry_mode(*mode).to_string()),
                     });
                 }
-                (Some(oid), None) => {
+                (Some((oid, mode)), None) => {
                     // File deleted
                     let is_binary = Self::get_binary_status(repo, &path, *oid);
                     let deletions = if !is_binary {
@@ -917,9 +1045,12 @@ impl ScannerTask {
                         insertions: 0,
                         deletions,
                         is_binary,
+                        mode: Some(format_entry_mode(*mode).to_string()),
                     });
                 }
-                (Some(parent_oid), Some(commit_oid)) if parent_oid != commit_oid => {
+                (Some((parent_oid, _parent_mode)), Some((commit_oid, commit_mode)))
+                    if parent_oid != commit_oid =>
+                {
                     // File modified
                     let is_binary = Self::get_binary_status(repo, &path, *commit_oid);
                     let (insertions, deletions) = if !is_binary {
@@ -938,6 +1069,7 @@ impl ScannerTask {
                             insertions,
                             deletions,
                             is_binary,
+                            mode: Some(format_entry_mode(*commit_mode).to_string()),
                         });
                     }
                 }
@@ -955,7 +1087,10 @@ impl ScannerTask {
         repo: &gix::Repository,
         tree: &gix::Tree<'_>,
         path_prefix: String,
-        entries: &mut std::collections::BTreeMap<String, gix::ObjectId>,
+        entries: &mut std::collections::BTreeMap<
+            String,
+            (gix::ObjectId, gix::object::tree::EntryMode),
+        >,
     ) -> ScanResult<()> {
         for entry in tree.iter() {
             let entry = entry.map_err(|e| ScanError::Repository {
@@ -974,8 +1109,8 @@ impl ScannerTask {
             };
 
             if entry.mode().is_blob() {
-                // This is a file - add it to our entries
-                entries.insert(full_path, entry.oid().to_owned());
+                // This is a file - add it to our entries with mode
+                entries.insert(full_path, (entry.oid().to_owned(), entry.mode()));
             } else if entry.mode().is_tree() {
                 // This is a directory - recursively traverse it
                 let subtree_obj =
@@ -1447,6 +1582,8 @@ impl ScannerTask {
                 })?;
 
                 *extracted_count += 1;
+
+                // No path collection required (we no longer synthesize additional events)
 
                 // Report progress if callback provided
                 if let Some(callback) = progress_callback {

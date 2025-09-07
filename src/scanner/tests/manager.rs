@@ -117,15 +117,8 @@ async fn test_scanner_id_generation() {
 
         let scanner_id = result.unwrap();
 
-        // Should start with "scan-" prefix
-        assert!(
-            scanner_id.starts_with("scan-"),
-            "Scanner ID should start with 'scan-': {}",
-            scanner_id
-        );
-
-        // Should be a valid hex string after the prefix (16 chars for truncated SHA256)
-        let hash_part = &scanner_id[5..]; // Remove "scan-" prefix
+        // Should be a valid hex string of 16 chars (truncated SHA256)
+        let hash_part = &scanner_id;
         assert_eq!(
             hash_part.len(),
             16,
@@ -177,15 +170,10 @@ async fn test_scanner_task_initialization() {
     let scanner_task = result.unwrap();
 
     // Verify scanner ID format
-    assert!(
-        scanner_task.scanner_id().starts_with("scan-"),
-        "Scanner ID should start with 'scan-': {}",
-        scanner_task.scanner_id()
-    );
     assert_eq!(
         scanner_task.scanner_id().len(),
-        21, // "scan-" + 16 char truncated SHA256
-        "Scanner ID should be 17 characters total: {}",
+        16,
+        "Scanner ID should be 16-char truncated SHA256: {}",
         scanner_task.scanner_id()
     );
 

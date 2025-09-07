@@ -3,9 +3,10 @@
 //! Event and notification-related operations for scanner lifecycle management.
 
 use super::core::ScannerTask;
+#[cfg(test)]
+use crate::notifications::api::SystemEvent;
 use crate::notifications::api::{
-    Event, EventFilter, EventReceiver, QueueEventType, ScanEvent, ScanEventType, SystemEvent,
-    SystemEventType,
+    Event, EventFilter, EventReceiver, QueueEventType, ScanEvent, ScanEventType, SystemEventType,
 };
 use crate::scanner::error::{ScanError, ScanResult};
 use std::time::SystemTime;

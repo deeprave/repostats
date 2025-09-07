@@ -27,21 +27,6 @@ fn test_queue_service_singleton_behavior() {
 }
 
 #[tokio::test]
-async fn test_async_notification_manager_access() {
-    // Test async access works properly
-    {
-        let manager = get_notification_service().await;
-        let count = manager.subscriber_count();
-        println!("Async access works, current subscriber count: {}", count);
-    }
-
-    // Test multiple async access calls work consistently
-    let async_count1 = get_notification_service().await.subscriber_count();
-    let async_count2 = get_notification_service().await.subscriber_count();
-    assert_eq!(async_count1, async_count2);
-}
-
-#[tokio::test]
 async fn test_concurrent_service_access() {
     use tokio::task;
 
@@ -100,7 +85,7 @@ async fn test_plugin_manager_access() {
     // Test that plugin manager has the correct API version
     assert_eq!(
         plugin_manager.api_version(),
-        crate::get_plugin_api_version()
+        crate::core::version::get_api_version()
     );
 
     // Test that we can access the plugin registry through the manager

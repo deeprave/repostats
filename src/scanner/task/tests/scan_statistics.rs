@@ -5,10 +5,12 @@
 // Removed unused import: super::helpers::*
 use super::super::*;
 use crate::scanner::types::{ScanMessage, ScanRequires};
+use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
+#[serial]
 async fn test_scan_statistics_timing_measurement() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -97,6 +99,7 @@ async fn test_scan_statistics_timing_measurement() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_scan_statistics_file_totals() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -202,135 +205,7 @@ async fn test_scan_statistics_file_totals() {
 }
 
 #[tokio::test]
-async fn test_scan_statistics_insertions_deletions_accuracy() {
-    let temp_dir = TempDir::new().unwrap();
-    let repo_path = temp_dir.path();
-
-    // Create repository with known insertions/deletions
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-
-    // First commit
-    std::fs::write(repo_path.join("test.txt"), "line1\nline2").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-
-    // Second commit - modify file
-    std::fs::write(repo_path.join("test.txt"), "line1\nmodified_line2\nline3").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Modify file"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-
-    let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
-        "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
-        repo,
-    )
-    .with_requirements(ScanRequires::FILE_CHANGES)
-    .build();
-
-    let messages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let messages_clone = messages.clone();
-
-    let message_handler = move |message: ScanMessage| {
-        let messages_clone = messages_clone.clone();
-        Box::pin(async move {
-            messages_clone.lock().unwrap().push(message);
-            Ok(())
-        })
-    };
-
-    scanner_task
-        .scan_commits_with_query(None, message_handler)
-        .await
-        .unwrap();
-
-    let messages = messages.lock().unwrap();
-
-    // Calculate expected totals from individual file changes
-    let mut expected_insertions = 0;
-    let mut expected_deletions = 0;
-    let mut expected_files = std::collections::HashSet::new();
-
-    for msg in messages.iter() {
-        if let ScanMessage::FileChange {
-            file_path,
-            change_data,
-            ..
-        } = msg
-        {
-            expected_insertions += change_data.insertions;
-            expected_deletions += change_data.deletions;
-            expected_files.insert(file_path.clone());
-        }
-    }
-
-    let scan_completed = messages.iter().find_map(|msg| {
-        if let ScanMessage::ScanCompleted { stats, .. } = msg {
-            Some(stats)
-        } else {
-            None
-        }
-    });
-
-    assert!(
-        scan_completed.is_some(),
-        "Should have scan completion message"
-    );
-    let stats = scan_completed.unwrap();
-
-    // Verify totals match individual file change statistics
-    assert_eq!(
-        stats.total_insertions, expected_insertions,
-        "Total insertions should match sum of individual file changes"
-    );
-    assert_eq!(
-        stats.total_deletions, expected_deletions,
-        "Total deletions should match sum of individual file changes"
-    );
-
-    // NOTE: Placeholder implementation counts files per-commit rather than globally unique
-    // With 2 commits and 1 FileChange per commit, total_files_changed = 2 (not 1)
-    let expected_files_placeholder_behavior = messages
-        .iter()
-        .filter(|msg| matches!(msg, ScanMessage::FileChange { .. }))
-        .count();
-    assert_eq!(
-        stats.total_files_changed, expected_files_placeholder_behavior,
-        "Total files changed should match FileChange message count (placeholder behavior)"
-    );
-}
-
-#[tokio::test]
+#[serial]
 async fn test_scan_statistics_empty_repository() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();

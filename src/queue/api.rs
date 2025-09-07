@@ -12,7 +12,7 @@ pub use crate::queue::manager::QueueManager;
 pub use crate::queue::publisher::QueuePublisher;
 
 // Message types and utilities
-pub use crate::queue::message::Message;
+pub use crate::queue::message::{Message, MessageHeader}; // re-export header for test helpers
 
 // Typed queue consumers for compile-time type safety
 pub use crate::queue::typed::{TypedQueueConsumer, TypedQueueManagerExt};

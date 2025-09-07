@@ -9,9 +9,11 @@ pub mod retry;
 pub mod services;
 pub mod shutdown;
 pub mod strings;
+pub mod styles;
 pub mod sync;
 pub mod time;
 pub mod validation;
+pub mod version; // centralized styling palette for CLI & plugins
 
 #[cfg(test)]
 mod tests;

@@ -64,6 +64,8 @@ impl ContextualError for StartupError {
             StartupError::QueryValidationFailed { .. } => true,
             StartupError::CommandSegmentationFailed { .. } => true,
             StartupError::ConfigurationError { .. } => true,
+            // Surface user-actionable plugin errors (like unknown args) instead of hiding
+            StartupError::PluginFailed { error } if error.is_user_actionable() => true,
 
             // System errors users cannot directly fix
             StartupError::LoggingInitFailed { .. }
@@ -81,6 +83,9 @@ impl ContextualError for StartupError {
             StartupError::QueryValidationFailed { message } => Some(message),
             StartupError::CommandSegmentationFailed { message } => Some(message),
             StartupError::ConfigurationError { message } => Some(message),
+            StartupError::PluginFailed { error } if error.is_user_actionable() => {
+                error.user_message()
+            }
             _ => None,
         }
     }
@@ -112,8 +117,9 @@ pub async fn startup(
     // Stage 1: Initial parsing for configuration discovery
     let args = initial_args(command_name)?;
     let command_title = title_case(command_name);
-    let use_color =
-        (args.color || std::io::IsTerminal::is_terminal(&std::io::stdout())) && !args.no_color;
+    let use_color = args
+        .color
+        .unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
 
     // Check if --plugins flag was provided (early exit)
     if args.plugins {
@@ -147,9 +153,6 @@ pub async fn startup(
         .clone()
         .or(final_args.plugin_dir.clone())
         .or(dirs::config_dir().map(|d| d.join(command_title).to_string_lossy().to_string()));
-    let color = args.color || final_args.color;
-    let no_color = args.no_color || final_args.no_color;
-    let use_color = (color || std::io::IsTerminal::is_terminal(&std::io::stdout())) && !no_color;
 
     // Stage 2: Reconfigure logging with final values
     let log_level = args.log_level.clone().or(final_args.log_level.clone());
@@ -173,13 +176,7 @@ pub async fn startup(
     }
 
     // Stage 3: Final global args parsing with collected arguments
-    Args::parse_from_args(
-        &mut final_args,
-        command_name,
-        &args.global_args,
-        color,
-        no_color,
-    );
+    Args::parse_from_args(&mut final_args, command_name, &args.global_args, args.color);
 
     // Validate CLI arguments before proceeding
     if let Err(e) = final_args.validate() {

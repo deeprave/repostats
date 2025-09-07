@@ -1,133 +1,127 @@
 //! CLI display utilities for formatting output
+//!
+//! This module intentionally ignores the custom global style palette for the plugin
+//! table to simplify colour handling while alignment issues are resolved.
 
+use crate::core::styles::{style_role_to_tabled_color, StyleRole}; // unified style roles
 use crate::plugin::types::PluginInfo;
+use std::io::{self, Write};
 use tabled::{
     settings::{
-        object::{Columns, Object, Rows},
-        Alignment, Color, Modify, Style, Width,
+        object::{Cell, Columns, Rows},
+        Alignment, Modify, Style, Width,
     },
     Table, Tabled,
 };
+use unicode_width::UnicodeWidthStr;
 
-/// Table formatting constants
-const PLUGIN_COLUMN_WIDTH: usize = 8;
-const TABLE_SEPARATOR: &str = "--------";
-const SEPARATOR_SUFFIX: &str = "--";
+const PLUGIN_COLUMN_MIN_WIDTH: usize = 8;
 
-/// Table row data structure for tabled
 #[derive(Tabled)]
 struct DisplayRow {
     #[tabled(rename = "Plugin")]
     plugin: String,
-    #[tabled(rename = "Functions / Description")]
-    content: String,
+    #[tabled(rename = "Functions & Description")]
+    content: String, // functions list (possibly colored) then newline then description
 }
 
-/// Display plugin information in a simple formatted table using tabled
-/// Returns an error if plugin data is invalid or malformed
-pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result<(), String> {
+/// Display plugin table to a provided writer for improved testability and composability
+pub fn display_plugin_table_to_writer<W: Write>(
+    plugins: Vec<PluginInfo>,
+    use_color: bool,
+    mut writer: W,
+) -> Result<(), String> {
     if plugins.is_empty() {
-        eprintln!("No plugins discovered.");
+        writeln!(writer, "No plugins discovered.").map_err(|e| e.to_string())?;
         return Ok(());
     }
 
-    // Enhanced validation for table safety
-    for plugin in &plugins {
-        if plugin.name.is_empty() {
-            return Err("Invalid plugin: empty name".to_string());
+    // Basic validation to avoid control characters disrupting table layout
+    for p in &plugins {
+        if p.name.is_empty() {
+            return Err("Invalid plugin: empty name".into());
         }
-        if plugin.name.chars().any(|c| c.is_control() || c == '\t') {
+        if p.name.chars().any(|c| c.is_control() || c == '\t') {
             return Err(format!(
-                "Invalid plugin '{}': name contains control characters",
-                plugin.name
+                "Invalid plugin '{}': control chars in name",
+                p.name
             ));
         }
-        if plugin
-            .description
-            .chars()
-            .any(|c| c.is_control() && c != ' ')
-        {
+        if p.description.chars().any(|c| c.is_control() && c != ' ') {
             return Err(format!(
-                "Invalid plugin '{}': description contains control characters",
-                plugin.name
+                "Invalid plugin '{}': control chars in description",
+                p.name
             ));
         }
-        // Validate function names as well
-        for func in &plugin.functions {
-            if func.name.chars().any(|c| c.is_control() || c == '\t') {
+        for f in &p.functions {
+            if f.name.chars().any(|c| c.is_control() || c == '\t') {
                 return Err(format!(
-                    "Invalid function '{}' in plugin '{}': contains control characters",
-                    func.name, plugin.name
+                    "Invalid function '{}' in plugin '{}'",
+                    f.name, p.name
                 ));
             }
         }
     }
 
-    // Build table data with proper structure
-    let mut table_data = Vec::new();
+    // Build rows (single content column, multi-line: functions list then description)
+    let plugin_rows: Vec<DisplayRow> = plugins
+        .into_iter()
+        .map(|p| {
+            let fn_list_plain = if p.functions.is_empty() {
+                "(none)".to_string()
+            } else {
+                p.functions
+                    .iter()
+                    .map(|f| f.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let fn_list = if use_color {
+                StyleRole::Valid.paint(&fn_list_plain, true)
+            } else {
+                fn_list_plain
+            };
+            let content = format!("{}\n{}", fn_list, p.description);
+            DisplayRow {
+                plugin: p.name,
+                content,
+            }
+        })
+        .collect();
 
-    for plugin in plugins {
-        let function_names: Vec<String> = plugin
-            .functions
-            .iter()
-            .map(|func| func.name.clone())
-            .collect();
+    // Determine plugin column width using Unicode width for proper alignment
+    let plugin_width = plugin_rows
+        .iter()
+        .map(|r| r.plugin.width())
+        .max()
+        .map(|w| w.max(PLUGIN_COLUMN_MIN_WIDTH))
+        .unwrap_or(PLUGIN_COLUMN_MIN_WIDTH);
 
-        let functions_text = function_names.join(", ");
-
-        // Add plugin row with functions
-        table_data.push(DisplayRow {
-            plugin: plugin.name,
-            content: functions_text,
-        });
-
-        // Add description row with empty plugin column
-        table_data.push(DisplayRow {
-            plugin: String::new(),
-            content: plugin.description,
-        });
-    }
-
-    // Create and configure table
-    let mut table = Table::new(table_data);
+    let mut table = Table::new(plugin_rows);
     table
-        .with(Style::empty())
-        .with(Modify::new(Columns::new(0..1)).with(Width::wrap(PLUGIN_COLUMN_WIDTH)))
-        .with(Modify::new(Columns::new(0..1)).with(Alignment::left()));
+        .with(Style::modern()) // Use tabled's built-in modern style for visual separation
+        .with(Modify::new(Columns::new(0..1)).with(Width::wrap(plugin_width)))
+        .with(Modify::new(Columns::new(0..2)).with(Alignment::left()));
 
-    // Apply colors if requested
     if use_color {
-        table
-            .with(Modify::new(Rows::new(0..1)).with(Color::FG_CYAN))
-            .with(Modify::new(Columns::new(0..1).not(Rows::new(0..1))).with(Color::FG_BLUE));
+        // Header row styling
+        if let Some(c) = style_role_to_tabled_color(StyleRole::Header) {
+            table.with(Modify::new(Rows::new(0..1)).with(c));
+        }
+        // Plugin name column styling for data rows (starting from row 1, since row 0 is header)
+        let total_rows = table.count_rows();
+        for r in 1..total_rows {
+            if let Some(c) = style_role_to_tabled_color(StyleRole::Literal) {
+                table.with(Modify::new(Cell::new(r, 0)).with(c));
+            }
+        }
     }
 
-    // Output with custom separator
-    print_table_with_separator(&table);
-
+    writeln!(writer, "{}", table.to_string()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Helper function to print tabled output with custom separator line
-fn print_table_with_separator(table: &Table) {
-    let table_output = table.to_string();
-    let mut lines = table_output.lines();
-
-    // Print header
-    if let Some(header) = lines.next() {
-        println!("{}", header);
-
-        // Print custom separator
-        println!(
-            "{:<width$} {}",
-            TABLE_SEPARATOR,
-            SEPARATOR_SUFFIX,
-            width = PLUGIN_COLUMN_WIDTH
-        );
-
-        // Print remaining data lines
-        for line in lines {
-            println!("{}", line);
-        }
-    }
+/// Convenience function for printing to stdout
+pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result<(), String> {
+    display_plugin_table_to_writer(plugins, use_color, io::stdout())
 }
