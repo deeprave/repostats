@@ -11,12 +11,7 @@ mod queue;
 mod scanner;
 use notifications::api::*;
 
-include!(concat!(env!("OUT_DIR"), "/version.rs"));
-
-/// Parse the API version string from build script into u32
-pub fn get_plugin_api_version() -> u32 {
-    PLUGIN_API_VERSION.parse().unwrap_or(20250727)
-}
+// Version access is now provided via crate::core::version
 
 static COMMAND_NAME: &str = "repostats";
 
@@ -93,8 +88,15 @@ async fn main() {
 
             log::info!("{command_name}: ✅ Repository Statistics Tool starting");
 
-            // Spawn spinner task if appropriate
-            if app::spinner::should_show_spinner() {
+            // Spawn spinner task if appropriate (skip if any plugin suppresses progress)
+            let suppress_progress = {
+                let plugin_manager = core::services::get_plugin_service().await;
+                plugin_manager
+                    .get_combined_requirements()
+                    .await
+                    .suppresses_progress()
+            };
+            if !suppress_progress && app::spinner::should_show_spinner() {
                 let spinner_shutdown = shutdown_rx.resubscribe();
                 tokio::spawn(async move {
                     if let Err(e) = app::spinner::run_spinner(spinner_shutdown).await {
@@ -144,7 +146,7 @@ async fn run_scanner_with_coordination(
     // Initialize plugin event subscription for coordination (prevents race conditions)
     log::trace!("Initializing plugin event subscription");
     {
-        let mut plugin_manager = core::services::get_plugin_service().await;
+        let plugin_manager = core::services::get_plugin_service().await;
         log::trace!("Acquired plugin manager lock for initialization");
 
         if let Err(e) = plugin_manager
@@ -184,7 +186,7 @@ async fn run_scanner_with_coordination(
                         let timeout = std::time::Duration::from_secs(30);
 
                         // Scope plugin manager access for graceful stop
-                        let mut plugin_mgr = core::services::get_plugin_service().await;
+                        let plugin_mgr = core::services::get_plugin_service().await;
                         if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                             if !summary.all_completed() {
                                 log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
@@ -196,7 +198,7 @@ async fn run_scanner_with_coordination(
                         let shutdown_rx = shutdown_rx.resubscribe();
 
                         // Scope plugin manager access for completion wait
-                        let mut plugin_mgr = core::services::get_plugin_service().await;
+                        let plugin_mgr = core::services::get_plugin_service().await;
                         if let Err(e) = plugin_mgr.await_all_plugins_completion_with_shutdown(shutdown_rx).await {
                             log::trace!("Plugin completion wait failed: {}", e);
                         }
@@ -210,7 +212,7 @@ async fn run_scanner_with_coordination(
                     let timeout = std::time::Duration::from_secs(30);
 
                     // Scope plugin manager access for graceful stop after scanner failure
-                    let mut plugin_mgr = core::services::get_plugin_service().await;
+                    let plugin_mgr = core::services::get_plugin_service().await;
                     if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                         if !summary.all_completed() {
                             log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
@@ -230,7 +232,7 @@ async fn run_scanner_with_coordination(
                     let timeout = std::time::Duration::from_secs(30);
 
                     // Scope plugin manager access for signal-triggered graceful stop
-                    let mut plugin_mgr = core::services::get_plugin_service().await;
+                    let plugin_mgr = core::services::get_plugin_service().await;
                     if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                         if !summary.all_completed() {
                             log::trace!("Some plugins failed to stop gracefully: {:?}", summary);

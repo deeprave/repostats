@@ -66,19 +66,24 @@ pub trait ContextualError: std::error::Error {
 /// log_error_with_context(&system_err, "Configuration loading");
 /// // Logs: "FATAL: Missing required field 'port'"
 /// ```
-pub fn log_error_with_context<E: ContextualError>(error: &E, operation_context: &str) {
+pub fn log_error_with_context<E: ContextualError + std::fmt::Display + std::fmt::Debug>(
+    error: &E,
+    operation_context: &str,
+) {
+    // Always emit a primary fatal line containing at least some context plus
+    // useful detail. If the error is user-actionable we prefer its user message.
     if error.is_user_actionable() {
         if let Some(user_msg) = error.user_message() {
             log::error!("FATAL: {}", user_msg);
         } else {
-            // Fallback if trait implementation is inconsistent
             log::error!("FATAL: {}", operation_context);
-            log::debug!("Error details: {}", error);
         }
     } else {
         log::error!("FATAL: {}", operation_context);
-        log::debug!("Error details: {}", error);
     }
+    // Always provide detail only at debug level (requested change)
+    log::debug!("DETAIL: {}", error);
+    log::debug!("DEBUG_DETAILS: {:?}", error);
 }
 
 #[cfg(test)]

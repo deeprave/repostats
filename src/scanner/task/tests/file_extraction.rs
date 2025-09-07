@@ -3,10 +3,12 @@
 //! Tests for extracting commit files to directories - Git operations moved from CheckoutManager
 
 use super::super::*;
+use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
+#[serial]
 async fn test_extract_commit_files_to_directory() {
     // Create a test repository with known files
     let temp_dir = TempDir::new().unwrap();
@@ -125,6 +127,7 @@ async fn test_extract_commit_files_to_directory() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_checkout_path_contains_full_file_paths() {
     use crate::scanner::types::{ChangeType, FileChangeData};
     use std::path::PathBuf;
@@ -153,6 +156,8 @@ async fn test_checkout_path_contains_full_file_paths() {
             deletions: 0,
             is_binary: false,
             checkout_path: file_checkout_path,
+            file_modified_epoch: Some(1_600_000_000),
+            file_mode: Some("Added".into()),
         };
 
         // Verify the checkout_path contains the full file path
@@ -189,6 +194,7 @@ async fn test_checkout_path_contains_full_file_paths() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_extract_files_creates_full_checkout_paths() {
     // Integration test using the actual extract_commit_files_to_directory method
     let temp_dir = TempDir::new().unwrap();
@@ -288,6 +294,7 @@ async fn test_extract_files_creates_full_checkout_paths() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_resolve_revision_method() {
     // TDD test for resolve_revision method moved from CheckoutManager to ScannerTask
     let temp_dir = TempDir::new().unwrap();

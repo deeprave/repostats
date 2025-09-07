@@ -34,13 +34,10 @@ pub struct Args {
     #[arg(long = "exclude-plugin", value_name = "NAMES", action = ArgAction::Append)]
     pub plugin_exclusions: Vec<String>,
 
-    /// Force colored output (overrides TTY detection and NO_COLOR)
+    /// Color output control:
+    /// --color sets Some(true), --no-color sets Some(false), unspecified = None (auto/TTY)
     #[arg(short = 'g', long = "color")]
-    pub color: bool,
-
-    /// Disable colored output
-    #[arg(short = 'n', long = "no-color", conflicts_with = "color")]
-    pub no_color: bool,
+    pub color: Option<bool>,
 
     /// Log level
     #[arg(short = 'l', long = "log-level", value_name = "LEVEL", value_parser = ["trace", "debug", "info", "warn", "error", "off"])]
@@ -246,8 +243,7 @@ impl Default for Args {
             config_file: None,
             plugin_dir: None,
             plugin_exclusions: Vec::new(),
-            color: false,
-            no_color: false,
+            color: None,
             log_level: None,
             log_file: None,
             log_format: Some("text".to_string()), // Default format

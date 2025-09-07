@@ -31,6 +31,12 @@ impl ScanRequires {
     /// Full history traversal (includes commits)
     pub const HISTORY: Self = Self((1 << 4) | Self::COMMITS.0);
 
+    /// Suppress progress indicators (e.g., spinner) when plugins produce their own stdout output
+    pub const SUPPRESS_PROGRESS: Self = Self(1 << 5);
+
+    /// File metadata / change info (explicit request; includes file changes and commits)
+    pub const FILE_INFO: Self = Self((1 << 6) | Self::FILE_CHANGES.0);
+
     /// Create from raw bits
     pub const fn from_bits(bits: u64) -> Self {
         Self(bits)
@@ -90,6 +96,16 @@ impl ScanRequires {
     pub const fn requires_history(&self) -> bool {
         self.contains(Self::HISTORY)
     }
+
+    /// Check if progress indicators should be suppressed
+    pub const fn suppresses_progress(&self) -> bool {
+        self.contains(Self::SUPPRESS_PROGRESS)
+    }
+
+    /// Check if file info explicitly requested
+    pub const fn requires_file_info(&self) -> bool {
+        self.contains(Self::FILE_INFO)
+    }
 }
 
 impl Default for ScanRequires {
@@ -140,6 +156,8 @@ impl std::fmt::Display for ScanRequires {
         // Show the highest level in the file content hierarchy
         if self.requires_file_content() {
             requirements.push("FileContent");
+        } else if self.requires_file_info() {
+            requirements.push("FileInfo");
         } else if self.requires_file_changes() {
             requirements.push("FileChanges");
         }
@@ -156,6 +174,10 @@ impl std::fmt::Display for ScanRequires {
             && !self.requires_history()
         {
             requirements.push("Commits");
+        }
+
+        if self.suppresses_progress() {
+            requirements.push("SuppressProgress");
         }
 
         if requirements.is_empty() {
@@ -187,6 +209,10 @@ pub struct FileChangeData {
     pub is_binary: bool,
     /// Full path to the specific checked-out file (if FILE_CONTENT requirement is active)
     pub checkout_path: Option<PathBuf>,
+    /// File's last modified time (epoch seconds) at the scanned commit (approx: commit time unless refined later)
+    pub file_modified_epoch: Option<u64>,
+    /// File mode (permission/type bits) as recorded in the git tree (e.g. "BlobExecutable", "Blob", "Link", etc.)
+    pub file_mode: Option<String>,
 }
 
 /// Repository metadata information

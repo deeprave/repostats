@@ -68,25 +68,14 @@ impl Args {
         }
     }
 
-    /// Determine if colors should be used based on settings
-    fn should_use_colors(color: bool, no_color: bool) -> bool {
-        if color {
-            true
-        } else if no_color || std::env::var("NO_COLOR").is_ok() {
-            false
-        } else {
-            std::io::IsTerminal::is_terminal(&std::io::stdout())
-        }
-    }
-
-    /// Get colored asterisk string for help text
-    fn get_colored_star(effective_color: bool) -> String {
-        use clap::builder::styling::{AnsiColor, Color, Style};
-
-        if effective_color {
-            let style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-            // `style` prints the ANSI sequence, `{:#}` prints the reset code
-            format!("{style}*{:#}", style)
+    /// Get colored asterisk string for help text (uses styles palette)
+    fn get_colored_star(color_setting: Option<bool>) -> String {
+        use crate::core::styles::StyleRole;
+        // Resolve auto to TTY detection
+        let enabled =
+            color_setting.unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
+        if enabled {
+            StyleRole::Header.paint("*", enabled)
         } else {
             "*".to_string()
         }
@@ -95,7 +84,7 @@ impl Args {
     /// Build the complete clap Command with all argument definitions
     fn build_clap_command(
         command_name: &str,
-        color_enabled: bool,
+        color_enabled: Option<bool>,
         color_choice: clap::ColorChoice,
         allow_external_subcommands: bool,
         ignore_errors: bool,
@@ -112,7 +101,7 @@ impl Args {
             .override_usage("repostats [OPTIONS] COMMAND [ARGS]...")
             .after_help(Self::get_after_help(color_enabled))
             .color(color_choice)
-            .styles(Self::get_help_styles(color_enabled))
+            .styles(Self::get_help_styles(color_enabled.unwrap_or(false)))
             .ignore_errors(ignore_errors);
 
         // Apply external subcommands configuration
@@ -160,15 +149,16 @@ impl Args {
                     .short('g')
                     .long("color")
                     .action(ArgAction::SetTrue)
+                    .overrides_with("no_color")
                     .help("Force colored output (overrides TTY detection and NO_COLOR)"),
             )
             .arg(
                 clap::Arg::new("no_color")
                     .short('n')
                     .long("no-color")
-                    .conflicts_with("color")
                     .action(ArgAction::SetTrue)
-                    .help("Disable colored output"),
+                    .overrides_with("color")
+                    .help("Force non-colored output (overrides FORCE_COLOR)"),
             )
             // Logging options
             .arg(
@@ -408,7 +398,7 @@ impl Args {
         // Call the helper method with initial parsing configuration (no help/version, no color styling)
         let cmd = Self::build_clap_command(
             command_name,
-            false, // No color configuration for initial parse
+            None, // No color configuration for initial parse (auto later)
             clap::ColorChoice::Auto,
             true,  // Allow external subcommands
             true,  // Ignore errors
@@ -420,6 +410,14 @@ impl Args {
                 // Parse using clap's standard mechanism with proper error handling
                 let mut parsed_args = Self::from_arg_matches(&matches)
                     .map_err(|e| ValidationError::new(&format!("CLI parsing failed: {}", e)))?;
+
+                parsed_args.color = if matches.value_source("color").is_some() {
+                    Some(true)
+                } else if matches.value_source("no_color").is_some() {
+                    Some(false)
+                } else {
+                    None
+                };
 
                 // Handle special "none" value for log_file (same as parse_from_args)
                 if let Some(ref path) = parsed_args.log_file {
@@ -470,42 +468,23 @@ impl Args {
         consumed_args
     }
 
-    fn color_choice(color: bool, no_color: bool) -> clap::ColorChoice {
-        if color {
-            clap::ColorChoice::Always
-        } else if no_color {
-            clap::ColorChoice::Never
-        } else {
-            clap::ColorChoice::Auto
+    fn color_choice(color_setting: Option<bool>) -> clap::ColorChoice {
+        match color_setting {
+            Some(true) => clap::ColorChoice::Always,
+            Some(false) => clap::ColorChoice::Never,
+            None => clap::ColorChoice::Auto,
         }
     }
 
     /// Get after-help text with colored asterisk if colors are enabled
-    fn get_after_help(color_enabled: bool) -> String {
+    fn get_after_help(color_enabled: Option<bool>) -> String {
         let star = Self::get_colored_star(color_enabled);
         format!("{star} can be specified multiple times or as a comma-separated list")
     }
 
     /// Get help styles for colored output based on color settings
     fn get_help_styles(colors_enabled: bool) -> clap::builder::Styles {
-        use clap::builder::styling::{AnsiColor, Color, Style};
-
-        if !colors_enabled {
-            clap::builder::Styles::plain()
-        } else {
-            // Create styled output with enhanced asterisk highlighting
-            clap::builder::Styles::styled()
-                .header(
-                    Style::new()
-                        .bold()
-                        .fg_color(Some(Color::Ansi(AnsiColor::Yellow))),
-                )
-                .literal(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan))))
-                .placeholder(Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightGreen))))
-                .valid(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green))))
-                .invalid(Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red))))
-                .error(Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightRed))))
-        }
+        crate::core::styles::palette_to_clap(colors_enabled)
     }
 
     /// Parse global arguments from a provided argument list
@@ -513,16 +492,14 @@ impl Args {
         margs: &mut Self,
         command_name: &str,
         args: &[String],
-        color: bool,
-        no_color: bool,
+        color: Option<bool>,
     ) {
-        let effective_color = Self::should_use_colors(color, no_color);
-        let color_choice = Self::color_choice(color, no_color);
+        let color_choice = Self::color_choice(color);
 
         // Use the helper method with standard parsing configuration
         let cmd = Self::build_clap_command(
             command_name,
-            effective_color, // Apply color configuration
+            color,
             color_choice,
             false, // No external subcommands
             false, // Don't ignore errors
@@ -561,12 +538,13 @@ impl Args {
         if let Some(plugin_exclusions) = matches.get_many::<String>("plugin_exclusions") {
             args.plugin_exclusions.extend(plugin_exclusions.cloned());
         }
-        if matches.get_flag("color") {
-            args.color = true;
-        }
-        if matches.get_flag("no_color") {
-            args.no_color = true;
-        }
+        args.color = if matches.value_source("color").is_some() {
+            Some(true)
+        } else if matches.value_source("no_color").is_some() {
+            Some(false)
+        } else {
+            None
+        };
         if let Some(log_level) = matches.get_one::<String>("log_level") {
             args.log_level = Some(log_level.clone());
         }

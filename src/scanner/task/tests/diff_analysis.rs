@@ -5,10 +5,12 @@
 // Removed unused import: super::helpers::*
 use super::super::*;
 use crate::scanner::types::{ChangeType, ScanMessage, ScanRequires};
+use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
+#[serial]
 async fn test_real_commit_diff_analysis() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -118,6 +120,7 @@ async fn test_real_commit_diff_analysis() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_commit_diff_statistics() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -167,7 +170,10 @@ async fn test_commit_diff_statistics() {
         .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
-    let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+    let file_changes = scanner_task
+        .analyze_commit_diff(&commit, true)
+        .await
+        .unwrap();
 
     // Calculate total statistics
     let total_insertions: usize = file_changes
@@ -201,6 +207,7 @@ async fn test_commit_diff_statistics() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_file_change_types() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -271,7 +278,10 @@ async fn test_file_change_types() {
         .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
-    let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+    let file_changes = scanner_task
+        .analyze_commit_diff(&commit, true)
+        .await
+        .unwrap();
 
     // Should detect different change types
     let change_types: std::collections::HashSet<_> = file_changes
@@ -301,6 +311,7 @@ async fn test_file_change_types() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_file_paths_for_renames() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -362,7 +373,10 @@ async fn test_file_paths_for_renames() {
         .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
-    let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+    let file_changes = scanner_task
+        .analyze_commit_diff(&commit, true)
+        .await
+        .unwrap();
 
     // Find rename operations and verify old/new paths
     let rename_changes: Vec<_> = file_changes
@@ -402,6 +416,7 @@ async fn test_file_paths_for_renames() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_line_level_statistics_per_file() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -461,7 +476,10 @@ async fn test_line_level_statistics_per_file() {
         .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
-    let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+    let file_changes = scanner_task
+        .analyze_commit_diff(&commit, true)
+        .await
+        .unwrap();
 
     // Verify that different files have different line statistics
     let file_stats: std::collections::HashMap<String, (usize, usize)> = file_changes
@@ -498,6 +516,7 @@ async fn test_line_level_statistics_per_file() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_binary_vs_text_file_detection() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -559,7 +578,10 @@ async fn test_binary_vs_text_file_detection() {
         .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
-    let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+    let file_changes = scanner_task
+        .analyze_commit_diff(&commit, true)
+        .await
+        .unwrap();
 
     let file_binary_status: std::collections::HashMap<String, bool> = file_changes
         .iter()
@@ -598,6 +620,7 @@ async fn test_binary_vs_text_file_detection() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_comprehensive_change_type_coverage() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -754,7 +777,10 @@ async fn test_comprehensive_change_type_coverage() {
             .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
             .unwrap();
         let commit = commit_obj.try_into_commit().unwrap();
-        let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+        let file_changes = scanner_task
+            .analyze_commit_diff(&commit, true)
+            .await
+            .unwrap();
 
         // Verify expected change type is present
         let detected_types: std::collections::HashSet<ChangeType> = file_changes
@@ -788,6 +814,7 @@ async fn test_comprehensive_change_type_coverage() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_real_file_paths_not_placeholder() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -838,7 +865,10 @@ async fn test_real_file_paths_not_placeholder() {
         .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
-    let file_changes = scanner_task.analyze_commit_diff(&commit).await.unwrap();
+    let file_changes = scanner_task
+        .analyze_commit_diff(&commit, true)
+        .await
+        .unwrap();
 
     // Extract all file paths from the messages
     let file_paths: Vec<String> = file_changes
@@ -872,6 +902,7 @@ async fn test_real_file_paths_not_placeholder() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_commit_with_no_file_changes() {
     use std::process::Command;
     use tempfile::TempDir;

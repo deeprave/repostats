@@ -7,10 +7,12 @@ use crate::core::query::QueryParams;
 use crate::scanner::tests::helpers::collect_scan_messages;
 // Removed unused imports: super::helpers::*, count_commit_messages
 use crate::scanner::types::{ScanMessage, ScanRequires};
+use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
+#[serial]
 async fn test_commit_traversal_with_max_commits() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -104,6 +106,7 @@ async fn test_commit_traversal_with_max_commits() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_commit_traversal_with_git_ref() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -232,6 +235,7 @@ async fn test_commit_traversal_with_git_ref() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_commit_traversal_ordering() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();

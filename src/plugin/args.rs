@@ -4,14 +4,14 @@
 //! TOML configuration integration, and extensible command building.
 
 use crate::plugin::error::{PluginError, PluginResult};
-use clap::{Arg, ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::collections::HashMap;
 
 /// Configuration context passed to plugins during initialization
 #[derive(Debug, Clone)]
 pub struct PluginConfig {
-    /// Whether colors should be used (already determined at global level)
-    pub use_colors: bool,
+    /// Forced color setting: Some(true)=force on, Some(false)=force off, None=auto (TTY based)
+    pub use_colors: Option<bool>,
     /// Plugin-specific TOML configuration
     pub toml_config: HashMap<String, toml::Value>,
 }
@@ -19,7 +19,7 @@ pub struct PluginConfig {
 impl Default for PluginConfig {
     fn default() -> Self {
         Self {
-            use_colors: false,
+            use_colors: None,
             toml_config: HashMap::new(),
         }
     }
@@ -27,7 +27,7 @@ impl Default for PluginConfig {
 
 impl PluginConfig {
     /// Create a PluginConfig from a TOML table
-    pub fn from_toml(use_colors: bool, toml_table: &toml::value::Table) -> Self {
+    pub fn from_toml(use_colors: Option<bool>, toml_table: &toml::value::Table) -> Self {
         let mut config = HashMap::new();
         for (key, value) in toml_table.iter() {
             config.insert(key.clone(), value.clone());
@@ -65,30 +65,54 @@ pub struct PluginArgParser {
 
 impl PluginArgParser {
     /// Create a new plugin argument parser
-    pub fn new(plugin_name: &str, description: &str, version: &str) -> Self {
+    ///
+    /// Caller supplies whether colors should be used (from global config/environment)
+    pub fn new(
+        plugin_name: &str,
+        description: &str,
+        version: &str,
+        use_colors: Option<bool>,
+    ) -> Self {
+        let colors =
+            use_colors.unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
+
         let command = Command::new(plugin_name.to_string())
             .about(description.to_string())
             .version(version.to_string())
-            .disable_help_flag(true)
             .disable_version_flag(true)
+            .disable_help_flag(true)
+            .color(Self::color_choice(use_colors))
+            .styles(Self::get_help_styles(colors))
             .arg(
-                Arg::new("help")
-                    .long("help")
-                    .short('h')
-                    .action(clap::ArgAction::Help)
-                    .help("Show help information"),
+                clap::Arg::new("version")
+                    .short('v')
+                    .long("version")
+                    .action(ArgAction::Version)
+                    .help("Print version"),
             )
             .arg(
-                Arg::new("version")
-                    .long("version")
-                    .short('v')
-                    .action(clap::ArgAction::Version)
-                    .help("Print version"),
+                clap::Arg::new("help")
+                    .short('h')
+                    .long("help")
+                    .action(ArgAction::Help)
+                    .help("Print help"),
             );
 
         Self {
             command,
             plugin_name: plugin_name.to_string(),
+        }
+    }
+
+    fn get_help_styles(colors_enabled: bool) -> clap::builder::Styles {
+        crate::core::styles::palette_to_clap(colors_enabled)
+    }
+
+    fn color_choice(color_setting: Option<bool>) -> clap::ColorChoice {
+        match color_setting {
+            Some(true) => clap::ColorChoice::Always,
+            Some(false) => clap::ColorChoice::Never,
+            None => clap::ColorChoice::Auto,
         }
     }
 
@@ -116,24 +140,30 @@ impl PluginArgParser {
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                     // Print help or version directly and exit successfully
                     // This is what clap normally does for the main program
-                    print!("{}", e);
+                    // Use print() method to preserve color formatting
+                    let _ = e.print();
                     std::process::exit(0);
                 }
                 _ => {
-                    // Extract just the core error message and simplify it
-                    let error_msg = e.to_string();
-                    let clean_msg = if let Some(msg) = error_msg.strip_prefix("error: ") {
-                        // Simplify clap's verbose "unexpected argument 'X' found" to "Unknown argument 'X'"
-                        if msg.starts_with("unexpected argument") && msg.contains("found") {
-                            msg.replace("unexpected argument", "Unknown argument")
-                                .replace(" found", "")
-                        } else {
-                            msg.to_string()
-                        }
+                    // Preserve clap's full output (which includes Usage:) so the user sees context.
+                    let full = e.to_string();
+                    let mut core_line = full.lines().next().unwrap_or("").trim();
+                    if let Some(stripped) = core_line.strip_prefix("error: ") {
+                        core_line = stripped.trim();
+                    }
+                    let simplified = if core_line.starts_with("unexpected argument")
+                        && core_line.contains("found")
+                    {
+                        core_line
+                            .replace("unexpected argument", "Unknown argument")
+                            .replace(" found", "")
                     } else {
-                        error_msg
+                        core_line.to_string()
                     };
-                    Err(PluginError::Generic { message: clean_msg })
+                    // Do NOT append clap help/usage block per request; return single-line message.
+                    Err(PluginError::Generic {
+                        message: simplified,
+                    })
                 }
             },
         }
@@ -144,16 +174,19 @@ impl PluginArgParser {
 pub fn create_format_args() -> Vec<Arg> {
     vec![
         Arg::new("json")
+            .short('J')
             .long("json")
             .action(clap::ArgAction::SetTrue)
             .help("Output in JSON format")
             .conflicts_with_all(&["text", "compact"]),
         Arg::new("text")
+            .short('T')
             .long("text")
             .action(clap::ArgAction::SetTrue)
             .help("Output in human-readable text format (default)")
             .conflicts_with_all(&["json", "compact"]),
         Arg::new("compact")
+            .short('C')
             .long("compact")
             .action(clap::ArgAction::SetTrue)
             .help("Output in compact single-line format")
@@ -181,6 +214,8 @@ pub fn determine_format(matches: &ArgMatches, config: &PluginConfig) -> OutputFo
     {
         "json" => OutputFormat::Json,
         "compact" => OutputFormat::Compact,
+        // Allow opting into raw explicitly via config: default_format = "raw"
+        "raw" => OutputFormat::Raw,
         _ => OutputFormat::Text,
     }
 }
@@ -191,6 +226,8 @@ pub enum OutputFormat {
     Text,
     Json,
     Compact,
+    /// Raw legacy dump format (pre-RS-32). Not exposed via CLI flag (use config).
+    Raw,
 }
 
 impl std::fmt::Display for OutputFormat {
@@ -199,6 +236,7 @@ impl std::fmt::Display for OutputFormat {
             OutputFormat::Text => write!(f, "text"),
             OutputFormat::Json => write!(f, "json"),
             OutputFormat::Compact => write!(f, "compact"),
+            OutputFormat::Raw => write!(f, "raw"),
         }
     }
 }
@@ -210,7 +248,7 @@ mod tests {
     #[test]
     fn test_plugin_config_default() {
         let config = PluginConfig::default();
-        assert!(!config.use_colors);
+        assert!(config.use_colors.is_none());
         assert!(config.toml_config.is_empty());
     }
 
@@ -233,8 +271,8 @@ mod tests {
 
     #[test]
     fn test_plugin_arg_parser() {
-        let parser =
-            PluginArgParser::new("test", "Test plugin", "1.0.0").args(create_format_args());
+        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", Some(true))
+            .args(create_format_args());
 
         let matches = parser.parse(&["--json".to_string()]).unwrap();
         assert!(matches.get_flag("json"));
@@ -242,8 +280,8 @@ mod tests {
 
     #[test]
     fn test_determine_format() {
-        let parser =
-            PluginArgParser::new("test", "Test plugin", "1.0.0").args(create_format_args());
+        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", Some(false))
+            .args(create_format_args());
         let config = PluginConfig::default();
 
         // Test JSON format

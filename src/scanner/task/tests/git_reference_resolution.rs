@@ -5,10 +5,12 @@
 use super::super::*;
 use super::helpers::*;
 use crate::scanner::types::ScanRequires;
+use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
+#[serial]
 async fn test_enhanced_git_reference_resolution() {
     let (_temp_dir, repo) = create_test_repository();
 
@@ -61,6 +63,7 @@ async fn test_enhanced_git_reference_resolution() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_git_reference_validation() {
     let (_temp_dir, repo) = create_test_repository();
 
@@ -110,6 +113,7 @@ async fn test_git_reference_validation() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_complex_git_reference_patterns() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();

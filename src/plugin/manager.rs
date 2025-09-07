@@ -241,9 +241,14 @@ impl PluginManager {
     }
 
     /// Get color configuration setting
-    fn get_use_colors_setting(&self) -> bool {
-        // Check if stdout is a terminal and no NO_COLOR environment variable
-        std::io::IsTerminal::is_terminal(&std::io::stdout()) && std::env::var("NO_COLOR").is_err()
+    fn get_use_colors_setting(&self) -> Option<bool> {
+        if std::env::var("FORCE_COLOR").is_ok() {
+            return Some(true);
+        }
+        if std::env::var("NO_COLOR").is_ok() {
+            return Some(false);
+        }
+        None // defer to auto (TTY) at point of use
     }
 
     /// Check if a plugin API version is compatible
@@ -1604,7 +1609,7 @@ mod tests {
                 version: "1.0.0".to_string(),
                 description: "Mock plugin".to_string(),
                 author: "Test".to_string(),
-                api_version: crate::get_plugin_api_version(),
+                api_version: crate::core::version::get_api_version(),
                 plugin_type: self.plugin_type(),
                 functions: self.advertised_functions(),
                 required: self.requirements(),
@@ -1648,14 +1653,14 @@ mod tests {
 
     #[test]
     fn test_plugin_manager_creation() {
-        let manager = PluginManager::new(crate::get_plugin_api_version());
+        let manager = PluginManager::new(crate::core::version::get_api_version());
 
-        assert_eq!(manager.api_version, crate::get_plugin_api_version());
+        assert_eq!(manager.api_version, crate::core::version::get_api_version());
     }
 
     #[test]
     fn test_plugin_manager_api_compatibility() {
-        let manager = PluginManager::new(crate::get_plugin_api_version());
+        let manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Same year should be compatible
         assert!(manager.is_api_compatible(20250101));
@@ -1678,7 +1683,7 @@ mod tests {
 
     #[test]
     fn test_validate_plugin_compatibility() {
-        let manager = PluginManager::new(crate::get_plugin_api_version());
+        let manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Compatible plugin
         let compatible_info = PluginInfo {
@@ -1726,7 +1731,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_registry_access() {
-        let manager = PluginManager::new(crate::get_plugin_api_version());
+        let manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Test that we can access the registry
         let registry = manager.registry();
@@ -1745,7 +1750,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_discovery_finds_dump_plugin() {
-        let mut manager = PluginManager::new(crate::get_plugin_api_version());
+        let mut manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Should discover the dump plugin
         manager.discover_plugins(None, &[]).await.unwrap();
@@ -1753,7 +1758,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_discovery_with_exclusions() {
-        let mut manager = PluginManager::new(crate::get_plugin_api_version());
+        let mut manager = PluginManager::new(crate::core::version::get_api_version());
 
         let exclusions = vec!["excluded-plugin".to_string()];
         // Should succeed (no plugins to exclude currently)
@@ -1762,7 +1767,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_plugins_empty() {
-        let manager = PluginManager::new(crate::get_plugin_api_version());
+        let manager = PluginManager::new(crate::core::version::get_api_version());
 
         let all_plugins = manager.list_plugins_with_filter(false).await;
         assert!(all_plugins.is_empty());
@@ -1773,7 +1778,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_plugins_with_registered_plugin() {
-        let manager = PluginManager::new(crate::get_plugin_api_version());
+        let manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Register a plugin
         {
@@ -1840,7 +1845,7 @@ mod tests {
         // This test verifies the dual storage race condition is fixed
         // It tests that consumer storage and activation use consistent single storage
 
-        let mut manager = PluginManager::new(crate::get_plugin_api_version());
+        let mut manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Before initialization, shared storage should be None
         assert!(
@@ -1881,7 +1886,7 @@ mod tests {
         // This test demonstrates the signal handling integration issue:
         // Plugin manager has its own shutdown_requested flag that's separate from ShutdownCoordinator
 
-        let plugin_manager = PluginManager::new(crate::get_plugin_api_version());
+        let plugin_manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Initially no shutdown requested
         assert!(!plugin_manager.is_shutdown_requested());

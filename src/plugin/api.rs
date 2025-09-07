@@ -20,7 +20,7 @@ pub use crate::plugin::manager::PluginManager;
 /// Global plugin service instance
 static PLUGIN_SERVICE: LazyLock<Arc<Mutex<PluginManager>>> = LazyLock::new(|| {
     log::trace!("Initializing plugin service");
-    let plugin_manager = PluginManager::new(crate::get_plugin_api_version());
+    let plugin_manager = PluginManager::new(crate::core::version::get_api_version());
     log::trace!("Plugin service initialized successfully");
     Arc::new(Mutex::new(plugin_manager))
 });

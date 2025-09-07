@@ -5,6 +5,7 @@ mod tests {
     use crate::notifications::api::{Event, EventFilter, QueueEvent, QueueEventType};
     use crate::notifications::manager::AsyncNotificationManager;
     use crate::queue::api::QueueManager;
+    use std::sync::Arc;
     use tokio::time::{timeout, Duration};
 
     /// Test utility to create isolated notification manager for testing
@@ -250,162 +251,106 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_started_event_integration_with_global_service() {
-        // INTEGRATION TEST: Verify QueueManager::create() publishes Started events
-        // that subscribers actually receive through the global notification service
-
-        // Subscribe to queue events using the GLOBAL service (real integration)
-        let mut subscriber = {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-
-            // Clear any stale subscribers to avoid interference
-            notification_manager.clear_subscribers();
-
-            notification_manager
-                .subscribe(
-                    "integration-test-started".to_string(),
-                    EventFilter::QueueOnly,
-                    "integration:started".to_string(),
-                )
-                .unwrap()
-        };
-
-        // Create QueueManager - this should publish Started event to global service
-        let _manager = QueueManager::create().await;
-
-        // Verify we receive the Started event with proper timeout
-        let result = timeout(Duration::from_millis(200), subscriber.recv()).await;
-
+        let mut notification_manager = AsyncNotificationManager::new();
+        let mut subscriber = notification_manager
+            .subscribe(
+                "integration-test-started".to_string(),
+                EventFilter::QueueOnly,
+                "integration:started".to_string(),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let manager = QueueManager::create_with_notification_manager(Arc::new(
+            tokio::sync::Mutex::new(notification_manager),
+        ))
+        .await;
+        let result = timeout(Duration::from_millis(400), subscriber.recv()).await;
         match result {
             Ok(Some(received_event)) => {
                 match received_event {
                     Event::Queue(queue_event) => {
                         assert_eq!(queue_event.event_type, QueueEventType::Started);
                         assert_eq!(queue_event.queue_id, "global");
-                        println!("✓ INTEGRATION: QueueManager Started event delivered through global service");
+                        println!("✓ INTEGRATION: QueueManager Started event delivered through local service");
                     }
                     _ => panic!("INTEGRATION FAILURE: Expected Queue::Started event, got: {:?}", received_event),
                 }
             }
-            Ok(None) => panic!("INTEGRATION FAILURE: Received None from global subscriber"),
+            Ok(None) => panic!("INTEGRATION FAILURE: Received None from local subscriber"),
             Err(_) => panic!("INTEGRATION FAILURE: Timeout waiting for Started event - event publishing may not be working"),
-        }
-
-        // Cleanup to avoid affecting other tests
-        {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-            notification_manager.clear_subscribers();
         }
     }
 
     #[tokio::test]
     async fn test_queue_shutdown_event_integration_with_global_service() {
-        // INTEGRATION TEST: Verify QueueManager::shutdown() publishes Shutdown events
-        // that subscribers actually receive through the global notification service
-
-        // Subscribe to queue events using the GLOBAL service
-        let mut subscriber = {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-            notification_manager.clear_subscribers();
-
-            notification_manager
-                .subscribe(
-                    "integration-test-shutdown".to_string(),
-                    EventFilter::QueueOnly,
-                    "integration:shutdown".to_string(),
-                )
-                .unwrap()
-        };
-
-        // Create and immediately consume the Started event to focus on shutdown
-        let manager = QueueManager::create().await;
-
-        // Drain the Started event first
-        let started_result = timeout(Duration::from_millis(100), subscriber.recv()).await;
+        let mut notification_manager = AsyncNotificationManager::new();
+        let mut subscriber = notification_manager
+            .subscribe(
+                "integration-test-shutdown".to_string(),
+                EventFilter::QueueOnly,
+                "integration:shutdown".to_string(),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let manager = QueueManager::create_with_notification_manager(Arc::new(
+            tokio::sync::Mutex::new(notification_manager),
+        ))
+        .await;
+        let started_result = timeout(Duration::from_millis(200), subscriber.recv()).await;
         match started_result {
             Ok(Some(Event::Queue(event))) if event.event_type == QueueEventType::Started => {
                 println!("✓ Started event received, proceeding to test shutdown");
             }
             _ => panic!("INTEGRATION SETUP FAILURE: Should receive Started event first"),
         }
-
-        // Now test shutdown event delivery
         manager.shutdown().await;
-
-        // Verify we receive the Shutdown event
-        let shutdown_result = timeout(Duration::from_millis(200), subscriber.recv()).await;
-
+        let shutdown_result = timeout(Duration::from_millis(400), subscriber.recv()).await;
         match shutdown_result {
             Ok(Some(received_event)) => {
                 match received_event {
                     Event::Queue(queue_event) => {
                         assert_eq!(queue_event.event_type, QueueEventType::Shutdown);
                         assert_eq!(queue_event.queue_id, "global");
-                        println!("✓ INTEGRATION: QueueManager Shutdown event delivered through global service");
+                        println!("✓ INTEGRATION: QueueManager Shutdown event delivered through local service");
                     }
                     _ => panic!("INTEGRATION FAILURE: Expected Queue::Shutdown event, got: {:?}", received_event),
                 }
             }
-            Ok(None) => panic!("INTEGRATION FAILURE: Received None from global subscriber"),
+            Ok(None) => panic!("INTEGRATION FAILURE: Received None from local subscriber"),
             Err(_) => panic!("INTEGRATION FAILURE: Timeout waiting for Shutdown event - event publishing may not be working"),
-        }
-
-        // Cleanup
-        {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-            notification_manager.clear_subscribers();
         }
     }
 
     #[tokio::test]
     async fn test_complete_queue_lifecycle_integration_end_to_end() {
-        // INTEGRATION TEST: Complete lifecycle with multiple subscribers
-        // This tests the full integration under realistic conditions
-
-        // Create multiple subscribers to verify broadcast works
-        let mut subscriber1 = {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-            notification_manager.clear_subscribers();
-
-            notification_manager
-                .subscribe(
-                    "integration-complete-1".to_string(),
-                    EventFilter::QueueOnly,
-                    "integration:complete1".to_string(),
-                )
-                .unwrap()
-        };
-
-        let mut subscriber2 = {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-
-            notification_manager
-                .subscribe(
-                    "integration-complete-2".to_string(),
-                    EventFilter::QueueOnly,
-                    "integration:complete2".to_string(),
-                )
-                .unwrap()
-        };
-
-        // Test complete lifecycle
-        let manager = QueueManager::create().await;
-
-        // Both subscribers should receive Started event
+        let mut notification_manager = AsyncNotificationManager::new();
+        let mut subscriber1 = notification_manager
+            .subscribe(
+                "integration-complete-1".to_string(),
+                EventFilter::QueueOnly,
+                "integration:complete1".to_string(),
+            )
+            .unwrap();
+        let mut subscriber2 = notification_manager
+            .subscribe(
+                "integration-complete-2".to_string(),
+                EventFilter::QueueOnly,
+                "integration:complete2".to_string(),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let manager = QueueManager::create_with_notification_manager(Arc::new(
+            tokio::sync::Mutex::new(notification_manager),
+        ))
+        .await;
         for (i, subscriber) in [&mut subscriber1, &mut subscriber2].iter_mut().enumerate() {
-            let started_event = timeout(Duration::from_millis(200), subscriber.recv())
+            let started_event = timeout(Duration::from_millis(400), subscriber.recv())
                 .await
                 .expect(&format!(
                     "Subscriber {} should receive Started event",
                     i + 1
                 ))
                 .expect("Should have Started event");
-
             match started_event {
                 Event::Queue(queue_event) => {
                     assert_eq!(queue_event.event_type, QueueEventType::Started);
@@ -414,30 +359,23 @@ mod tests {
                 _ => panic!("Expected Started event for subscriber {}", i + 1),
             }
         }
-
-        // Test queue operations work
         let publisher = manager
             .create_publisher("test-producer".to_string())
             .expect("Should create publisher");
         let consumer = manager
             .create_consumer("test-plugin".to_string())
             .expect("Should create consumer");
-
         assert_eq!(manager.queue_count(), 1);
         assert_eq!(manager.active_consumer_count().unwrap(), 1);
-
-        // Test shutdown event delivery to all subscribers
         manager.shutdown().await;
-
         for (i, subscriber) in [&mut subscriber1, &mut subscriber2].iter_mut().enumerate() {
-            let shutdown_event = timeout(Duration::from_millis(200), subscriber.recv())
+            let shutdown_event = timeout(Duration::from_millis(400), subscriber.recv())
                 .await
                 .expect(&format!(
                     "Subscriber {} should receive Shutdown event",
                     i + 1
                 ))
                 .expect("Should have Shutdown event");
-
             match shutdown_event {
                 Event::Queue(queue_event) => {
                     assert_eq!(queue_event.event_type, QueueEventType::Shutdown);
@@ -446,16 +384,8 @@ mod tests {
                 _ => panic!("Expected Shutdown event for subscriber {}", i + 1),
             }
         }
-
         println!("✓ INTEGRATION: Complete end-to-end lifecycle with multiple subscribers works");
-
-        // Cleanup
         drop(publisher);
         drop(consumer);
-        {
-            let mut notification_manager =
-                crate::notifications::api::get_notification_service().await;
-            notification_manager.clear_subscribers();
-        }
     }
 }

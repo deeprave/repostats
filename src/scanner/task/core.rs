@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 /// Individual scanner task for a specific repository
 #[derive(Debug)]
 pub struct ScannerTask {
-    /// Unique scanner ID (scan-<16_char_sha256>)
+    /// Unique scanner ID (<16_char_sha256>)
     /// Uses first 16 characters of SHA256 hash for strong collision resistance while maintaining
     /// sufficient uniqueness for typical repository scanning workflows.
     /// Collision probability: ~1 in 16^16 (2^64) - extremely low for practical use cases.
@@ -29,6 +29,10 @@ pub struct ScannerTask {
     checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
     /// Injected queue publisher (shared by scanner manager)
     pub(crate) queue_publisher: QueuePublisher,
+    /// Root directory of checkout (set only once for target commit). Wrapped in Mutex for interior mutability
+    pub(crate) checkout_root: Mutex<Option<std::path::PathBuf>>,
+    /// Files for which we've already attached checkout_path (newest -> oldest traversal semantics). Mutex to allow mutation with &self
+    pub(crate) seen_checkout_files: Mutex<std::collections::HashSet<String>>,
 }
 
 impl ScannerTask {
@@ -53,6 +57,8 @@ impl ScannerTask {
             query_params,
             checkout_manager,
             queue_publisher,
+            checkout_root: Mutex::new(None),
+            seen_checkout_files: Mutex::new(std::collections::HashSet::new()),
         }
     }
 

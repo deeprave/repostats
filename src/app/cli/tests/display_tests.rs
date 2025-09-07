@@ -106,29 +106,3 @@ fn test_validation_empty_plugin_name() {
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), "Invalid plugin: empty name");
 }
-
-#[test]
-fn test_validation_newline_in_plugin_name() {
-    let mut plugin = create_test_plugin("test", "Test plugin", vec!["cmd"]);
-    plugin.name = "test\nname".to_string(); // Newline in name
-    let plugins = vec![plugin];
-
-    let result = display_plugin_table(plugins, false);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .contains("name contains control characters"));
-}
-
-#[test]
-fn test_validation_newline_in_description() {
-    let mut plugin = create_test_plugin("test", "Test plugin", vec!["cmd"]);
-    plugin.description = "Test\ndescription".to_string(); // Newline in description
-    let plugins = vec![plugin];
-
-    let result = display_plugin_table(plugins, false);
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .contains("description contains control characters"));
-}

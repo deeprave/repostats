@@ -21,7 +21,7 @@ fn test_parse_initial_stops_at_command() {
     let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
     assert_eq!(parsed.log_level, Some("debug".to_string()));
-    assert!(parsed.color);
+    assert_eq!(parsed.color, Some(true));
     assert_eq!(
         global_args,
         vec![
@@ -70,7 +70,7 @@ fn test_parse_initial_handles_equals_format() {
     let (parsed, global_args) = Args::parse_initial(COMMAND_NAME, &args).unwrap();
 
     assert_eq!(parsed.log_level, Some("info".to_string()));
-    assert!(parsed.color);
+    assert_eq!(parsed.color, Some(true));
     assert_eq!(
         global_args,
         vec![
@@ -117,19 +117,6 @@ fn test_parse_with_repository() {
 }
 
 #[test]
-fn test_conflicting_args() {
-    // Color and no-color still conflict
-    let args = vec![
-        "repostats".to_string(),
-        "--color".to_string(),
-        "--no-color".to_string(),
-    ];
-
-    let result = Args::try_parse_from(&args);
-    assert!(result.is_err());
-}
-
-#[test]
 fn test_parse_all_fields() {
     let args = vec![
         "repostats".to_string(),
@@ -141,7 +128,6 @@ fn test_parse_all_fields() {
         "/path/to/repo".to_string(),
         "--log-level".to_string(),
         "debug".to_string(),
-        "--color".to_string(),
     ];
 
     let result = Args::try_parse_from(&args).unwrap();
@@ -150,8 +136,6 @@ fn test_parse_all_fields() {
     assert_eq!(result.plugin_dir, Some("/plugins".to_string()));
     assert_eq!(result.repository, vec![PathBuf::from("/path/to/repo")]);
     assert_eq!(result.log_level, Some("debug".to_string()));
-    assert!(result.color);
-    assert!(!result.no_color);
 }
 
 #[test]
@@ -173,7 +157,7 @@ fn test_parse_initial_handles_equals_syntax() {
         parsed.config_file,
         Some(PathBuf::from("/path/to/config.toml"))
     );
-    assert_eq!(parsed.color, true);
+    assert_eq!(parsed.color, Some(true));
     assert_eq!(
         global_args,
         vec![
@@ -202,7 +186,7 @@ fn test_parse_initial_with_mixed_args() {
 
     assert_eq!(parsed.log_level, Some("debug".to_string()));
     assert_eq!(parsed.config_file, Some(PathBuf::from("/path/config.toml")));
-    assert_eq!(parsed.color, true);
+    assert_eq!(parsed.color, Some(true));
     assert_eq!(
         global_args,
         vec![

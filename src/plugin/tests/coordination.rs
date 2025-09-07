@@ -94,6 +94,7 @@ mod integration_tests {
 
     /// Test that shutdown notification mechanism works
     #[tokio::test]
+    #[ignore = "Integration test that requires exclusive access to global notification service"]
     async fn test_shutdown_notification_mechanism() {
         let mut plugin_manager = PluginManager::new(1);
 
@@ -218,6 +219,7 @@ mod integration_tests {
 
     /// Test event-driven plugin completion flow
     #[tokio::test]
+    #[ignore = "Integration test that requires exclusive access to global notification service"]
     async fn test_event_driven_plugin_completion() {
         let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
