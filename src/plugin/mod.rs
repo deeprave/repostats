@@ -6,6 +6,8 @@
 // Internal modules - all access should go through api module
 pub(crate) mod args;
 pub(crate) mod builtin;
+pub(crate) mod data_coordinator;
+pub(crate) mod data_export;
 pub(crate) mod discovery;
 pub(crate) mod error;
 pub(crate) mod error_handling;

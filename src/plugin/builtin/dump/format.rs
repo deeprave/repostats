@@ -52,9 +52,9 @@ pub fn format_json_typed(
     let nanos = duration.subsec_nanos();
 
     // Compose ISO8601 string for better precision and readability
-    use chrono::DateTime;
-    let datetime = DateTime::from_timestamp(secs, nanos)
-        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+    use chrono::{DateTime, Utc};
+    let datetime =
+        DateTime::<Utc>::from_timestamp(secs, nanos).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     let iso8601 = datetime.to_rfc3339();
 
     obj.insert("message_type".into(), json!(typed_msg.header.message_type));

@@ -4,9 +4,12 @@
 
 use super::super::*;
 // Removed unused imports: QueryParams, collect_scan_messages, count_commit_messages
+use crate::notifications::api::AsyncNotificationManager;
 use crate::scanner::types::ScanRequires;
 use std::process::Command;
+use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::sync::Mutex as TokioMutex;
 
 /// Helper to create a test git repository
 pub fn create_test_repo() -> (TempDir, gix::Repository) {
@@ -22,11 +25,13 @@ pub fn create_test_scanner_task(requirements: ScanRequires) -> (TempDir, Scanner
     let (_temp_dir, repo) = create_test_repo();
     let repo_path = repo.git_dir().to_string_lossy().to_string();
 
-    // Create test queue publisher
+    // Create test queue publisher and notification manager
     let queue_service = crate::queue::api::get_queue_service();
     let test_publisher = queue_service
         .create_publisher("test-scanner-123".to_string())
         .expect("Failed to create test queue publisher");
+
+    let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
 
     let scanner = ScannerTask::new(
         "test-scanner-123".to_string(),
@@ -36,6 +41,7 @@ pub fn create_test_scanner_task(requirements: ScanRequires) -> (TempDir, Scanner
         test_publisher,
         None,
         None,
+        notification_manager,
     );
     (_temp_dir, scanner)
 }

@@ -103,7 +103,16 @@ impl PluginDiscovery {
     pub(crate) async fn discover_plugins(&self) -> PluginResult<Vec<DiscoveredPlugin>> {
         let mut plugins = Vec::new();
 
-        // 1. Discover external plugins (main focus) - create on demand
+        // 1. Discover builtin plugins first - create on demand
+        if self.config.include_builtins {
+            log::debug!("Discovering builtin plugins");
+            let builtin_discovery = BuiltinPluginDiscovery::new();
+            let builtin_plugins = builtin_discovery.discover_builtin_plugins().await?;
+            log::debug!("Found {} builtin plugins", builtin_plugins.len());
+            plugins.extend(builtin_plugins);
+        }
+
+        // 2. Discover external plugins second (allows override of builtins) - create on demand
         if self.config.include_externals {
             log::debug!(
                 "Discovering external plugins from path: {:?}",
@@ -115,15 +124,6 @@ impl PluginDiscovery {
                 .await?;
             log::debug!("Found {} external plugins", external_plugins.len());
             plugins.extend(external_plugins);
-        }
-
-        // 2. Discover builtin plugins (small part) - create on demand
-        if self.config.include_builtins {
-            log::debug!("Discovering builtin plugins");
-            let builtin_discovery = BuiltinPluginDiscovery::new();
-            let builtin_plugins = builtin_discovery.discover_builtin_plugins().await?;
-            log::debug!("Found {} builtin plugins", builtin_plugins.len());
-            plugins.extend(builtin_plugins);
         }
 
         // 3. Apply exclusions
@@ -186,18 +186,31 @@ impl BuiltinPluginDiscovery {
     /// Discover built-in plugins (minimal set)
     pub(crate) async fn discover_builtin_plugins(&self) -> PluginResult<Vec<DiscoveredPlugin>> {
         use crate::plugin::builtin::dump::DumpPlugin;
+        use crate::plugin::builtin::output::OutputPlugin;
 
-        // Create temporary plugin instance to get actual metadata
+        let mut plugins = Vec::new();
+
+        // Add DumpPlugin
         let dump_plugin = DumpPlugin::new();
-        let plugin_info = dump_plugin.plugin_info();
-
-        let plugins = vec![DiscoveredPlugin {
-            info: plugin_info, // Use actual plugin metadata
+        let dump_info = dump_plugin.plugin_info();
+        plugins.push(DiscoveredPlugin {
+            info: dump_info,
             source: PluginSource::BuiltinConsumer {
                 factory: || Box::new(DumpPlugin::new()),
             },
             manifest_path: None,
-        }];
+        });
+
+        // Add OutputPlugin
+        let output_plugin = OutputPlugin::new();
+        let output_info = output_plugin.plugin_info();
+        plugins.push(DiscoveredPlugin {
+            info: output_info,
+            source: PluginSource::Builtin {
+                factory: || Box::new(OutputPlugin::new()),
+            },
+            manifest_path: None,
+        });
 
         Ok(plugins)
     }
@@ -247,10 +260,15 @@ mod tests {
         let discovery = BuiltinPluginDiscovery::new();
         let plugins = discovery.discover_builtin_plugins().await.unwrap();
 
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].info.name, "dump");
+        assert_eq!(plugins.len(), 2);
+
+        // Find dump plugin
+        let dump_plugin = plugins
+            .iter()
+            .find(|p| p.info.name == "dump")
+            .expect("DumpPlugin should be discoverable");
         assert_eq!(
-            plugins[0].info.api_version,
+            dump_plugin.info.api_version,
             crate::core::version::get_api_version()
         );
     }
@@ -265,8 +283,12 @@ mod tests {
         );
 
         let plugins = discovery.discover_plugins().await.unwrap();
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].info.name, "dump");
+        assert_eq!(plugins.len(), 2);
+
+        // Verify both builtin plugins are present
+        let plugin_names: Vec<&str> = plugins.iter().map(|p| p.info.name.as_str()).collect();
+        assert!(plugin_names.contains(&"dump"));
+        assert!(plugin_names.contains(&"output"));
     }
 
     #[tokio::test]
@@ -300,6 +322,7 @@ mod tests {
         let discovery = PluginDiscovery::with_excludes(vec!["dump"]);
 
         let plugins = discovery.discover_plugins().await.unwrap();
-        assert!(plugins.is_empty()); // dump should be filtered out
+        assert_eq!(plugins.len(), 1); // dump should be filtered out, output remains
+        assert_eq!(plugins[0].info.name, "output");
     }
 }

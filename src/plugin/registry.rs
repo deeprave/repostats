@@ -3,11 +3,12 @@
 //! Thread-safe plugin registry for managing loaded plugins with registration,
 //! retrieval, and lifecycle management capabilities.
 
+use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 /// Plugin registry for managing loaded plugins
 pub struct PluginRegistry {
@@ -308,6 +309,10 @@ mod tests {
             vec![]
         }
 
+        fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
+            // Mock implementation - just ignore the manager
+        }
+
         async fn initialize(&mut self) -> PluginResult<()> {
             self.initialized = true;
             Ok(())
@@ -358,6 +363,10 @@ mod tests {
 
         fn advertised_functions(&self) -> Vec<PluginFunction> {
             self.base.advertised_functions()
+        }
+
+        fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
+            self.base.set_notification_manager(manager);
         }
 
         async fn initialize(&mut self) -> PluginResult<()> {

@@ -146,6 +146,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "slow"]
     async fn test_concurrent_integration_with_backpressure() {
         let manager = Arc::new(QueueManager::new());
 

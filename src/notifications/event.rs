@@ -1,8 +1,11 @@
 //! Event types for the notification system
 
+use std::sync::Arc;
 use std::time::SystemTime;
 
-#[derive(Clone, Debug)]
+use crate::plugin::data_export::PluginDataExport;
+
+#[derive(Clone, Debug, PartialEq)]
 #[allow(dead_code)]
 pub enum ScanEventType {
     Started,
@@ -138,26 +141,70 @@ pub struct PluginEvent {
     pub event_type: PluginEventType,
     pub timestamp: SystemTime,
     pub plugin_id: String,
+    pub scan_id: String,
     pub message: Option<String>,
+    pub data_export: Option<Arc<PluginDataExport>>,
 }
 
 #[allow(dead_code)]
 impl PluginEvent {
-    pub fn new(event_type: PluginEventType, plugin_id: String) -> Self {
+    pub fn new(event_type: PluginEventType, plugin_id: String, scan_id: String) -> Self {
         Self {
             event_type,
             timestamp: SystemTime::now(),
             plugin_id,
+            scan_id,
             message: None,
+            data_export: None,
         }
     }
 
-    pub fn with_message(event_type: PluginEventType, plugin_id: String, message: String) -> Self {
+    pub fn with_message(
+        event_type: PluginEventType,
+        plugin_id: String,
+        scan_id: String,
+        message: String,
+    ) -> Self {
         Self {
             event_type,
             timestamp: SystemTime::now(),
             plugin_id,
+            scan_id,
             message: Some(message),
+            data_export: None,
+        }
+    }
+
+    pub fn with_data_export(
+        event_type: PluginEventType,
+        plugin_id: String,
+        scan_id: String,
+        data_export: Arc<PluginDataExport>,
+    ) -> Self {
+        Self {
+            event_type,
+            timestamp: SystemTime::now(),
+            plugin_id,
+            scan_id,
+            message: None,
+            data_export: Some(data_export),
+        }
+    }
+
+    pub fn with_data_export_and_message(
+        event_type: PluginEventType,
+        plugin_id: String,
+        scan_id: String,
+        data_export: Arc<PluginDataExport>,
+        message: String,
+    ) -> Self {
+        Self {
+            event_type,
+            timestamp: SystemTime::now(),
+            plugin_id,
+            scan_id,
+            message: Some(message),
+            data_export: Some(data_export),
         }
     }
 }

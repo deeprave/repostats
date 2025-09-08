@@ -86,8 +86,6 @@ async fn main() {
                 }
             };
 
-            log::info!("{command_name}: ✅ Repository Statistics Tool starting");
-
             // Spawn spinner task if appropriate (skip if any plugin suppresses progress)
             let suppress_progress = {
                 let plugin_manager = core::services::get_plugin_service().await;
@@ -107,6 +105,8 @@ async fn main() {
 
             // Handle scanner execution if configured
             let final_result = if let Some(scanner_manager) = scanner_manager {
+                log::info!("{command_name}: ✅ Repository Statistics Tool starting");
+
                 run_scanner_with_coordination(
                     scanner_manager,
                     shutdown_rx,
@@ -114,7 +114,8 @@ async fn main() {
                 )
                 .await
             } else {
-                Ok(())
+                // Early exit
+                return Ok(());
             };
 
             // System shutdown

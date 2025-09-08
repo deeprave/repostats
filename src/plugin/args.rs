@@ -55,6 +55,13 @@ impl PluginConfig {
             default
         }
     }
+
+    /// Set a string configuration value (for testing)
+    #[cfg(test)]
+    pub fn set_string(&mut self, key: &str, value: &str) {
+        self.toml_config
+            .insert(key.to_string(), toml::Value::String(value.to_string()));
+    }
 }
 
 /// Base argument parser for plugins

@@ -52,6 +52,33 @@ macro_rules! style {
                 if let Some(code) = self.ansi_code() { return format!("\x1b[{}m{}\x1b[0m", code, text); }
                 text.to_string()
             }
+
+            /// Convert StyleRole to prettytable style_spec format
+            pub fn to_prettytable_spec(self) -> Option<String> {
+                let color = self.color()?;
+
+                let spec_char = match color {
+                    Color::Black => "k",
+                    Color::Red => "r",
+                    Color::Green => "g",
+                    Color::Yellow => "y",
+                    Color::Blue => "b",
+                    Color::Magenta => "m",
+                    Color::Cyan => "c",
+                    Color::White => "w",
+                    Color::BrightBlack => "K",
+                    Color::BrightRed => "R",
+                    Color::BrightGreen => "G",
+                    Color::BrightYellow => "Y",
+                    Color::BrightBlue => "B",
+                    Color::BrightMagenta => "M",
+                    Color::BrightCyan => "C",
+                    Color::BrightWhite => "W",
+                    _ => return None,
+                };
+
+                Some(format!("F{}", spec_char)) // Foreground color
+            }
         }
     }
 }
@@ -149,33 +176,6 @@ pub fn palette_to_clap(enabled: bool) -> clap::builder::Styles {
 
 /// Apply palette to table header (basic usage).
 // (Pruned auxiliary helpers; will reintroduce minimal ones as needed later.)
-
-// (Removed role_to_tabled_color; direct tabled::Color constants are used where needed.)
-/// Map a `StyleRole` to a `tabled::settings::Color` when it corresponds to a standard 16-color.
-pub fn style_role_to_tabled_color(role: StyleRole) -> Option<tabled::settings::Color> {
-    use tabled::settings::Color as TColor;
-    use Color::*;
-    let color = role.color()?;
-    Some(match color {
-        Black => TColor::FG_BLACK,
-        Red => TColor::FG_RED,
-        Green => TColor::FG_GREEN,
-        Yellow => TColor::FG_YELLOW,
-        Blue => TColor::FG_BLUE,
-        Magenta => TColor::FG_MAGENTA,
-        Cyan => TColor::FG_CYAN,
-        White => TColor::FG_WHITE,
-        BrightBlack => TColor::FG_BRIGHT_BLACK,
-        BrightRed => TColor::FG_BRIGHT_RED,
-        BrightGreen => TColor::FG_BRIGHT_GREEN,
-        BrightYellow => TColor::FG_BRIGHT_YELLOW,
-        BrightBlue => TColor::FG_BRIGHT_BLUE,
-        BrightMagenta => TColor::FG_BRIGHT_MAGENTA,
-        BrightCyan => TColor::FG_BRIGHT_CYAN,
-        BrightWhite => TColor::FG_BRIGHT_WHITE,
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {

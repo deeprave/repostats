@@ -47,7 +47,7 @@ fn normalize_path(p: &std::path::Path) -> std::path::PathBuf {
         match comp {
             Component::RootDir => {
                 // Preserve root directory for absolute paths
-                buf.push(std::path::MAIN_SEPARATOR.to_string());
+                buf.push(Component::RootDir.as_os_str());
             }
             Component::CurDir => {
                 // Skip current directory components (.)

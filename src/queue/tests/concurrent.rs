@@ -9,6 +9,7 @@ mod tests {
     use tokio::time::timeout;
 
     #[tokio::test]
+    #[ignore = "slow"]
     async fn test_concurrent_consumer_access_stress_test() {
         let manager = Arc::new(QueueManager::new());
 

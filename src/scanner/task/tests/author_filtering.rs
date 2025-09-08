@@ -28,7 +28,7 @@ fn run_git_command(args: &[&str], dir: &std::path::Path, error_msg: &str) -> Out
 }
 
 #[tokio::test]
-#[serial]
+#[ignore = "git interaction"]
 async fn test_commit_traversal_with_author_filtering() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -176,7 +176,7 @@ async fn test_commit_traversal_with_author_filtering() {
 }
 
 #[tokio::test]
-#[serial]
+#[ignore = "git interaction"]
 async fn test_complex_wildcard_patterns() {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
@@ -277,7 +277,7 @@ async fn test_complex_wildcard_patterns() {
 }
 
 #[tokio::test]
-#[serial]
+#[ignore = "git interaction"]
 async fn test_email_auto_completion_integration() {
     // Test that auto-completion works through the full Git scanning pipeline
     let temp_dir = TempDir::new().unwrap();

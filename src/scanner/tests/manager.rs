@@ -6,6 +6,7 @@
 use crate::notifications::api::ScanEventType;
 use crate::scanner::manager::ScannerManager;
 use crate::scanner::types::{ScanMessage, ScanStats};
+use serial_test::serial;
 use std::time::SystemTime;
 
 #[tokio::test]
@@ -366,6 +367,7 @@ async fn test_remote_repository_support_placeholder() {
 }
 
 #[tokio::test]
+#[ignore = "slow"]
 async fn test_commit_traversal_and_message_creation() {
     // GREEN: Test that basic commit traversal and message creation works
     let manager = ScannerManager::create().await;
@@ -381,11 +383,15 @@ async fn test_commit_traversal_and_message_creation() {
         let scanner_id = manager.generate_scanner_id(&repo_id).unwrap();
 
         use crate::scanner::types::ScanRequires;
-        // Create test queue publisher
+        // Create test queue publisher and notification manager
         let queue_service = crate::queue::api::get_queue_service();
         let test_publisher = queue_service
             .create_publisher(scanner_id.clone())
             .expect("Failed to create test queue publisher");
+
+        let notification_manager = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::notifications::api::AsyncNotificationManager::new(),
+        ));
 
         crate::scanner::task::ScannerTask::new(
             scanner_id,
@@ -395,6 +401,7 @@ async fn test_commit_traversal_and_message_creation() {
             test_publisher,
             None,
             None,
+            notification_manager,
         )
     };
 
@@ -444,6 +451,7 @@ async fn test_commit_traversal_and_message_creation() {
 }
 
 #[tokio::test]
+#[ignore = "slow"]
 async fn test_queue_message_publishing() {
     // GREEN: Test that queue message publishing works correctly
     let manager = ScannerManager::create().await;

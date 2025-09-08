@@ -3,12 +3,13 @@
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
 use crate::core::query::QueryParams;
+use crate::notifications::api::AsyncNotificationManager;
 use crate::queue::api::QueuePublisher;
 use crate::scanner::types::ScanRequires;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex as TokioMutex;
 
 /// Individual scanner task for a specific repository
-#[derive(Debug)]
 pub struct ScannerTask {
     /// Unique scanner ID (<16_char_sha256>)
     /// Uses first 16 characters of SHA256 hash for strong collision resistance while maintaining
@@ -29,10 +30,29 @@ pub struct ScannerTask {
     checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
     /// Injected queue publisher (shared by scanner manager)
     pub(crate) queue_publisher: QueuePublisher,
+    /// Injected notification manager (independent from global service)
+    pub(crate) notification_manager: Arc<TokioMutex<AsyncNotificationManager>>,
     /// Root directory of checkout (set only once for target commit). Wrapped in Mutex for interior mutability
     pub(crate) checkout_root: Mutex<Option<std::path::PathBuf>>,
     /// Files for which we've already attached checkout_path (newest -> oldest traversal semantics). Mutex to allow mutation with &self
     pub(crate) seen_checkout_files: Mutex<std::collections::HashSet<String>>,
+}
+
+impl std::fmt::Debug for ScannerTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScannerTask")
+            .field("scanner_id", &self.scanner_id)
+            .field("repository_path", &self.repository_path)
+            .field("is_remote", &self.is_remote)
+            .field("requirements", &self.requirements)
+            .field("query_params", &self.query_params)
+            .field("checkout_manager", &self.checkout_manager)
+            .field("queue_publisher", &self.queue_publisher)
+            .field("notification_manager", &"<AsyncNotificationManager>")
+            .field("checkout_root", &self.checkout_root)
+            .field("seen_checkout_files", &self.seen_checkout_files)
+            .finish()
+    }
 }
 
 impl ScannerTask {
@@ -45,6 +65,7 @@ impl ScannerTask {
         queue_publisher: QueuePublisher,
         query_params: Option<QueryParams>,
         checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
+        notification_manager: Arc<TokioMutex<AsyncNotificationManager>>,
     ) -> Self {
         let is_remote = Self::is_remote_path(&repository_path);
 
@@ -57,6 +78,7 @@ impl ScannerTask {
             query_params,
             checkout_manager,
             queue_publisher,
+            notification_manager,
             checkout_root: Mutex::new(None),
             seen_checkout_files: Mutex::new(std::collections::HashSet::new()),
         }
@@ -97,6 +119,8 @@ impl TestScannerTaskBuilder {
     }
 
     pub fn build(self) -> ScannerTask {
+        // Create test queue publisher and notification manager automatically
+        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
         // Create test queue publisher automatically
         let queue_service = crate::queue::api::get_queue_service();
         let test_publisher = queue_service
@@ -111,6 +135,7 @@ impl TestScannerTaskBuilder {
             test_publisher,
             None,
             None,
+            notification_manager,
         )
     }
 }
@@ -123,11 +148,13 @@ impl ScannerTask {
         repository_path: String,
         repository: gix::Repository,
     ) -> Self {
-        // Create a test queue publisher for test scenarios
+        // Create a test queue publisher and notification manager for test scenarios
         let queue_service = crate::queue::api::get_queue_service();
         let test_publisher = queue_service
             .create_publisher(scanner_id.clone())
             .expect("Failed to create test queue publisher");
+
+        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
 
         Self::new(
             scanner_id,
@@ -137,6 +164,7 @@ impl ScannerTask {
             test_publisher,
             None,
             None,
+            notification_manager,
         )
     }
 

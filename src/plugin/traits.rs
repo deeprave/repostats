@@ -16,11 +16,14 @@
 //!
 //! Plugins do NOT control scanners, manage queues, or handle system functions.
 
+use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::PluginConfig;
 use crate::plugin::error::PluginResult;
 use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
 use crate::scanner::types::ScanRequires;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Base plugin trait that all plugins must implement
 ///
@@ -45,6 +48,12 @@ pub trait Plugin: Send + Sync {
     fn requirements(&self) -> ScanRequires {
         ScanRequires::NONE
     }
+
+    /// Set the notification manager for this plugin
+    ///
+    /// This should be called before initialize() to inject the notification
+    /// manager dependency. Plugins should store this reference internally.
+    fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>);
 
     /// Initialize the plugin
     async fn initialize(&mut self) -> PluginResult<()>;
@@ -141,6 +150,10 @@ mod tests {
             }]
         }
 
+        fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
+            // Mock implementation - just ignore the manager
+        }
+
         async fn initialize(&mut self) -> PluginResult<()> {
             self.initialized = true;
             Ok(())
@@ -201,6 +214,10 @@ mod tests {
 
         fn advertised_functions(&self) -> Vec<PluginFunction> {
             self.base.advertised_functions()
+        }
+
+        fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
+            self.base.set_notification_manager(manager);
         }
 
         async fn initialize(&mut self) -> PluginResult<()> {

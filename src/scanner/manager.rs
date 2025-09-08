@@ -6,6 +6,7 @@
 use crate::core::cleanup::Cleanup;
 use crate::core::query::QueryParams;
 use crate::core::retry::RetryPolicy;
+use crate::notifications::api::AsyncNotificationManager;
 use crate::scanner::checkout::manager::CheckoutManager;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
@@ -15,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as TokioMutex;
 
 /// Repository reservation state
 #[derive(Debug, Clone)]
@@ -561,6 +563,9 @@ impl ScannerManager {
                 }
             })?;
 
+        // Create independent notification manager for scanner dependency injection
+        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
+
         // Create scanner task with simple dependency injection
         let scanner_task = ScannerTask::new(
             scanner_id.clone(),
@@ -570,6 +575,7 @@ impl ScannerManager {
             queue_publisher,
             query_params.cloned(),
             checkout_manager,
+            notification_manager,
         );
         let scanner_task = Arc::new(scanner_task);
 

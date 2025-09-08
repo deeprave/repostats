@@ -5,6 +5,7 @@ mod args;
 mod consumer;
 mod format;
 
+use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::{OutputFormat, PluginConfig};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::error_handling::log_plugin_error_with_context;
@@ -13,7 +14,8 @@ use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
 use crate::scanner::types::ScanRequires;
 use std::path::PathBuf;
-use tokio::sync::oneshot;
+use std::sync::Arc;
+use tokio::sync::{oneshot, Mutex};
 
 /// Public dump plugin structure
 pub struct DumpPlugin {
@@ -28,6 +30,8 @@ pub struct DumpPlugin {
     consumer_task: Option<tokio::task::JoinHandle<()>>,
     use_colors: bool,
     output_file: Option<PathBuf>,
+    /// Injected notification manager
+    notification_manager: Option<Arc<Mutex<AsyncNotificationManager>>>,
 }
 
 impl DumpPlugin {
@@ -44,6 +48,7 @@ impl DumpPlugin {
             consumer_task: None,
             use_colors: false,
             output_file: None,
+            notification_manager: None,
         }
     }
 
@@ -151,6 +156,10 @@ impl Plugin for DumpPlugin {
             reqs |= ScanRequires::FILE_CONTENT;
         }
         reqs
+    }
+
+    fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
+        self.notification_manager = Some(manager);
     }
 
     async fn initialize(&mut self) -> PluginResult<()> {

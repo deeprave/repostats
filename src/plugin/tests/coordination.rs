@@ -242,6 +242,7 @@ mod integration_tests {
         let completion_event = Event::Plugin(PluginEvent::with_message(
             PluginEventType::Completed,
             "test-plugin".to_string(),
+            "test-scan-123".to_string(),
             "Test plugin completed successfully".to_string(),
         ));
 

@@ -4,6 +4,7 @@
 //! Owns the plugin registry and provides high-level plugin management operations.
 
 use crate::app::cli::command_segmenter::CommandSegment;
+use crate::notifications::api::AsyncNotificationManager;
 use crate::notifications::api::{Event, EventFilter, PluginEventType};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::SharedPluginRegistry;
@@ -409,17 +410,19 @@ impl PluginManager {
         }
 
         // Register plugins with the registry, holding the write lock only during registration
-        let mut registry = self.registry.inner().write().await;
-        for (_info, target) in instantiated_plugins {
-            match target {
-                RegistrationTarget::Plugin(plugin) => {
-                    registry.register_plugin(plugin)?;
-                }
-                RegistrationTarget::ConsumerPlugin(consumer_plugin) => {
-                    registry.register_consumer_plugin(consumer_plugin)?;
+        {
+            let mut registry = self.registry.inner().write().await;
+            for (_info, target) in instantiated_plugins {
+                match target {
+                    RegistrationTarget::Plugin(plugin) => {
+                        registry.register_plugin(plugin)?;
+                    }
+                    RegistrationTarget::ConsumerPlugin(consumer_plugin) => {
+                        registry.register_consumer_plugin(consumer_plugin)?;
+                    }
                 }
             }
-        }
+        } // Write lock is dropped here
 
         // Deduplicate and auto-activate plugins marked as auto_active
         auto_active_plugins.sort();
@@ -440,7 +443,7 @@ impl PluginManager {
             }
 
             // Activate the plugin in registry
-            if let Err(e) = registry.activate_plugin(plugin_name) {
+            if let Err(e) = self.registry.activate_plugin(plugin_name).await {
                 log::warn!("Failed to auto-activate plugin '{}': {:?}", plugin_name, e);
                 continue;
             }
@@ -664,9 +667,10 @@ impl PluginManager {
     /// Initialize active plugins with their configurations and arguments
     ///
     /// This method initializes all currently active plugins by:
-    /// 1. Calling plugin.initialize() for each active plugin
-    /// 2. Parsing plugin-specific arguments via plugin.parse_plugin_arguments()
-    /// 3. Providing plugin-specific TOML configuration (if available)
+    /// 1. Injecting notification manager dependency
+    /// 2. Calling plugin.initialize() for each active plugin
+    /// 3. Parsing plugin-specific arguments via plugin.parse_plugin_arguments()
+    /// 4. Providing plugin-specific TOML configuration (if available)
     ///
     /// Note: Plugins don't currently receive TOML config directly through their interface.
     /// The TOML config is stored in the PluginManager for future use.
@@ -674,6 +678,11 @@ impl PluginManager {
         if self.active_plugins.is_empty() {
             return Ok(());
         }
+
+        // Create independent notification manager for plugin dependency injection
+        let notification_manager = std::sync::Arc::new(tokio::sync::Mutex::new(
+            crate::notifications::api::AsyncNotificationManager::new(),
+        ));
 
         let mut registry = self.registry.inner().write().await;
 
@@ -686,6 +695,9 @@ impl PluginManager {
 
             // Try standard plugin first
             if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
+                // Inject notification manager dependency
+                plugin.set_notification_manager(notification_manager.clone());
+
                 // Initialize the plugin
                 plugin
                     .initialize()
@@ -711,6 +723,9 @@ impl PluginManager {
             }
             // Try consumer plugin if not found as standard plugin
             else if let Some(plugin) = registry.get_consumer_plugin_mut(plugin_name) {
+                // Inject notification manager dependency
+                plugin.set_notification_manager(notification_manager.clone());
+
                 // Initialize the plugin
                 plugin
                     .initialize()
@@ -1106,6 +1121,7 @@ impl PluginManager {
             let plugin_event = PluginEvent::with_message(
                 PluginEventType::Unregistered,
                 plugin_name.clone(),
+                "unknown".to_string(), // TODO: Need to get actual scan_id from context
                 "System shutdown requested".to_string(),
             );
 
@@ -1627,6 +1643,10 @@ mod tests {
                 description: "Test function".to_string(),
                 aliases: vec!["t".to_string()],
             }]
+        }
+
+        fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
+            // Mock implementation - just ignore the manager
         }
 
         async fn initialize(&mut self) -> PluginResult<()> {

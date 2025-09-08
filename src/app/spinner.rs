@@ -3,9 +3,20 @@
 use crate::notifications::api::{
     Event, EventFilter, ScanEvent, ScanEventType, SystemEvent, SystemEventType,
 };
-use anyhow::Result;
 use std::io::Write;
+use thiserror::Error;
 use tokio::time::{interval, Duration};
+
+/// Module-local result type for spinner operations
+type Result<T> = std::result::Result<T, SpinnerError>;
+
+/// Errors specific to the spinner module
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum SpinnerError {
+    /// Subscribing to the notification service failed
+    #[error("Failed to subscribe to events: {reason}")]
+    SubscribeFailed { reason: String },
+}
 
 const BRAILLE_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -53,7 +64,9 @@ pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) 
             EventFilter::All, // Will filter manually for ScanEvent::Progress and SystemEvent::Shutdown
             "main-spinner".to_string(),
         )
-        .map_err(|e| anyhow::anyhow!("Failed to subscribe to events: {}", e))?;
+        .map_err(|e| SpinnerError::SubscribeFailed {
+            reason: e.to_string(),
+        })?;
     drop(notification_manager);
 
     let mut spinner = ProgressSpinner::new();
