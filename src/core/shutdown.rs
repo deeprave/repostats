@@ -122,6 +122,7 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
                         requested.store(true, Ordering::Release);
                         let _ = tx.send(());
                         if prev >= 1 {
+                            // Second signal received; forcing immediate exit
                             std::process::exit(130);
                         }
                         // After first signal break to avoid busy loop for same kind

@@ -4,3 +4,4 @@
 //! Built-in plugins are automatically discovered and made available.
 
 pub mod dump;
+pub mod output;

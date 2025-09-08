@@ -23,6 +23,7 @@ mod tests {
         let plugin_event = PluginEvent::with_message(
             PluginEventType::Processing,
             "test_plugin".to_string(),
+            "test_scan".to_string(),
             "processing".to_string(),
         );
 
@@ -85,6 +86,7 @@ mod tests {
         let plugin_event = Event::Plugin(PluginEvent::with_message(
             PluginEventType::Processing,
             "test_plugin".to_string(),
+            "test_scan".to_string(),
             "processing".to_string(),
         ));
 
@@ -156,7 +158,11 @@ mod tests {
         let queue_event =
             QueueEvent::with_size(QueueEventType::MessageAdded, "test_queue".to_string(), 42);
 
-        let plugin_event = PluginEvent::new(PluginEventType::Processing, "test_plugin".to_string());
+        let plugin_event = PluginEvent::new(
+            PluginEventType::Processing,
+            "test_plugin".to_string(),
+            "test_scan".to_string(),
+        );
 
         let system_event =
             SystemEvent::with_message(SystemEventType::Startup, "startup complete".to_string());
@@ -180,8 +186,13 @@ mod tests {
         assert_eq!(queue_basic.size, None);
         assert_eq!(queue_basic.message, None);
 
-        let plugin_basic = PluginEvent::new(PluginEventType::Registered, "plugin1".to_string());
+        let plugin_basic = PluginEvent::new(
+            PluginEventType::Registered,
+            "plugin1".to_string(),
+            "scan1".to_string(),
+        );
         assert_eq!(plugin_basic.message, None);
+        assert_eq!(plugin_basic.data_export, None);
 
         let system_basic = SystemEvent::new(SystemEventType::Shutdown);
         assert_eq!(system_basic.message, None);

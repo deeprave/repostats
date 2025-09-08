@@ -1687,6 +1687,7 @@ mod tests {
             Event::Plugin(PluginEvent::new(
                 PluginEventType::Processing,
                 "exporter_v1".to_string(),
+                "scan_task_1".to_string(),
             )),
             Event::Scan(ScanEvent::new(
                 ScanEventType::Completed,
@@ -1699,6 +1700,7 @@ mod tests {
             Event::Plugin(PluginEvent::new(
                 PluginEventType::DataReady,
                 "exporter_v1".to_string(),
+                "scan_task_1".to_string(),
             )),
             Event::System(SystemEvent::new(SystemEventType::Shutdown)),
         ];

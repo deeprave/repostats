@@ -33,6 +33,7 @@ pub async fn publish_plugin_event(
     let event = Event::Plugin(PluginEvent::with_message(
         event_type.clone(),
         plugin_name.to_string(),
+        "unknown".to_string(), // TODO: Need to get actual scan_id from context
         message.to_string(),
     ));
 

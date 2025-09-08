@@ -4,7 +4,18 @@
 //! It splits the command line into global arguments and command-specific argument segments.
 //! This is a pure, self-contained argument parser with no external dependencies or concerns.
 
-use anyhow::Result;
+use thiserror::Error;
+
+/// Module-local result type for command segmentation operations
+type Result<T> = std::result::Result<T, CommandSegmentationError>;
+
+/// Errors that can occur during command line segmentation
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum CommandSegmentationError {
+    /// An unexpected argument was found after the global arguments section
+    #[error("Unexpected argument '{arg}' found after global args")]
+    UnexpectedArgumentAfterGlobalArgs { arg: String },
+}
 
 /// Represents a segment of command line arguments for a specific command
 #[derive(Debug, Clone, PartialEq)]
@@ -71,10 +82,11 @@ impl CommandSegmenter {
                 current_args.push(arg.clone());
             } else {
                 // This shouldn't happen if global args were properly identified
-                return Err(anyhow::anyhow!(
-                    "Unexpected argument '{}' found after global args",
-                    arg
-                ));
+                return Err(
+                    CommandSegmentationError::UnexpectedArgumentAfterGlobalArgs {
+                        arg: arg.clone(),
+                    },
+                );
             }
         }
 

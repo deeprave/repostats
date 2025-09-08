@@ -3,6 +3,8 @@
 //! Common mock plugins and test helpers to eliminate duplication across test modules.
 
 #[cfg(test)]
+use crate::notifications::api::AsyncNotificationManager;
+#[cfg(test)]
 use crate::plugin::args::PluginConfig;
 #[cfg(test)]
 use crate::plugin::error::{PluginError, PluginResult};
@@ -14,6 +16,10 @@ use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
 #[cfg(test)]
 use crate::scanner::types::ScanRequires;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use tokio::sync::Mutex;
 
 /// Configurable mock plugin for comprehensive testing
 #[cfg(test)]
@@ -93,6 +99,10 @@ impl Plugin for MockPlugin {
 
     fn requirements(&self) -> ScanRequires {
         self.requirements
+    }
+
+    fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
+        // Mock implementation - just ignore the manager
     }
 
     async fn initialize(&mut self) -> PluginResult<()> {
@@ -191,6 +201,10 @@ impl Plugin for MockConsumerPlugin {
 
     fn requirements(&self) -> ScanRequires {
         self.base.requirements()
+    }
+
+    fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
+        self.base.set_notification_manager(manager);
     }
 
     async fn initialize(&mut self) -> PluginResult<()> {
