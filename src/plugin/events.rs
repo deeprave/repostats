@@ -7,6 +7,9 @@ use crate::notifications::api::PluginEvent;
 use crate::notifications::event::{Event, PluginEventType};
 use crate::plugin::error::{PluginError, PluginResult};
 
+/// System-level scan ID constant used for events not associated with a specific scan
+pub const SYSTEM_SCAN_ID: &str = "system";
+
 /// Publish a plugin event to the notification system
 ///
 /// This utility function provides a standardized way to publish plugin events,
@@ -15,7 +18,7 @@ use crate::plugin::error::{PluginError, PluginResult};
 /// # Arguments
 /// * `event_type` - The type of plugin event to publish
 /// * `plugin_name` - The name of the plugin publishing the event
-/// * `scan_id` - The scan ID associated with the event, or "system" for system events
+/// * `scan_id` - The scan ID associated with the event, or SYSTEM_SCAN_ID for system events
 /// * `message` - Optional message describing the event
 ///
 /// # Returns
