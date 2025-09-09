@@ -196,7 +196,15 @@ impl TemplateFormatter {
         let final_key = if Self::RESERVED_CONTEXT_KEYS.contains(&safe_key.as_str()) {
             format!("user_{}", safe_key) // Namespace reserved keywords
         } else if safe_key.is_empty() || safe_key.starts_with('_') {
-            format!("user_data_{}", safe_key.trim_start_matches('_')) // Handle edge cases
+            // Use original key hash to ensure uniqueness for problematic keys
+            let key_hash = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                key.hash(&mut hasher);
+                hasher.finish()
+            };
+            format!("user_data_{:x}", key_hash) // Use hex hash for unique identification
         } else {
             safe_key
         };
@@ -548,7 +556,23 @@ impl OutputFormatter for TemplateFormatter {
             &self.template_name
         };
 
+        // Validate template exists before attempting to render
+        if !self
+            .tera
+            .get_template_names()
+            .any(|name| name == template_name)
+        {
+            return Err(PluginError::ExecutionError {
+                plugin_name: "TemplateFormatter".to_string(),
+                operation: "render template".to_string(),
+                cause: format!("Template '{}' not found", template_name),
+            });
+        }
+
         self.tera.render(template_name, &context).map_err(|e| {
+            // Log the full error internally for debugging
+            log::debug!("Template rendering failed for '{}': {}", template_name, e);
+
             // Sanitize the error message to avoid leaking template/internal details
             let err_str = e.to_string();
             let sanitized = if err_str.len() > 120 {
@@ -1034,17 +1058,36 @@ Count: {{ row_count | default(value=0) }}"#;
             metadata,
         };
 
-        let template = r#"Reserved collisions: {{ user_rows | default(value="not_found") }} {{ user_timestamp | default(value="not_found") }} {{ user_loop | default(value="not_found") }}
-Edge cases: {{ user_data_private | default(value="not_found") }} {{ user_data_ | default(value="not_found") }}
-Normal: {{ repo_name | default(value="not_found") }}
-Actual rows: {{ row_count }}"#;
+        // Generate the expected hash-based keys for edge cases
+        let private_key_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            "_private".hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
+        let empty_key_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            "".hash(&mut hasher);
+            format!("{:x}", hasher.finish())
+        };
 
-        let formatter = TemplateFormatter::with_template(template.to_string()).unwrap();
+        let template = format!(
+            r#"Reserved collisions: {{{{ user_rows | default(value="not_found") }}}} {{{{ user_timestamp | default(value="not_found") }}}} {{{{ user_loop | default(value="not_found") }}}}
+Edge cases: {{{{ user_data_{} | default(value="not_found") }}}} {{{{ user_data_{} | default(value="not_found") }}}}
+Normal: {{{{ repo_name | default(value="not_found") }}}}
+Actual rows: {{{{ row_count }}}}"#,
+            private_key_hash, empty_key_hash
+        );
+
+        let formatter = TemplateFormatter::with_template(template).unwrap();
         let result = formatter.format(&data, false).unwrap();
 
         // Verify reserved keys were namespaced
         assert!(result.contains("Reserved collisions: malicious_value fake_time tera_builtin"));
-        // Verify edge cases were handled
+        // Verify edge cases were handled with unique hash-based keys
         assert!(result.contains("Edge cases: underscore_data empty_key"));
         // Verify normal case worked
         assert!(result.contains("Normal: safe_value"));
@@ -1057,7 +1100,7 @@ Actual rows: {{ row_count }}"#;
         let formatter = TemplateFormatter::new();
 
         // Test normal timestamp with subsecond precision
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        use std::time::{Duration, UNIX_EPOCH};
         let precise_time = UNIX_EPOCH + Duration::new(1609459200, 123456789); // 2021-01-01 with nanoseconds
         let precise_value = formatter.value_to_tera_value(&Value::Timestamp(precise_time));
 
@@ -1077,6 +1120,72 @@ Actual rows: {{ row_count }}"#;
             assert!(time_str.contains("Pre-epoch timestamp"));
         } else {
             panic!("Expected pre-epoch timestamp error message");
+        }
+    }
+
+    #[test]
+    fn test_template_existence_validation() {
+        let mut tera = Tera::default();
+        tera.add_raw_template("existing_template", "Hello {{ name }}")
+            .unwrap();
+
+        let formatter = TemplateFormatter {
+            tera,
+            template_name: "nonexistent_template".to_string(),
+        };
+
+        let data = PluginDataExport {
+            plugin_id: "test".to_string(),
+            scan_id: "scan1".to_string(),
+            timestamp: SystemTime::now(),
+            payload: DataPayload::Raw {
+                data: Arc::new("test".to_string()),
+                content_type: None,
+            },
+            hints: ExportHints::default(),
+            metadata: HashMap::new(),
+        };
+
+        let result = formatter.format(&data, false);
+
+        // Should fail with template not found error
+        assert!(result.is_err());
+        if let Err(PluginError::ExecutionError { cause, .. }) = result {
+            assert!(cause.contains("Template 'nonexistent_template' not found"));
+        } else {
+            panic!("Expected ExecutionError for missing template");
+        }
+    }
+
+    #[test]
+    fn test_error_message_logging_and_sanitization() {
+        // Create a template with valid syntax but undefined variable to trigger a rendering error
+        let template_with_undefined_var = "Hello {{ undefined_variable_that_does_not_exist }}";
+        let formatter =
+            TemplateFormatter::with_template(template_with_undefined_var.to_string()).unwrap();
+
+        let data = PluginDataExport {
+            plugin_id: "test".to_string(),
+            scan_id: "scan1".to_string(),
+            timestamp: SystemTime::now(),
+            payload: DataPayload::Raw {
+                data: Arc::new("test".to_string()),
+                content_type: None,
+            },
+            hints: ExportHints::default(),
+            metadata: HashMap::new(),
+        };
+
+        let result = formatter.format(&data, false);
+
+        // Should fail but with sanitized error message
+        assert!(result.is_err());
+        if let Err(PluginError::ExecutionError { cause, .. }) = result {
+            assert!(cause.contains("Template rendering failed"));
+            // Should not contain the raw variable name due to sanitization
+            assert!(!cause.contains("undefined_variable_that_does_not_exist"));
+        } else {
+            panic!("Expected ExecutionError for template rendering");
         }
     }
 }
