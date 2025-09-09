@@ -4,6 +4,10 @@
 //! are available. It follows the PluginType::Output pattern and handles data export
 //! from other processing plugins using an event-driven architecture.
 
+pub mod args;
+pub mod formats;
+pub mod output;
+
 #[cfg(test)]
 pub mod tests;
 
