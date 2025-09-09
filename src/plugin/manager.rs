@@ -1122,7 +1122,7 @@ impl PluginManager {
             let plugin_event = PluginEvent::with_message(
                 PluginEventType::Unregistered,
                 plugin_name.clone(),
-                "unknown".to_string(), // TODO: Need to get actual scan_id from context
+                "system".to_string(), // System-level event, not associated with a specific scan
                 "System shutdown requested".to_string(),
             );
 

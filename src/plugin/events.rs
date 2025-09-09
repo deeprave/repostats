@@ -15,6 +15,7 @@ use crate::plugin::error::{PluginError, PluginResult};
 /// # Arguments
 /// * `event_type` - The type of plugin event to publish
 /// * `plugin_name` - The name of the plugin publishing the event
+/// * `scan_id` - The scan ID associated with the event, or "system" for system events
 /// * `message` - Optional message describing the event
 ///
 /// # Returns
@@ -24,6 +25,7 @@ use crate::plugin::error::{PluginError, PluginResult};
 pub async fn publish_plugin_event(
     event_type: PluginEventType,
     plugin_name: &str,
+    scan_id: &str,
     message: &str,
 ) -> PluginResult<()> {
     use crate::notifications::api::get_notification_service;
@@ -33,7 +35,7 @@ pub async fn publish_plugin_event(
     let event = Event::Plugin(PluginEvent::with_message(
         event_type.clone(),
         plugin_name.to_string(),
-        "unknown".to_string(), // TODO: Need to get actual scan_id from context
+        scan_id.to_string(),
         message.to_string(),
     ));
 
@@ -56,11 +58,16 @@ pub async fn publish_plugin_event(
 ///
 /// # Arguments
 /// * `plugin_name` - The name of the plugin that completed
+/// * `scan_id` - The scan ID associated with the completion, or "system" for system events
 /// * `message` - Optional message describing the completion
 ///
 /// (Usage example removed – internal helper.)
-pub async fn publish_plugin_completion_event(plugin_name: &str, message: &str) -> PluginResult<()> {
-    publish_plugin_event(PluginEventType::Completed, plugin_name, message).await
+pub async fn publish_plugin_completion_event(
+    plugin_name: &str,
+    scan_id: &str,
+    message: &str,
+) -> PluginResult<()> {
+    publish_plugin_event(PluginEventType::Completed, plugin_name, scan_id, message).await
 }
 
 /// Publish a plugin error event
@@ -69,14 +76,16 @@ pub async fn publish_plugin_completion_event(plugin_name: &str, message: &str) -
 ///
 /// # Arguments
 /// * `plugin_name` - The name of the plugin that encountered an error
+/// * `scan_id` - The scan ID associated with the error, or "system" for system events
 /// * `error_message` - Description of the error
 ///
 /// (Usage example removed – internal helper.)
 pub async fn publish_plugin_error_event(
     plugin_name: &str,
+    scan_id: &str,
     error_message: &str,
 ) -> PluginResult<()> {
-    publish_plugin_event(PluginEventType::Error, plugin_name, error_message).await
+    publish_plugin_event(PluginEventType::Error, plugin_name, scan_id, error_message).await
 }
 
 /// Publish a plugin keep-alive event
@@ -86,12 +95,20 @@ pub async fn publish_plugin_error_event(
 ///
 /// # Arguments
 /// * `plugin_name` - The name of the plugin sending the keep-alive signal
+/// * `scan_id` - The scan ID associated with the keep-alive, or "system" for system events
 /// * `status_message` - Current status or progress message
 ///
 /// (Usage example removed – internal helper.)
 pub async fn publish_plugin_keepalive_event(
     plugin_name: &str,
+    scan_id: &str,
     status_message: &str,
 ) -> PluginResult<()> {
-    publish_plugin_event(PluginEventType::KeepAlive, plugin_name, status_message).await
+    publish_plugin_event(
+        PluginEventType::KeepAlive,
+        plugin_name,
+        scan_id,
+        status_message,
+    )
+    .await
 }
