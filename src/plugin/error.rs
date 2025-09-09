@@ -31,6 +31,19 @@ pub enum PluginError {
     /// Async operation error
     AsyncError { message: String },
 
+    /// Configuration error
+    ConfigurationError {
+        plugin_name: String,
+        message: String,
+    },
+
+    /// IO operation error
+    IoError {
+        operation: String,
+        path: String,
+        cause: String,
+    },
+
     /// Generic plugin error
     Generic { message: String },
 }
@@ -61,6 +74,23 @@ impl fmt::Display for PluginError {
             PluginError::AsyncError { message } => {
                 write!(f, "Async operation error: {}", message)
             }
+            PluginError::ConfigurationError {
+                plugin_name,
+                message,
+            } => {
+                write!(
+                    f,
+                    "Configuration error in plugin '{}': {}",
+                    plugin_name, message
+                )
+            }
+            PluginError::IoError {
+                operation,
+                path,
+                cause,
+            } => {
+                write!(f, "IO error during {} on '{}': {}", operation, path, cause)
+            }
             PluginError::Generic { message } => {
                 write!(f, "{}", message)
             }
@@ -77,6 +107,10 @@ impl ContextualError for PluginError {
             PluginError::Generic { .. } => true,
             PluginError::VersionIncompatible { .. } => true,
             PluginError::PluginNotFound { .. } => true,
+
+            // User configuration errors
+            PluginError::ConfigurationError { .. } => true,
+            PluginError::IoError { .. } => true,
 
             // System/internal errors that users cannot directly fix
             PluginError::LoadError { .. }
@@ -95,6 +129,10 @@ impl ContextualError for PluginError {
             PluginError::PluginNotFound { plugin_name: _ } => {
                 Some("Plugin not found. Check your plugin directory or plugin name spelling.")
             }
+
+            // Configuration errors with specific messages
+            PluginError::ConfigurationError { message, .. } => Some(message),
+            PluginError::IoError { cause, .. } => Some(cause),
 
             // System errors - let generic context handle them
             _ => None,
