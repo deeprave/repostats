@@ -1,4 +1,4 @@
-//! Date parsing utilities for CLI arguments
+//! Date parsing utilities
 //!
 //! Provides flexible date parsing supporting ISO 8601 formats and relative dates.
 
@@ -140,5 +140,60 @@ fn parse_time_unit(unit: &str, count: i64) -> Result<Duration, String> {
         "month" | "months" => Ok(Duration::days(count * 30)), // Approximate
         "year" | "years" | "y" => Ok(Duration::days(count * 365)), // Approximate
         _ => Err(format!("Unknown time unit: '{}'", unit)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_parse_iso_date() {
+        // Test ISO 8601 date parsing
+        assert!(parse_date("2024-01-15").is_ok());
+        assert!(parse_date("2024-01-15T10:30:00Z").is_ok());
+        assert!(parse_date("2024-12-31").is_ok());
+    }
+
+    #[test]
+    fn test_invalid_dates() {
+        assert!(parse_date("invalid").is_err());
+        assert!(parse_date("2024-13-01").is_err()); // Invalid month
+        assert!(parse_date("2024-01-32").is_err()); // Invalid day
+    }
+
+    #[test]
+    fn test_parse_future_dates() {
+        // These should parse without error
+        assert!(parse_date("tomorrow").is_ok());
+        assert!(parse_date("in 2 days").is_ok());
+        assert!(parse_date("3 hours from now").is_ok());
+    }
+
+    #[test]
+    fn test_parse_relative_dates() {
+        // These should parse without error
+        assert!(parse_date("yesterday").is_ok());
+        assert!(parse_date("1 week ago").is_ok());
+        assert!(parse_date("2 months ago").is_ok());
+    }
+
+    #[test]
+    fn test_parse_various_units() {
+        let relative_formats = vec![
+            "1 second ago",
+            "5 minutes ago",
+            "2 hours ago",
+            "1 day ago",
+            "3 weeks ago",
+            "6 months ago",
+            "1 year ago",
+        ];
+
+        for format in relative_formats {
+            assert!(parse_date(format).is_ok(), "Failed to parse: {}", format);
+        }
     }
 }

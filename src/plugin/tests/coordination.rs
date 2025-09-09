@@ -26,14 +26,13 @@ mod integration_tests {
             Duration::from_secs(30),   // plugin_timeout
         )
         .expect("Should create valid config with valid timeouts");
-        let plugin_manager = PluginManager::with_config(1, config);
+        let mut plugin_manager = PluginManager::with_config(1, config);
 
-        // Initialize event subscription before calling await_all_plugins_completion
-        let mut notification_manager = crate::notifications::api::AsyncNotificationManager::new();
+        // Initialize plugin manager before calling await_all_plugins_completion
         plugin_manager
-            .initialize_event_subscription(&mut notification_manager)
+            .initialize()
             .await
-            .expect("Should initialize event subscription");
+            .expect("Should initialize plugin manager");
 
         // With no active plugins, this should return immediately
         let start_time = std::time::Instant::now();
@@ -60,7 +59,7 @@ mod integration_tests {
             Duration::from_secs(5),    // Minimum valid plugin_timeout for testing
         )
         .expect("Should create valid config with valid timeouts");
-        let plugin_manager = PluginManager::with_config(1, config.clone());
+        let mut plugin_manager = PluginManager::with_config(1, config.clone());
 
         // Verify the configuration is applied correctly
         assert_eq!(
@@ -76,12 +75,11 @@ mod integration_tests {
             Duration::from_millis(5)
         );
 
-        // Initialize event subscription before calling await_all_plugins_completion
-        let mut notification_manager = crate::notifications::api::AsyncNotificationManager::new();
+        // Initialize plugin manager before calling await_all_plugins_completion
         plugin_manager
-            .initialize_event_subscription(&mut notification_manager)
+            .initialize()
             .await
-            .expect("Should initialize event subscription");
+            .expect("Should initialize plugin manager");
 
         // Test that the timeout configuration affects behavior
         // Since no plugins are registered, this will complete immediately
@@ -323,17 +321,16 @@ mod integration_tests {
         }
 
         // Get a mutable reference to the plugin manager for the final operations
-        let plugin_manager = match std::sync::Arc::try_unwrap(plugin_manager_clone) {
+        let mut plugin_manager = match std::sync::Arc::try_unwrap(plugin_manager_clone) {
             Ok(manager) => manager,
             Err(_) => panic!("Should be able to unwrap Arc when no other references exist"),
         };
 
-        // Initialize event subscription before calling await_all_plugins_completion
-        let mut notification_manager = crate::notifications::api::AsyncNotificationManager::new();
+        // Initialize plugin manager before calling await_all_plugins_completion
         plugin_manager
-            .initialize_event_subscription(&mut notification_manager)
+            .initialize()
             .await
-            .expect("Should initialize event subscription");
+            .expect("Should initialize plugin manager");
 
         // Test that await_all_plugins_completion works with the plugins
         let result = plugin_manager.await_all_plugins_completion().await;

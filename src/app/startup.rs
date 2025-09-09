@@ -186,7 +186,7 @@ pub async fn startup(
     // Configure plugin manager timeout from CLI args (respects user configuration)
     log::trace!("Configuring plugin manager timeout from CLI args");
     let timeout_duration = final_args.plugin_timeout_duration();
-    let mut plugin_manager = crate::core::services::get_plugin_service().await;
+    let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
     log::trace!("Acquired plugin manager lock for timeout configuration");
     if let Err(e) = plugin_manager.configure_plugin_timeout(timeout_duration) {
         return Err(StartupError::PluginFailed { error: e });
@@ -209,7 +209,7 @@ pub async fn startup(
     // Check if --plugins flag was provided (after plugin discovery, before segmentation)
     if args.plugins {
         log::debug!("--plugins flag detected, listing all discovered plugins");
-        let plugin_manager = crate::core::services::get_plugin_service().await;
+        let plugin_manager = crate::plugin::api::get_plugin_service().await;
         let plugins = plugin_manager.list_plugins_with_filter(false).await;
 
         if plugins.is_empty() {
@@ -304,7 +304,7 @@ async fn discover_commands(
 
     // Enhanced error context - use independent service access
     log::trace!("discover_commands getting plugin service independently");
-    let mut plugin_manager = crate::core::services::get_plugin_service().await;
+    let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
     log::trace!("discover_commands acquired plugin manager lock successfully");
 
     // Enhanced error handling with context
@@ -377,7 +377,7 @@ async fn configure_plugins(
     }
 
     // Get plugin manager independently to avoid deadlocks
-    let mut plugin_manager = crate::core::services::get_plugin_service().await;
+    let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
 
     // Step 1: Set plugin configurations from TOML config if available
     if let Some(config) = toml_config {
@@ -419,7 +419,7 @@ async fn build_query_params(
     args: &super::cli::args::Args,
     toml_config: Option<&toml::Table>,
 ) -> StartupResult<crate::core::query::QueryParams> {
-    use crate::app::cli::date_parser;
+    use crate::core::date_parser;
     use crate::core::query::QueryParams;
 
     // Start with base query parameters
@@ -616,7 +616,7 @@ async fn configure_scanner(
 
     // Step 2: Get plugin manager and check for active processing plugins
     let plugin_names = {
-        let plugin_manager = crate::core::services::get_plugin_service().await;
+        let plugin_manager = crate::plugin::api::get_plugin_service().await;
         let active_plugins = plugin_manager.get_active_plugins();
 
         if active_plugins.is_empty() {
@@ -632,10 +632,10 @@ async fn configure_scanner(
     }; // plugin_manager lock is released here
 
     // Step 3: Setup plugin integration
-    let queue_manager = crate::core::services::get_queue_service();
+    let queue_manager = crate::queue::api::get_queue_service();
     {
         // Setup plugin consumers (get mutable access to plugin manager)
-        let mut plugin_manager = crate::core::services::get_plugin_service().await;
+        let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
 
         // Note: setup_plugin_consumers expects plugin_args, using empty for now
         let plugin_args: Vec<String> = Vec::new();

@@ -22,12 +22,14 @@ use std::sync::{LockResult, RwLockReadGuard, RwLockWriteGuard};
 /// ```
 /// use std::sync::Mutex;
 /// use repostats::core::sync::handle_mutex_poison;
-/// use repostats::scanner::api::ScanError;
+///
+/// #[derive(Debug)]
+/// struct AppError { message: String }
 ///
 /// let mutex = Mutex::new(42);
 /// let guard = handle_mutex_poison(
 ///     mutex.lock(),
-///     |msg| ScanError::Configuration { message: msg }
+///     |msg| AppError { message: msg }
 /// ).unwrap();
 /// ```
 pub fn handle_mutex_poison<T, E>(
