@@ -11,6 +11,9 @@ use tokio::sync::Mutex;
 // Core plugin management
 pub use crate::plugin::manager::PluginManager;
 
+// Error handling
+pub use crate::plugin::error::{PluginError, PluginResult};
+
 // Note: Direct plugin utilities have been moved to their respective modules
 // Use crate::plugin::error::PluginError for error handling
 // Use crate::plugin::events:: for plugin event publishing

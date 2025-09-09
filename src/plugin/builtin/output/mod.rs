@@ -29,8 +29,8 @@ pub struct RepositoryContext {
 pub struct OutputPlugin {
     initialized: bool,
     output_destination: Option<String>,
-    /// Current active scan_id (most recent scan started)
-    current_scan_id: Option<String>,
+    /// Scan ID of data currently being processed
+    processing_scan_id: Option<String>,
     /// Repository contexts indexed by scan_id
     repository_contexts: HashMap<String, RepositoryContext>,
     /// Received data exports indexed by (plugin_id, scan_id)
@@ -45,7 +45,7 @@ impl OutputPlugin {
         Self {
             initialized: false,
             output_destination: None,
-            current_scan_id: None,
+            processing_scan_id: None,
             repository_contexts: HashMap::new(),
             received_data: HashMap::new(),
             notification_manager: None,
@@ -60,7 +60,7 @@ impl OutputPlugin {
         }
     }
 
-    /// Send a keep-alive signal to indicate plugin is still active
+    /// Send a keep-alive signal to indicate plugin is still active during data processing
     pub async fn send_keepalive_signal(
         &self,
         status_message: &str,
@@ -69,6 +69,11 @@ impl OutputPlugin {
             return Err(crate::plugin::error::PluginError::Generic {
                 message: "OutputPlugin not initialized".to_string(),
             });
+        }
+
+        // Skip keep-alive if not processing any scan data yet
+        if self.processing_scan_id.is_none() {
+            return Ok(());
         }
 
         let manager = self.notification_manager.as_ref().ok_or_else(|| {
@@ -83,7 +88,7 @@ impl OutputPlugin {
         let event = Event::Plugin(PluginEvent::with_message(
             PluginEventType::KeepAlive,
             self.plugin_info().name.clone(),
-            self.current_scan_id
+            self.processing_scan_id
                 .as_deref()
                 .unwrap_or("no-active-scan")
                 .to_string(),
@@ -247,7 +252,7 @@ impl OutputPlugin {
                     event.scan_id
                 );
                 // Set the current active scan_id
-                self.current_scan_id = Some(event.scan_id.clone());
+                self.processing_scan_id = Some(event.scan_id.clone());
                 self.store_repository_context(&event.scan_id, event).await?;
             }
             crate::notifications::api::ScanEventType::Error => {
@@ -259,9 +264,9 @@ impl OutputPlugin {
                     "OutputPlugin received scan completion for scan {}",
                     event.scan_id
                 );
-                // Clear current scan_id if this was the active scan
-                if self.current_scan_id.as_ref() == Some(&event.scan_id) {
-                    self.current_scan_id = None;
+                // Clear processing scan if this scan has completed
+                if self.processing_scan_id.as_ref() == Some(&event.scan_id) {
+                    self.processing_scan_id = None;
                 }
                 // Scan completion doesn't trigger export - DataReady events do
             }
@@ -454,7 +459,7 @@ impl Plugin for OutputPlugin {
         let event = Event::Plugin(PluginEvent::with_message(
             PluginEventType::Completed,
             self.plugin_info().name.clone(),
-            self.current_scan_id
+            self.processing_scan_id
                 .as_deref()
                 .unwrap_or("no-active-scan")
                 .to_string(),

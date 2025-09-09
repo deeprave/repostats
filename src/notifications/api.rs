@@ -49,3 +49,12 @@ pub async fn get_notification_service() -> tokio::sync::MutexGuard<'static, Asyn
     log::trace!("Acquired notification service lock");
     guard
 }
+
+/// Get direct Arc reference to notification service for internal system components
+///
+/// Used by top-level components like PluginManager to get the notification service
+/// reference for dependency injection into their sub-components.
+pub(crate) fn get_notification_service_arc() -> Arc<Mutex<AsyncNotificationManager>> {
+    log::trace!("Getting notification service Arc reference for internal component");
+    NOTIFICATION_SERVICE.clone()
+}

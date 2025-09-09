@@ -1,4 +1,4 @@
-//! Tests for the core services re-exports
+//! Integration tests for application services
 
 use crate::notifications::api::get_notification_service;
 use crate::plugin::api::get_plugin_service;

@@ -133,26 +133,29 @@ pub struct PluginManager {
 
     /// Async-safe mutex to prevent concurrent event subscription initialization
     event_subscription_mutex: Arc<Mutex<bool>>,
+
+    /// Global notification manager reference for plugin dependency injection
+    /// Notification manager for plugin event handling
+    notification_manager: Arc<Mutex<AsyncNotificationManager>>,
 }
 
 impl PluginManager {
     /// Error message for shared consumer storage not initialized
     const SHARED_STORAGE_ERROR: &'static str =
-        "Shared consumer storage not initialized. Call initialize_event_subscription() first.";
+        "Shared consumer storage not initialized. Call initialize() first.";
 
     /// Error message for plugin event subscription not initialized
     const EVENT_SUBSCRIPTION_ERROR: &'static str =
-        "Plugin event subscription not initialized. Call initialize_event_subscription() first.";
+        "Plugin event subscription not initialized. Call initialize() first.";
 
     /// Create a new plugin manager with default configuration
-    /// Note: Call initialize_event_subscription() after creation for proper event handling
     pub fn new(api_version: u32) -> Self {
         Self::with_config(api_version, PluginManagerConfig::default())
     }
 
     /// Create a new plugin manager with custom configuration
-    /// Note: Call initialize_event_subscription() after creation for proper event handling
     pub fn with_config(api_version: u32, config: PluginManagerConfig) -> Self {
+        let notification_manager = crate::notifications::api::get_notification_service_arc();
         Self {
             registry: SharedPluginRegistry::new(),
             api_version,
@@ -164,8 +167,9 @@ impl PluginManager {
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             plugin_completion: Arc::new(RwLock::new(HashMap::new())),
             config,
-            plugin_event_receiver: Arc::new(Mutex::new(None)), // Will be set by initialize_event_subscription()
+            plugin_event_receiver: Arc::new(Mutex::new(None)), // Will be set by initialize()
             event_subscription_mutex: Arc::new(Mutex::new(false)),
+            notification_manager,
         }
     }
 
@@ -189,15 +193,11 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Initialize event subscription for plugin coordination
-    /// MUST be called after construction
-    /// Enables proper event handling and prevent race conditions
-    /// Takes notification manager directly to avoid circular service dependency
-    pub async fn initialize_event_subscription(
-        &self,
-        notification_manager: &mut crate::notifications::api::AsyncNotificationManager,
-    ) -> PluginResult<()> {
-        log::trace!("Starting plugin manager event subscription initialization");
+    /// Initialize the plugin manager
+    /// MUST be called after construction before using the plugin manager
+    /// Handles event subscription setup and other necessary initialization
+    pub async fn initialize(&mut self) -> PluginResult<()> {
+        log::trace!("Starting plugin manager initialization");
 
         // Use async-safe mutex to prevent concurrent initialization
         let mut guard = self.event_subscription_mutex.lock().await;
@@ -207,8 +207,8 @@ impl PluginManager {
         }
 
         // Subscribe to plugin events immediately to prevent race conditions
-
-        let plugin_event_receiver = notification_manager
+        let mut manager = self.notification_manager.lock().await;
+        let plugin_event_receiver = manager
             .subscribe(
                 "plugin_manager_events".to_string(),
                 EventFilter::PluginOnly,
@@ -225,9 +225,12 @@ impl PluginManager {
         // Only set the receiver and mark as initialized AFTER successful subscription
         *self.plugin_event_receiver.lock().await =
             Some(Arc::new(Mutex::new(plugin_event_receiver)));
-        *guard = true; // Mark as initialized only after successful completion
-        log::debug!("Plugin manager event subscription initialized successfully");
 
+        // Mark initialization complete
+        *guard = true;
+        drop(guard); // Explicit drop for clarity
+
+        log::trace!("Plugin manager initialization completed");
         Ok(())
     }
 
@@ -679,10 +682,8 @@ impl PluginManager {
             return Ok(());
         }
 
-        // Create independent notification manager for plugin dependency injection
-        let notification_manager = std::sync::Arc::new(tokio::sync::Mutex::new(
-            crate::notifications::api::AsyncNotificationManager::new(),
-        ));
+        // Use the shared notification manager for plugin dependency injection
+        let notification_manager = self.notification_manager.clone();
 
         let mut registry = self.registry.inner().write().await;
 

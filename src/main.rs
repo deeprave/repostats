@@ -88,7 +88,7 @@ async fn main() {
 
             // Spawn spinner task if appropriate (skip if any plugin suppresses progress)
             let suppress_progress = {
-                let plugin_manager = core::services::get_plugin_service().await;
+                let plugin_manager = crate::plugin::api::get_plugin_service().await;
                 plugin_manager
                     .get_combined_requirements()
                     .await
@@ -139,32 +139,14 @@ async fn run_scanner_with_coordination(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), ScanError> {
-    // Get services for plugin coordination
-    log::trace!("Getting notification manager for plugin initialization");
-    let mut notification_manager = core::services::get_notification_service().await;
-    log::trace!("Acquired notification manager lock successfully");
-
-    // Initialize plugin event subscription for coordination (prevents race conditions)
-    log::trace!("Initializing plugin event subscription");
+    // Initialize plugin manager
     {
-        let plugin_manager = core::services::get_plugin_service().await;
-        log::trace!("Acquired plugin manager lock for initialization");
-
-        if let Err(e) = plugin_manager
-            .initialize_event_subscription(&mut notification_manager)
-            .await
-        {
-            log::error!("Failed to initialize plugin event subscription: {}", e);
-            return Err(ScanError::Configuration {
-                message: format!("Plugin coordination setup failed: {}", e),
-            });
+        let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
+        if let Err(e) = plugin_manager.initialize().await {
+            log::error!("Failed to initialize plugin manager: {}", e);
+            std::process::exit(1);
         }
-        log::trace!("Plugin event subscription initialization completed");
-        // Plugin manager lock drops here automatically
     }
-
-    // Drop notification manager lock early to avoid potential conflicts
-    drop(notification_manager);
 
     // Clone scanner_manager for the select block
     let scanner_manager_for_start = scanner_manager.clone();
@@ -187,7 +169,7 @@ async fn run_scanner_with_coordination(
                         let timeout = std::time::Duration::from_secs(30);
 
                         // Scope plugin manager access for graceful stop
-                        let plugin_mgr = core::services::get_plugin_service().await;
+                        let plugin_mgr = crate::plugin::api::get_plugin_service().await;
                         if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                             if !summary.all_completed() {
                                 log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
@@ -199,7 +181,7 @@ async fn run_scanner_with_coordination(
                         let shutdown_rx = shutdown_rx.resubscribe();
 
                         // Scope plugin manager access for completion wait
-                        let plugin_mgr = core::services::get_plugin_service().await;
+                        let plugin_mgr = crate::plugin::api::get_plugin_service().await;
                         if let Err(e) = plugin_mgr.await_all_plugins_completion_with_shutdown(shutdown_rx).await {
                             log::trace!("Plugin completion wait failed: {}", e);
                         }
@@ -213,7 +195,7 @@ async fn run_scanner_with_coordination(
                     let timeout = std::time::Duration::from_secs(30);
 
                     // Scope plugin manager access for graceful stop after scanner failure
-                    let plugin_mgr = core::services::get_plugin_service().await;
+                    let plugin_mgr = crate::plugin::api::get_plugin_service().await;
                     if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                         if !summary.all_completed() {
                             log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
@@ -233,7 +215,7 @@ async fn run_scanner_with_coordination(
                     let timeout = std::time::Duration::from_secs(30);
 
                     // Scope plugin manager access for signal-triggered graceful stop
-                    let plugin_mgr = core::services::get_plugin_service().await;
+                    let plugin_mgr = crate::plugin::api::get_plugin_service().await;
                     if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
                         if !summary.all_completed() {
                             log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
@@ -261,7 +243,7 @@ async fn run_scanner_with_coordination(
 
 async fn system_start(pid: u32) -> Result<(), NotificationError> {
     // Get notification manager and process ID once
-    let mut notification_manager = core::services::get_notification_service().await;
+    let mut notification_manager = crate::notifications::api::get_notification_service().await;
 
     // Publish system startup event
     let startup_event = Event::System(SystemEvent::with_message(
@@ -272,7 +254,7 @@ async fn system_start(pid: u32) -> Result<(), NotificationError> {
 }
 
 async fn system_stop(pid: u32) -> Result<(), NotificationError> {
-    let mut notification_manager = core::services::get_notification_service().await;
+    let mut notification_manager = crate::notifications::api::get_notification_service().await;
     let shutdown_event = Event::System(SystemEvent::with_message(
         SystemEventType::Shutdown,
         format!("System shutting down, pid={pid}"),

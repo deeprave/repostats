@@ -3,7 +3,7 @@
 //! This module contains all tests for the date_parser module, including
 //! ISO 8601 date parsing, relative date parsing, and error handling.
 
-use crate::app::cli::date_parser::*;
+use crate::core::date_parser::*;
 use std::time::{Duration as StdDuration, SystemTime};
 
 #[test]
