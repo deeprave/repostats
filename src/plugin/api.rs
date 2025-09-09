@@ -14,6 +14,9 @@ pub use crate::plugin::manager::PluginManager;
 // Error handling
 pub use crate::plugin::error::{PluginError, PluginResult};
 
+// Event constants
+pub use crate::plugin::events::SYSTEM_SCAN_ID;
+
 // Note: Direct plugin utilities have been moved to their respective modules
 // Use crate::plugin::error::PluginError for error handling
 // Use crate::plugin::events:: for plugin event publishing
