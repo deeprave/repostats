@@ -339,7 +339,14 @@ async fn discover_commands(
 
     let command_names: Vec<String> = plugins
         .iter()
-        .flat_map(|plugin| plugin.functions.iter().map(|func| func.name.clone()))
+        .flat_map(|plugin| {
+            plugin.functions.iter().flat_map(|func| {
+                // Include both the primary function name and all aliases
+                let mut names = vec![func.name.clone()];
+                names.extend(func.aliases.clone());
+                names
+            })
+        })
         .collect();
 
     // Validate that we have commands
@@ -626,9 +633,6 @@ async fn configure_scanner(
 
         // Extract plugin names before releasing the lock
         active_plugins
-            .iter()
-            .map(|info| info.plugin_name.clone())
-            .collect::<Vec<String>>()
     }; // plugin_manager lock is released here
 
     // Step 3: Setup plugin integration

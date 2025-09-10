@@ -99,7 +99,10 @@ pub struct PluginManager {
     api_version: u32,
 
     /// Currently active plugins (plugins matched to command segments)
-    active_plugins: Vec<ActivePluginInfo>,
+    active_plugins: ActivePluginInfo,
+
+    /// Auto-active plugins (plugins that should be activated automatically)
+    auto_active_plugins: Vec<String>,
 
     /// Plugin-specific TOML configuration sections
     plugin_configs: HashMap<String, Table>,
@@ -159,7 +162,8 @@ impl PluginManager {
         Self {
             registry: SharedPluginRegistry::new(),
             api_version,
-            active_plugins: Vec::new(),
+            active_plugins: ActivePluginInfo::new(),
+            auto_active_plugins: Vec::new(),
             plugin_configs: HashMap::new(),
             pending_consumers: HashMap::new(),
             shared_pending_consumers: None,
@@ -427,129 +431,192 @@ impl PluginManager {
             }
         } // Write lock is dropped here
 
-        // Deduplicate and auto-activate plugins marked as auto_active
+        // Deduplicate auto-active plugins
         auto_active_plugins.sort();
         auto_active_plugins.dedup();
 
-        for plugin_name in &auto_active_plugins {
-            log::trace!("Auto-activating plugin: {}", plugin_name);
-
-            // Get plugin info using helper method
-            let function_name_opt = self.get_first_function_name(plugin_name).await;
-            let plugin_exists = self.get_plugin_info_by_name(plugin_name).await.is_some();
-
-            let function_name = function_name_opt.unwrap_or_else(|| "unknown".to_string());
-
-            if !plugin_exists {
-                log::warn!("Auto-active plugin '{}' not found in registry", plugin_name);
-                continue;
-            }
-
-            // Activate the plugin in registry
-            if let Err(e) = self.registry.activate_plugin(plugin_name).await {
-                log::warn!("Failed to auto-activate plugin '{}': {:?}", plugin_name, e);
-                continue;
-            }
-
-            // Add to active plugins list
-            self.active_plugins.push(ActivePluginInfo {
-                plugin_name: plugin_name.clone(),
-                function_name,
-                args: Vec::new(), // Auto-active plugins have no command line args
-            });
-
-            log::trace!(
-                "Auto-active plugin '{}' successfully activated",
-                plugin_name
-            );
-        }
+        // Store auto-active plugins for later processing
+        self.auto_active_plugins = auto_active_plugins;
 
         Ok(())
     }
 
     /// Activate plugins based on command segments
     ///
-    /// Matches command segments against discovered plugins and their advertised functions.
-    /// This includes matching both primary function names and aliases.
+    /// Simple logic:
+    /// - Set active_output_plugin to None
+    /// - Iterate the list of plugins
+    ///   - Check for segment matches (plugin name or functions)
+    ///   - If matched: activate and store args, if Output plugin override active_output_plugin
+    ///   - If auto-activate: activate with synthetic args, if Output plugin set active_output_plugin if None
+    /// - Any segments left over? Unknown command -> error
+    /// - Initialize all active plugins with their args (replaces initialize_active_plugins)
     pub async fn activate_plugins(
         &mut self,
         command_segments: &[CommandSegment],
     ) -> PluginResult<()> {
-        // Clear any existing active plugins
-        self.active_plugins.clear();
+        // Get all available plugins
+        let registry = self.registry.inner().read().await;
+        let all_plugin_names = registry.get_plugin_names();
+        drop(registry);
 
-        // Clear active plugins in registry
-        self.registry.clear_active_plugins().await;
+        let mut active_output_plugin: Option<String> = None;
+        let mut segments_to_process: Vec<CommandSegment> = command_segments.to_vec();
+        let mut plugins_to_activate: Vec<(String, Vec<String>)> = Vec::new(); // (plugin_name, args)
 
-        // Get all available plugin functions
-        let plugin_functions = self.list_plugins_with_functions().await?;
+        // Single loop: handle segment matching and auto-activation
+        for plugin_name in &all_plugin_names {
+            let mut segments_matched = Vec::new();
 
-        // Track activated plugins for potential rollback
-        let mut activated_plugins = Vec::new();
+            // Check if any command segments match this plugin
+            for (index, segment) in segments_to_process.iter().enumerate() {
+                let mut matched = false;
 
-        for segment in command_segments {
-            let mut matched = false;
-
-            // Try to find a plugin function that matches this command
-            for (plugin_name, functions) in &plugin_functions {
-                for function in functions {
-                    // Check both primary name and aliases
-                    if function.name == segment.command_name
-                        || function.aliases.contains(&segment.command_name)
-                    {
-                        self.active_plugins.push(ActivePluginInfo {
-                            plugin_name: plugin_name.clone(),
-                            function_name: function.name.clone(),
-                            args: segment.args.clone(),
-                        });
-
-                        // Also activate in registry
-                        self.registry.activate_plugin(plugin_name).await?;
-                        activated_plugins.push(plugin_name.clone());
-
-                        matched = true;
-                        break;
+                // Check if plugin name matches
+                if plugin_name == &segment.command_name {
+                    matched = true;
+                } else {
+                    // Check if any function name or alias matches
+                    if let Some(functions) = self.get_advertised_functions(plugin_name).await {
+                        for function in &functions {
+                            if function.name == segment.command_name
+                                || function.aliases.contains(&segment.command_name)
+                            {
+                                matched = true;
+                                break;
+                            }
+                        }
                     }
                 }
+
                 if matched {
-                    break;
+                    // Build args: command name as argv[0] + segment args
+                    plugins_to_activate.push((plugin_name.clone(), segment.args.clone()));
+
+                    // Check if it's an Output plugin - segment match always wins
+                    if let Some(plugin_info) = self.get_plugin_info_by_name(plugin_name).await {
+                        if plugin_info.plugin_type == crate::plugin::types::PluginType::Output {
+                            active_output_plugin = Some(plugin_name.clone());
+                        }
+                    }
+
+                    segments_matched.push(index);
+                    break; // Move to next plugin
                 }
             }
 
-            if !matched {
-                // Rollback any previously activated plugins before returning error
-                log::warn!(
-                    "PluginManager: No plugin found for command '{}', rolling back {} previously activated plugins",
-                    segment.command_name,
-                    activated_plugins.len()
-                );
+            // Remove matched segments
+            for &index in segments_matched.iter().rev() {
+                segments_to_process.remove(index);
+            }
 
-                let mut rollback_errors = Vec::new();
-                for plugin_name in &activated_plugins {
-                    if let Err(e) = self.registry.deactivate_plugin(plugin_name).await {
-                        let error_msg =
-                            format!("Failed to rollback plugin '{}': {}", plugin_name, e);
-                        log::warn!("{}", error_msg);
-                        rollback_errors.push(error_msg);
+            // If not matched and plugin is auto-activate
+            if segments_matched.is_empty() && self.auto_active_plugins.contains(plugin_name) {
+                // Check if it's an Output plugin - only set if no Output plugin chosen yet
+                if let Some(plugin_info) = self.get_plugin_info_by_name(plugin_name).await {
+                    if plugin_info.plugin_type == crate::plugin::types::PluginType::Output
+                        && active_output_plugin.is_none()
+                    {
+                        active_output_plugin = Some(plugin_name.clone());
                     }
                 }
+            }
+        }
 
-                // Clear the active plugins list as well
-                self.active_plugins.clear();
+        // Any segments left over? Unknown command error
+        if !segments_to_process.is_empty() {
+            return Err(PluginError::PluginNotFound {
+                plugin_name: segments_to_process[0].command_name.clone(),
+            });
+        }
 
-                let error_message = if rollback_errors.is_empty() {
-                    segment.command_name.clone()
+        // Filter out non-active Output plugins
+        if let Some(ref chosen_output) = active_output_plugin {
+            let mut filtered_plugins = Vec::new();
+            for (plugin_name, args) in plugins_to_activate {
+                if let Some(plugin_info) = self.get_plugin_info_by_name(&plugin_name).await {
+                    if plugin_info.plugin_type == crate::plugin::types::PluginType::Output {
+                        if plugin_name == *chosen_output {
+                            filtered_plugins.push((plugin_name, args)); // Keep chosen Output plugin
+                        }
+                        // Skip other Output plugins
+                    } else {
+                        filtered_plugins.push((plugin_name, args)); // Keep non-Output plugins
+                    }
                 } else {
-                    format!(
-                        "{}. Additionally, {} rollback failures occurred: [{}]",
-                        segment.command_name,
-                        rollback_errors.len(),
-                        rollback_errors.join(", ")
+                    filtered_plugins.push((plugin_name, args)); // Keep if we can't determine type
+                }
+            }
+            plugins_to_activate = filtered_plugins;
+        }
+
+        // Third pass: Activate and initialize all plugins (replaces initialize_active_plugins)
+        let notification_manager = self.notification_manager.clone();
+        let mut registry = self.registry.inner().write().await;
+
+        for (plugin_name, args) in &plugins_to_activate {
+            // Activate in registry
+            self.active_plugins.add(plugin_name);
+            registry.activate_plugin(plugin_name)?;
+
+            // Initialize plugin with notification manager and args
+            if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
+                // Set notification manager
+                plugin.set_notification_manager(notification_manager.clone());
+
+                // Initialize
+                plugin
+                    .initialize()
+                    .await
+                    .map_err(|e| PluginError::ExecutionError {
+                        plugin_name: plugin_name.clone(),
+                        operation: "initialize".to_string(),
+                        cause: format!("Failed to initialize plugin: {}", e),
+                    })?;
+
+                // Create plugin config
+                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
+                    crate::plugin::args::PluginConfig::from_toml(
+                        self.get_use_colors_setting(),
+                        toml_table,
                     )
+                } else {
+                    crate::plugin::args::PluginConfig::default()
                 };
 
+                // Parse arguments
+                plugin.parse_plugin_arguments(args, &plugin_config).await?;
+            } else if let Some(consumer_plugin) = registry.get_consumer_plugin_mut(plugin_name) {
+                // Set notification manager
+                consumer_plugin.set_notification_manager(notification_manager.clone());
+
+                // Initialize
+                consumer_plugin
+                    .initialize()
+                    .await
+                    .map_err(|e| PluginError::ExecutionError {
+                        plugin_name: plugin_name.clone(),
+                        operation: "initialize".to_string(),
+                        cause: format!("Failed to initialize consumer plugin: {}", e),
+                    })?;
+
+                // Create plugin config
+                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
+                    crate::plugin::args::PluginConfig::from_toml(
+                        self.get_use_colors_setting(),
+                        toml_table,
+                    )
+                } else {
+                    crate::plugin::args::PluginConfig::default()
+                };
+
+                // Parse arguments
+                consumer_plugin
+                    .parse_plugin_arguments(args, &plugin_config)
+                    .await?;
+            } else {
                 return Err(PluginError::PluginNotFound {
-                    plugin_name: error_message,
+                    plugin_name: plugin_name.clone(),
                 });
             }
         }
@@ -577,8 +644,8 @@ impl PluginManager {
     }
 
     /// Get currently active plugins
-    pub fn get_active_plugins(&self) -> &[ActivePluginInfo] {
-        &self.active_plugins
+    pub fn get_active_plugins(&self) -> Vec<String> {
+        self.active_plugins.get_active_plugins()
     }
 
     /// Get combined requirements from all active plugins
@@ -669,95 +736,10 @@ impl PluginManager {
 
     /// Initialize active plugins with their configurations and arguments
     ///
-    /// This method initializes all currently active plugins by:
-    /// 1. Injecting notification manager dependency
-    /// 2. Calling plugin.initialize() for each active plugin
-    /// 3. Parsing plugin-specific arguments via plugin.parse_plugin_arguments()
-    /// 4. Providing plugin-specific TOML configuration (if available)
-    ///
-    /// Note: Plugins don't currently receive TOML config directly through their interface.
-    /// The TOML config is stored in the PluginManager for future use.
+    /// NOTE: This method is now unnecessary as activate_plugins() handles all initialization.
+    /// Kept for compatibility - will be removed in future cleanup.
     pub async fn initialize_active_plugins(&mut self) -> PluginResult<()> {
-        if self.active_plugins.is_empty() {
-            return Ok(());
-        }
-
-        // Use the shared notification manager for plugin dependency injection
-        let notification_manager = self.notification_manager.clone();
-
-        let mut registry = self.registry.inner().write().await;
-
-        for active_plugin in &self.active_plugins {
-            let plugin_name = &active_plugin.plugin_name;
-            let args = &active_plugin.args;
-
-            // Try to find plugin in either standard or consumer plugin registry
-            let mut plugin_initialized = false;
-
-            // Try standard plugin first
-            if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
-                // Inject notification manager dependency
-                plugin.set_notification_manager(notification_manager.clone());
-
-                // Initialize the plugin
-                plugin
-                    .initialize()
-                    .await
-                    .map_err(|e| PluginError::ExecutionError {
-                        plugin_name: plugin_name.clone(),
-                        operation: "initialize".to_string(),
-                        cause: format!("Failed to initialize plugin: {}", e),
-                    })?;
-
-                // Parse plugin arguments
-                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(
-                        self.get_use_colors_setting(),
-                        toml_table,
-                    )
-                } else {
-                    crate::plugin::args::PluginConfig::default()
-                };
-                plugin.parse_plugin_arguments(args, &plugin_config).await?;
-
-                plugin_initialized = true;
-            }
-            // Try consumer plugin if not found as standard plugin
-            else if let Some(plugin) = registry.get_consumer_plugin_mut(plugin_name) {
-                // Inject notification manager dependency
-                plugin.set_notification_manager(notification_manager.clone());
-
-                // Initialize the plugin
-                plugin
-                    .initialize()
-                    .await
-                    .map_err(|e| PluginError::ExecutionError {
-                        plugin_name: plugin_name.clone(),
-                        operation: "initialize".to_string(),
-                        cause: format!("Failed to initialize consumer plugin: {}", e),
-                    })?;
-
-                // Parse plugin arguments
-                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(
-                        self.get_use_colors_setting(),
-                        toml_table,
-                    )
-                } else {
-                    crate::plugin::args::PluginConfig::default()
-                };
-                plugin.parse_plugin_arguments(args, &plugin_config).await?;
-
-                plugin_initialized = true;
-            }
-
-            if !plugin_initialized {
-                return Err(PluginError::PluginNotFound {
-                    plugin_name: plugin_name.clone(),
-                });
-            }
-        }
-
+        // All initialization is now done in activate_plugins()
         Ok(())
     }
 
@@ -869,10 +851,11 @@ impl PluginManager {
         use crate::notifications::api::EventFilter;
 
         let mut notification_manager = get_notification_service().await;
+        let active_plugin_names = self.active_plugins.get_active_plugins();
 
-        for active_plugin in &self.active_plugins {
-            let subscriber_id = format!("plugin-{}-notifications", active_plugin.plugin_name);
-            let source = format!("Plugin-{}", active_plugin.plugin_name);
+        for plugin_name in &active_plugin_names {
+            let subscriber_id = format!("plugin-{}-notifications", plugin_name);
+            let source = format!("Plugin-{}", plugin_name);
 
             // Create notification subscriber for system, queue, and scan messages
             // Plugins need to see system events, queue events, and scan events
@@ -885,7 +868,7 @@ impl PluginManager {
                     return Err(PluginError::AsyncError {
                         message: format!(
                             "Failed to create notification subscriber for plugin '{}': {}",
-                            active_plugin.plugin_name, e
+                            plugin_name, e
                         ),
                     });
                 }
@@ -1559,6 +1542,50 @@ impl PluginManager {
     pub async fn get_pending_completion_count(&self) -> usize {
         let completion = self.plugin_completion.read().await;
         completion.len()
+    }
+
+    /// Ensure fallback Output plugin is activated when no Output plugins are active
+    /// This provides automatic fallback to the built-in OutputPlugin when external
+    /// Output plugins are not available or have been deactivated
+    pub async fn ensure_output_plugin_fallback(&mut self) -> PluginResult<()> {
+        let registry = self.registry.inner().read().await;
+
+        // Check if any Output plugin is currently active
+        let active_plugins = self.active_plugins.get_active_plugins();
+        let has_active_output_plugin = active_plugins.iter().any(|plugin_name| {
+            if let Some(plugin) = registry.get_plugin(plugin_name) {
+                plugin.plugin_info().plugin_type == crate::plugin::types::PluginType::Output
+            } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
+                consumer_plugin.plugin_info().plugin_type
+                    == crate::plugin::types::PluginType::Output
+            } else {
+                false
+            }
+        });
+
+        // If no Output plugin is active, activate the built-in OutputPlugin
+        if !has_active_output_plugin {
+            let builtin_output_exists = registry.has_plugin("output");
+            drop(registry); // Release read lock before trying to activate
+
+            if builtin_output_exists {
+                log::info!("No Output plugin active, activating built-in OutputPlugin fallback");
+
+                // Activate the built-in output plugin
+                self.registry.activate_plugin("output").await?;
+
+                // Add to active plugins list if not already there
+                if !self.active_plugins.contains("output") {
+                    self.active_plugins.add("output");
+                }
+
+                log::trace!("Built-in OutputPlugin fallback activated successfully");
+            } else {
+                log::warn!("No Output plugin active and built-in OutputPlugin not found");
+            }
+        }
+
+        Ok(())
     }
 }
 

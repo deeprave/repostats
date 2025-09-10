@@ -36,19 +36,15 @@ async fn test_advertised_functions() {
 
     assert_eq!(functions.len(), 1);
 
-    let export_func = &functions[0];
-    assert_eq!(export_func.name, "export");
+    let output_func = &functions[0];
+    assert_eq!(output_func.name, "output");
     assert_eq!(
-        export_func.description,
+        output_func.description,
         "Export processed data in various formats"
     );
-    assert_eq!(export_func.aliases, vec!["output", "format"]);
+    // Check that export and format are in the aliases (order doesn't matter)
+    assert!(output_func.aliases.contains(&"export".to_string()));
+    assert!(output_func.aliases.contains(&"format".to_string()));
 }
 
-#[tokio::test]
-async fn test_requirements() {
-    let plugin = OutputPlugin::new();
-
-    // Default OutputPlugin should suppress progress (outputs to stdout by default)
-    assert_eq!(plugin.requirements(), ScanRequires::SUPPRESS_PROGRESS);
-}
+// Removed test_requirements - replaced by more specific progress suppression tests

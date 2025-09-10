@@ -5,4 +5,4 @@
 
 mod coordination;
 mod error;
-mod utils;
+pub mod utils;

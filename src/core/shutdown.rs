@@ -143,7 +143,7 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
                     requested.store(true, Ordering::Release);
                     let _ = tx.send(());
                     if prev >= 1 {
-                        log::warn!("Second Ctrl-C received; forcing immediate exit");
+                        log::warn!("Ctrl-C received; exiting");
                         std::process::exit(130);
                     }
                 }

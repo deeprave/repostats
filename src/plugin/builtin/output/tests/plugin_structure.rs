@@ -17,7 +17,7 @@ async fn test_output_plugin_creation() {
     assert_eq!(info.name, "output");
     assert_eq!(plugin.plugin_type(), PluginType::Output);
     assert_eq!(info.version, "1.0.0");
-    assert_eq!(plugin.requirements(), ScanRequires::SUPPRESS_PROGRESS);
+    assert_eq!(plugin.requirements(), ScanRequires::NONE);
 }
 
 #[tokio::test]
@@ -57,13 +57,13 @@ async fn test_output_plugin_lifecycle() {
 async fn test_output_plugin_no_scan_requirements() {
     let plugin = OutputPlugin::new();
 
-    // OutputPlugin should not require any scan data by default
-    assert_eq!(plugin.requirements(), ScanRequires::SUPPRESS_PROGRESS);
+    // OutputPlugin should not require scan data (doesn't consume from queues)
+    assert_eq!(plugin.requirements(), ScanRequires::NONE);
 
-    // Verify it doesn't advertise queue consumer functions
+    // Verify it advertises output functions
     let functions = plugin.advertised_functions();
-    assert!(!functions.is_empty()); // Should have export function
-    assert_eq!(functions[0].name, "export");
+    assert!(!functions.is_empty()); // Should have output function
+    assert_eq!(functions[0].name, "output");
 }
 
 #[tokio::test]

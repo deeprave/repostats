@@ -158,15 +158,7 @@ impl PluginArgParser {
                     if let Some(stripped) = core_line.strip_prefix("error: ") {
                         core_line = stripped.trim();
                     }
-                    let simplified = if core_line.starts_with("unexpected argument")
-                        && core_line.contains("found")
-                    {
-                        core_line
-                            .replace("unexpected argument", "Unknown argument")
-                            .replace(" found", "")
-                    } else {
-                        core_line.to_string()
-                    };
+                    let simplified = core_line.to_string();
                     // Do NOT append clap help/usage block per request; return single-line message.
                     Err(PluginError::Generic {
                         message: simplified,

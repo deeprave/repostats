@@ -33,6 +33,7 @@ pub struct RepositoryContext {
 pub struct OutputPlugin {
     initialized: bool,
     output_destination: Option<String>,
+    template_path: Option<String>,
     /// Scan ID of data currently being processed
     processing_scan_id: Option<String>,
     /// Repository contexts indexed by scan_id
@@ -49,6 +50,7 @@ impl OutputPlugin {
         Self {
             initialized: false,
             output_destination: None,
+            template_path: None,
             processing_scan_id: None,
             repository_contexts: HashMap::new(),
             received_data: HashMap::new(),
@@ -59,8 +61,8 @@ impl OutputPlugin {
     /// Check if output destination is stdout or '-'
     fn is_stdout_output(&self) -> bool {
         match &self.output_destination {
-            Some(dest) => dest == "-" || dest == "stdout" || dest.is_empty(),
-            None => true, // Default to stdout if no destination specified
+            Some(dest) => dest == "-" || dest.is_empty(),
+            None => false, // No destination specified = no output configured yet = no progress suppression
         }
     }
 
@@ -401,9 +403,22 @@ impl Plugin for OutputPlugin {
             api_version: crate::core::version::get_api_version(),
             plugin_type: PluginType::Output,
             functions: vec![PluginFunction {
-                name: "export".to_string(),
+                name: "output".to_string(),
                 description: "Export processed data in various formats".to_string(),
-                aliases: vec!["output".to_string(), "format".to_string()],
+                aliases: vec![
+                    // Primary aliases for output functionality
+                    "export".to_string(),
+                    "format".to_string(),
+                    // Format-specific aliases - allows direct format invocation
+                    // e.g., `repostats json` is equivalent to `repostats output --format json`
+                    "json".to_string(),
+                    "csv".to_string(),
+                    "xml".to_string(),
+                    "html".to_string(),
+                    "markdown".to_string(),
+                    "text".to_string(),
+                    "template".to_string(),
+                ],
             }],
             required: ScanRequires::NONE,
             auto_active: true,
@@ -419,6 +434,7 @@ impl Plugin for OutputPlugin {
     }
 
     fn requirements(&self) -> ScanRequires {
+        // Only suppress progress if actually outputting to stdout
         if self.is_stdout_output() {
             ScanRequires::SUPPRESS_PROGRESS
         } else {
@@ -490,29 +506,8 @@ impl Plugin for OutputPlugin {
         args: &[String],
         config: &crate::plugin::args::PluginConfig,
     ) -> PluginResult<()> {
-        // First check config for output destination
-        let dest = config.get_string("output", "");
-        if !dest.is_empty() {
-            self.output_destination = Some(dest);
-        }
-
-        // Then look for output destination in args (which can override config)
-        for (i, arg) in args.iter().enumerate() {
-            match arg.as_str() {
-                "--output" | "-o" => {
-                    if let Some(dest) = args.get(i + 1) {
-                        self.output_destination = Some(dest.clone());
-                    }
-                }
-                _ if arg.starts_with("--output=") => {
-                    if let Some(dest) = arg.strip_prefix("--output=") {
-                        self.output_destination = Some(dest.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
+        // Use the new args_parse method that follows the dump plugin pattern
+        // This automatically handles --help via PluginArgParser
+        self.args_parse(args, config).await
     }
 }

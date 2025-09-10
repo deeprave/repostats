@@ -359,8 +359,6 @@ pub fn parse(&self, args: &[String]) -> PluginResult<ArgMatches> {
                 let clean_msg = error_msg
                     .strip_prefix("error: ")
                     .unwrap_or(&error_msg)
-                    .replace("unexpected argument", "Unknown argument")
-                    .replace(" found", "");
                 Err(PluginError::Generic { message: clean_msg })
             }
         }
