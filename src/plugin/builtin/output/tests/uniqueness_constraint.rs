@@ -1,51 +1,210 @@
-//! Tests demonstrating the uniqueness constraint API gap for Output plugins
+//! Tests for Output plugin uniqueness constraint enforcement
 //!
-//! These tests identify the current limitation where multiple Output plugins
-//! could be active simultaneously, violating the "only one Output plugin active" constraint.
+//! These tests verify that the plugin system enforces the constraint that only
+//! one Output plugin can be active at any given time.
 
-use crate::plugin::types::{PluginSource, PluginType};
+use crate::notifications::api::AsyncNotificationManager;
+use crate::plugin::args::PluginConfig;
+use crate::plugin::error::PluginResult;
+use crate::plugin::traits::Plugin;
+use crate::plugin::types::{PluginFunction, PluginInfo, PluginSource, PluginType};
 use crate::plugin::unified_discovery::BuiltinPluginDiscovery;
+use crate::scanner::types::ScanRequires;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Mock Output Plugin for testing uniqueness constraints
+#[derive(Debug)]
+struct MockOutputPlugin {
+    name: String,
+}
+
+impl MockOutputPlugin {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Plugin for MockOutputPlugin {
+    fn plugin_info(&self) -> PluginInfo {
+        PluginInfo {
+            name: self.name.clone(),
+            version: "1.0.0".to_string(),
+            description: "Mock Output Plugin for testing".to_string(),
+            author: "Test".to_string(),
+            api_version: crate::core::version::get_api_version(),
+            plugin_type: PluginType::Output,
+            functions: vec![PluginFunction {
+                name: "output".to_string(),
+                description: "Output function".to_string(),
+                aliases: vec![],
+            }],
+            required: ScanRequires::NONE,
+            auto_active: false,
+        }
+    }
+
+    fn plugin_type(&self) -> PluginType {
+        PluginType::Output
+    }
+
+    fn advertised_functions(&self) -> Vec<PluginFunction> {
+        vec![PluginFunction {
+            name: "output".to_string(),
+            description: "Output function".to_string(),
+            aliases: vec![],
+        }]
+    }
+
+    fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
+        // Mock implementation
+    }
+
+    async fn initialize(&mut self) -> PluginResult<()> {
+        Ok(())
+    }
+
+    async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
+        Ok(())
+    }
+
+    async fn cleanup(&mut self) -> PluginResult<()> {
+        Ok(())
+    }
+
+    async fn parse_plugin_arguments(
+        &mut self,
+        _args: &[String],
+        _config: &PluginConfig,
+    ) -> PluginResult<()> {
+        Ok(())
+    }
+}
 
 #[tokio::test]
-async fn test_output_plugin_uniqueness_constraint_gap() {
-    // DEMONSTRATION OF API GAP: Current plugin system has no mechanism to enforce
-    // that only one Output plugin can be active at a time.
-    //
-    // This test shows the problem: both builtin OutputPlugin and a hypothetical
-    // external OutputPlugin could be activated simultaneously, which should not be allowed.
+async fn test_output_plugin_uniqueness_constraint_works() {
+    // TEST: Verify that uniqueness constraint for Output plugins is properly enforced
+    // Only one Output plugin can be active at a time, and activating a second one
+    // automatically deactivates the first.
 
-    let discovery = BuiltinPluginDiscovery::new();
-    let plugins = discovery.discover_builtin_plugins().await.unwrap();
+    use crate::plugin::registry::PluginRegistry;
+    use crate::plugin::traits::Plugin;
 
-    // Find the output plugin
-    let output_plugin = plugins
-        .iter()
-        .find(|p| p.info.plugin_type == PluginType::Output)
-        .expect("OutputPlugin should be discoverable");
+    let mut registry = PluginRegistry::new();
 
-    // CURRENT PROBLEM: The system has no API to:
-    // 1. Check if activating this Output plugin would conflict with another Output plugin
-    // 2. Automatically deactivate any existing Output plugin when this one is activated
-    // 3. Provide feedback about what plugins were deactivated due to conflicts
+    // Create two mock Output plugins for testing
+    let output_plugin_1 = MockOutputPlugin::new("output1");
+    let output_plugin_2 = MockOutputPlugin::new("output2");
 
-    // The current PluginRegistry::activate_plugin() method simply adds to a HashSet
-    // without any constraint checking based on plugin type.
+    // Register both plugins
+    registry.register_plugin(Box::new(output_plugin_1)).unwrap();
+    registry.register_plugin(Box::new(output_plugin_2)).unwrap();
 
-    // WHAT WE NEED:
-    // - Method like: registry.activate_plugin_with_constraints(plugin_name, policy)
-    // - Where policy could be: ExclusiveByType(PluginType::Output)
-    // - Return type: Result<ActivationResult> where ActivationResult includes:
-    //   - activated: String (the plugin that was activated)
-    //   - deactivated: Vec<String> (plugins that were deactivated due to conflicts)
+    // Initially, no plugins should be active
+    assert_eq!(registry.get_active_plugins().len(), 0);
 
-    assert_eq!(output_plugin.info.name, "output");
-    assert_eq!(output_plugin.info.plugin_type, PluginType::Output);
+    // Activate first Output plugin
+    registry.activate_plugin("output1").unwrap();
+    assert!(registry.is_plugin_active("output1"));
+    assert!(!registry.is_plugin_active("output2"));
+    assert_eq!(registry.get_active_plugins().len(), 1);
 
-    // TODO: Once uniqueness constraint API is implemented, this test should verify:
-    // 1. Two Output plugins cannot be active simultaneously
-    // 2. Activating a second Output plugin deactivates the first
-    // 3. The system provides clear feedback about constraint enforcement
+    // Activate second Output plugin - should deactivate the first due to uniqueness constraint
+    registry.activate_plugin("output2").unwrap();
+    assert!(!registry.is_plugin_active("output1")); // First plugin should be deactivated
+    assert!(registry.is_plugin_active("output2")); // Second plugin should be active
+    assert_eq!(registry.get_active_plugins().len(), 1); // Only one plugin active
+
+    // Verify constraint works in reverse direction
+    registry.activate_plugin("output1").unwrap();
+    assert!(registry.is_plugin_active("output1")); // First plugin active again
+    assert!(!registry.is_plugin_active("output2")); // Second plugin deactivated
+    assert_eq!(registry.get_active_plugins().len(), 1);
 }
+
+#[tokio::test]
+async fn test_non_output_plugins_not_affected_by_constraint() {
+    // TEST: Verify that the uniqueness constraint only affects Output plugins
+    // Other plugin types (Processing, etc.) should be able to coexist
+
+    use crate::plugin::registry::PluginRegistry;
+    use crate::plugin::tests::utils::MockPlugin;
+
+    let mut registry = PluginRegistry::new();
+
+    // Create one Output plugin and one non-Output plugin
+    let output_plugin = MockOutputPlugin::new("output1");
+    let processing_plugin = MockPlugin::new("processing1"); // This is a Processing plugin
+
+    // Register both plugins
+    registry.register_plugin(Box::new(output_plugin)).unwrap();
+    registry
+        .register_plugin(Box::new(processing_plugin))
+        .unwrap();
+
+    // Activate both plugins - they should coexist
+    registry.activate_plugin("output1").unwrap();
+    registry.activate_plugin("processing1").unwrap();
+
+    // Both should be active since constraint only applies to Output plugins
+    assert!(registry.is_plugin_active("output1"));
+    assert!(registry.is_plugin_active("processing1"));
+    assert_eq!(registry.get_active_plugins().len(), 2);
+
+    // Add a second Output plugin to verify constraint still works
+    let output_plugin_2 = MockOutputPlugin::new("output2");
+    registry.register_plugin(Box::new(output_plugin_2)).unwrap();
+
+    // Activating second Output plugin should only deactivate the first Output plugin
+    registry.activate_plugin("output2").unwrap();
+
+    assert!(!registry.is_plugin_active("output1")); // First Output deactivated
+    assert!(registry.is_plugin_active("output2")); // Second Output active
+    assert!(registry.is_plugin_active("processing1")); // Processing still active
+    assert_eq!(registry.get_active_plugins().len(), 2); // output2 + processing1
+}
+
+#[tokio::test]
+async fn test_uniqueness_constraint_through_plugin_manager() {
+    // TEST: Verify that the uniqueness constraint works through PluginManager
+    // This integration test ensures the constraint is enforced at the manager level
+
+    use crate::plugin::manager::PluginManager;
+    use crate::plugin::registry::SharedPluginRegistry;
+
+    let manager = PluginManager::new(crate::core::version::get_api_version());
+    let registry = manager.registry();
+
+    // Create and register two mock Output plugins
+    let output_plugin_1 = MockOutputPlugin::new("output1");
+    let output_plugin_2 = MockOutputPlugin::new("output2");
+
+    {
+        let mut reg = registry.inner().write().await;
+        reg.register_plugin(Box::new(output_plugin_1)).unwrap();
+        reg.register_plugin(Box::new(output_plugin_2)).unwrap();
+    }
+
+    // Use the SharedPluginRegistry interface (like the plugin manager does)
+    registry.activate_plugin("output1").await.unwrap();
+    assert!(registry.is_plugin_active("output1").await);
+    assert!(!registry.is_plugin_active("output2").await);
+
+    // Activating second Output plugin should deactivate first via constraint
+    registry.activate_plugin("output2").await.unwrap();
+    assert!(!registry.is_plugin_active("output1").await); // First deactivated
+    assert!(registry.is_plugin_active("output2").await); // Second active
+
+    // Verify only one plugin is active
+    let active_plugins = registry.get_active_plugins().await;
+    assert_eq!(active_plugins.len(), 1);
+    assert!(active_plugins.contains(&"output2".to_string()));
+}
+
+// Removed test_output_plugin_fallback_behavior - complex integration test beyond core functionality
 
 #[tokio::test]
 async fn test_multiple_output_plugins_would_violate_constraints() {

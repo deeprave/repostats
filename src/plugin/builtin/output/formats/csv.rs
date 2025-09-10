@@ -7,32 +7,17 @@ use crate::plugin::error::PluginResult;
 /// CSV formatter implementation
 pub struct CsvFormatter {
     delimiter: char,
-    include_headers: bool,
 }
 
 impl CsvFormatter {
     /// Create a new CSV formatter
     pub fn new() -> Self {
-        Self {
-            delimiter: ',',
-            include_headers: true,
-        }
+        Self { delimiter: ',' }
     }
 
     /// Create a TSV formatter
     pub fn new_tsv() -> Self {
-        Self {
-            delimiter: '\t',
-            include_headers: true,
-        }
-    }
-
-    /// Create a CSV formatter without headers
-    pub fn new_no_headers() -> Self {
-        Self {
-            delimiter: ',',
-            include_headers: false,
-        }
+        Self { delimiter: '\t' }
     }
 
     /// Escape CSV value if needed
@@ -70,13 +55,6 @@ impl CsvFormatter {
         // Determine max columns
         let max_cols = rows.iter().map(|r| r.values.len()).max().unwrap_or(0);
 
-        // Add headers if requested
-        if self.include_headers {
-            let headers: Vec<String> = (0..max_cols).map(|i| format!("Column_{}", i + 1)).collect();
-            result.push_str(&headers.join(&self.delimiter.to_string()));
-            result.push('\n');
-        }
-
         // Add data rows
         for row in rows {
             let formatted_values: Vec<String> = (0..max_cols)
@@ -109,11 +87,6 @@ impl CsvFormatter {
         }
 
         let mut result = String::new();
-
-        // Add headers
-        if self.include_headers {
-            result.push_str(&format!("Path{}Value\n", self.delimiter));
-        }
 
         // Add flattened data
         for (path, value) in rows {
@@ -155,11 +128,6 @@ impl CsvFormatter {
     ) -> PluginResult<String> {
         let mut result = String::new();
 
-        // Add headers
-        if self.include_headers {
-            result.push_str(&format!("Key{}Value\n", self.delimiter));
-        }
-
         // Add data
         let mut keys: Vec<_> = data.keys().collect();
         keys.sort();
@@ -196,9 +164,6 @@ impl OutputFormatter for CsvFormatter {
                 }
 
                 let mut result = String::new();
-                if self.include_headers {
-                    result.push_str(&format!("Path{}Value\n", self.delimiter));
-                }
 
                 for (path, value) in combined_rows {
                     let escaped_path = self.escape_csv_value(&path);
@@ -214,11 +179,7 @@ impl OutputFormatter for CsvFormatter {
             DataPayload::KeyValue { data } => self.format_key_value(data),
             DataPayload::Raw { data, .. } => {
                 // For raw data, create a single-cell CSV
-                if self.include_headers {
-                    Ok(format!("Content\n{}", self.escape_csv_value(data)))
-                } else {
-                    Ok(self.escape_csv_value(data))
-                }
+                Ok(self.escape_csv_value(data))
             }
         }
     }

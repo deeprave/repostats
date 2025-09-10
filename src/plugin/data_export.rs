@@ -432,6 +432,8 @@ pub enum ExportFormat {
     Markdown,
     /// YAML format
     Yaml,
+    /// Template format (using Tera templates)
+    Template,
     /// Custom format with identifier
     Custom(String),
 }
@@ -448,6 +450,7 @@ impl ExportFormat {
             Self::Html => Some("html"),
             Self::Markdown => Some("md"),
             Self::Yaml => Some("yaml"),
+            Self::Template => Some("j2"),
             Self::Custom(_) => None,
         }
     }
@@ -477,6 +480,7 @@ impl ExportFormat {
             Self::Html => Some("text/html"),
             Self::Markdown => Some("text/markdown"),
             Self::Yaml => Some("application/x-yaml"),
+            Self::Template => Some("text/plain"),
             Self::Custom(_) => None,
         }
     }

@@ -1,9 +1,12 @@
 //! Argument parsing and format detection for OutputPlugin
 
-use crate::plugin::args::PluginConfig;
+use super::OutputPlugin;
+use crate::plugin::args::{PluginArgParser, PluginConfig};
 use crate::plugin::data_export::ExportFormat;
 use crate::plugin::error::{PluginError, PluginResult};
-use std::path::Path;
+use crate::plugin::traits::Plugin; // for plugin_info()
+use clap::Arg;
+use std::path::{Path, PathBuf};
 
 /// Output plugin configuration derived from arguments
 #[derive(Debug, Clone)]
@@ -14,8 +17,6 @@ pub struct OutputConfig {
     pub format: ExportFormat,
     /// Whether to use colors (determined by PluginConfig, not set here)
     pub use_colors: bool,
-    /// Whether to include headers (for formats that support them)
-    pub include_headers: bool,
     /// Template path for template-based output
     pub template_path: Option<String>,
 }
@@ -35,7 +36,6 @@ impl Default for OutputConfig {
             destination: OutputDestination::Stdout,
             format: ExportFormat::Console,
             use_colors: true,
-            include_headers: true,
             template_path: None,
         }
     }
@@ -80,8 +80,6 @@ impl OutputConfig {
             }
         }
 
-        // Template functionality not yet implemented - skip for now
-
         // Use colors from PluginConfig - startup code already handled TTY detection
         // Disable colors for file output regardless of config
         output_config.use_colors =
@@ -90,11 +88,6 @@ impl OutputConfig {
             } else {
                 config.use_colors.unwrap_or(false)
             };
-
-        // Parse header settings
-        if flags.contains("no-headers") {
-            output_config.include_headers = false;
-        }
 
         Ok(output_config)
     }
@@ -128,8 +121,8 @@ fn parse_format_string(format_str: &str) -> PluginResult<ExportFormat> {
         "xml" => Ok(ExportFormat::Xml),
         "html" => Ok(ExportFormat::Html),
         "markdown" | "md" => Ok(ExportFormat::Markdown),
-        "console" | "text" => Ok(ExportFormat::Console),
-        // "template" => Ok(ExportFormat::Template), // Not yet implemented
+        "yaml" => Ok(ExportFormat::Yaml),
+        "text" => Ok(ExportFormat::Console),
         _ => Err(PluginError::ConfigurationError {
             plugin_name: "OutputPlugin".to_string(),
             message: format!("Unsupported format: {}", format_str),
@@ -154,7 +147,7 @@ fn detect_format_from_extension(file_path: &str) -> PluginResult<ExportFormat> {
         "html" | "htm" => ExportFormat::Html,
         "md" | "markdown" => ExportFormat::Markdown,
         "txt" | "log" => ExportFormat::Console,
-        // "j2" | "tera" => ExportFormat::Template, // Not yet implemented
+        "j2" | "tera" => ExportFormat::Template,
         "" => {
             return Err(PluginError::ConfigurationError {
                 plugin_name: "OutputPlugin".to_string(),
@@ -173,6 +166,143 @@ fn detect_format_from_extension(file_path: &str) -> PluginResult<ExportFormat> {
     Ok(format)
 }
 
+impl OutputPlugin {
+    pub(super) async fn args_parse(
+        &mut self,
+        args: &[String],
+        config: &PluginConfig,
+    ) -> PluginResult<()> {
+        let info = self.plugin_info();
+        let parser = PluginArgParser::new(
+            &info.name,
+            &info.description,
+            &info.version,
+            config.use_colors,
+        )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .alias("outfile")
+                .value_name("FILE")
+                .help("Write output to FILE (use '-' for stdout)")
+                .value_parser(clap::value_parser!(String)),
+        )
+        .arg(
+            Arg::new("format")
+                .short('f')
+                .long("format")
+                .value_name("FORMAT")
+                .help("Output format")
+                .value_parser([
+                    "json", "csv", "tsv", "xml", "html", "markdown", "yaml", "text",
+                ]),
+        )
+        .arg(
+            Arg::new("template-path")
+                .short('t')
+                .long("template-path")
+                .value_name("TEMPLATE")
+                .help("Template path for custom formatting")
+                .value_parser(clap::value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use JSON output format"),
+        )
+        .arg(
+            Arg::new("csv")
+                .long("csv")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use CSV output format"),
+        )
+        .arg(
+            Arg::new("xml")
+                .long("xml")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use XML output format"),
+        )
+        .arg(
+            Arg::new("html")
+                .long("html")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use HTML output format"),
+        )
+        .arg(
+            Arg::new("markdown")
+                .long("markdown")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use Markdown output format"),
+        )
+        .arg(
+            Arg::new("text")
+                .long("text")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use plain text output format"),
+        );
+
+        let matches = parser.parse(args)?;
+
+        // Parse output destination - check command line args first, then config
+        if let Some(output_path) = matches.get_one::<String>("output") {
+            self.output_destination = if output_path == "-" {
+                Some("-".to_string())
+            } else {
+                Some(output_path.clone())
+            };
+        } else {
+            // Check config for output setting
+            let config_output = config.get_string("output", "");
+            if !config_output.is_empty() {
+                self.output_destination = if config_output == "-" {
+                    Some("-".to_string())
+                } else {
+                    Some(config_output)
+                };
+            }
+        }
+
+        // Parse template path first - this overrides all other format settings
+        let _format = if let Some(template_path) = matches.get_one::<PathBuf>("template-path") {
+            // Template path provided - force template format and store path
+            self.template_path = Some(template_path.to_string_lossy().to_string());
+            ExportFormat::Template
+        } else {
+            // No template path - check other format options
+            if matches.get_flag("json") {
+                ExportFormat::Json
+            } else if matches.get_flag("csv") {
+                ExportFormat::Csv
+            } else if matches.get_flag("xml") {
+                ExportFormat::Xml
+            } else if matches.get_flag("html") {
+                ExportFormat::Html
+            } else if matches.get_flag("markdown") {
+                ExportFormat::Markdown
+            } else if matches.get_flag("text") {
+                ExportFormat::Console
+            } else if let Some(format_str) = matches.get_one::<String>("format") {
+                parse_format_string(format_str)?
+            } else {
+                // Auto-detect format from file extension if writing to file
+                if let Some(ref dest) = self.output_destination {
+                    if dest != "-" {
+                        detect_format_from_extension(dest)?
+                    } else {
+                        ExportFormat::Console
+                    }
+                } else {
+                    ExportFormat::Console
+                }
+            }
+        };
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,7 +313,6 @@ mod tests {
         assert_eq!(config.destination, OutputDestination::Stdout);
         assert_eq!(config.format, ExportFormat::Console);
         assert!(config.use_colors);
-        assert!(config.include_headers);
         assert!(config.template_path.is_none());
     }
 

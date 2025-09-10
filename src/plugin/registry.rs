@@ -6,6 +6,7 @@
 use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
+use crate::plugin::types::PluginType;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -122,12 +123,44 @@ impl PluginRegistry {
     }
 
     /// Activate a plugin (mark it as active)
+    /// Enforces uniqueness constraint for Output plugins - only one can be active at a time
     pub fn activate_plugin(&mut self, name: &str) -> PluginResult<()> {
         if !self.has_plugin(name) {
             return Err(PluginError::PluginNotFound {
                 plugin_name: name.to_string(),
             });
         }
+
+        // Check if this is an Output plugin and enforce uniqueness constraint
+        let plugin_type = self.get_plugin_type(name)?;
+        if plugin_type == PluginType::Output {
+            // Find any currently active Output plugins and deactivate them
+            let active_output_plugins: Vec<String> = self
+                .active_plugins
+                .iter()
+                .filter_map(|active_name| {
+                    if let Ok(active_type) = self.get_plugin_type(active_name) {
+                        if active_type == PluginType::Output && active_name != name {
+                            Some(active_name.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Deactivate any existing Output plugins
+            for active_output in &active_output_plugins {
+                log::info!(
+                    "Deactivating Output plugin '{}' due to uniqueness constraint (activating '{}')",
+                    active_output, name
+                );
+                self.active_plugins.remove(active_output);
+            }
+        }
+
         self.active_plugins.insert(name.to_string());
         Ok(())
     }
@@ -151,6 +184,20 @@ impl PluginRegistry {
     /// Clear all active plugins
     pub fn clear_active_plugins(&mut self) {
         self.active_plugins.clear();
+    }
+
+    /// Get the plugin type for a registered plugin
+    /// Helper method for uniqueness constraint enforcement
+    pub fn get_plugin_type(&self, name: &str) -> PluginResult<PluginType> {
+        if let Some(plugin) = self.plugins.get(name) {
+            Ok(plugin.plugin_info().plugin_type)
+        } else if let Some(consumer_plugin) = self.consumer_plugins.get(name) {
+            Ok(consumer_plugin.plugin_info().plugin_type)
+        } else {
+            Err(PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            })
+        }
     }
 
     /// Remove a plugin from the registry
