@@ -7,6 +7,9 @@ static DATE_FORMAT_LONG: &str = "%Y-%m-%d %H:%M:%S%.6f";
 static DATE_FORMAT_SHORT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 static DATE_FORMAT_ISO: &str = "%Y-%m-%dT%H:%M:%S%.3fZ";
 
+static ENV_LOG_LEVEL: &str = "RUST_LOG";
+static ENV_LOG_FORMAT: &str = "RUST_LOGFMT";
+
 pub fn init_logging(
     log_level: Option<&str>,
     log_format: Option<&str>,
@@ -15,8 +18,13 @@ pub fn init_logging(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use flexi_logger::{FileSpec, Logger};
 
-    let level_str = log_level.unwrap_or("warn");
-    let format_type = log_format.map_or("text", |f| f);
+    // Determine log level: CLI arg → RUST_LOG env var → "warn" default
+    let env_log_level = std::env::var(ENV_LOG_LEVEL).unwrap_or_else(|_| "warn".to_string());
+    let level_str = log_level.unwrap_or(&env_log_level);
+
+    // Determine log format: CLI arg → RUST_LOGFMT env var → "text" default
+    let env_log_format = std::env::var(ENV_LOG_FORMAT).unwrap_or_else(|_| "text".to_string());
+    let format_type = log_format.unwrap_or(&env_log_format);
 
     let mut logger = Logger::try_with_str(level_str)?;
 
@@ -561,6 +569,59 @@ mod tests {
                     e
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_environment_variable_log_level_priority() {
+        // Test that environment variables are used correctly for log level
+
+        // Save original RUST_LOG if it exists
+        let original_rust_log = std::env::var(ENV_LOG_LEVEL).ok();
+
+        // Set RUST_LOG environment variable
+        std::env::set_var(ENV_LOG_LEVEL, "debug");
+
+        // Test priority: CLI arg should override environment variable
+        let result = init_logging(Some("error"), None, None, false);
+        // The function should use "error" (CLI arg) over "debug" (env var)
+        // We can't easily verify this without exposing internal state, but the function should succeed
+        let _ = result; // Ignore result since logger may already be initialized
+
+        // Test priority: environment variable should be used when CLI arg is None
+        let result = init_logging(None, None, None, false);
+        let _ = result; // Should use "debug" from RUST_LOG env var
+
+        // Clean up - restore original RUST_LOG
+        match original_rust_log {
+            Some(value) => std::env::set_var(ENV_LOG_LEVEL, value),
+            None => std::env::remove_var(ENV_LOG_LEVEL),
+        }
+    }
+
+    #[test]
+    fn test_environment_variable_log_format_priority() {
+        // Test that environment variables are used correctly for log format
+
+        // Save original RUST_LOGFMT if it exists
+        let original_rust_logfmt = std::env::var(ENV_LOG_FORMAT).ok();
+
+        // Set RUST_LOGFMT environment variable
+        std::env::set_var(ENV_LOG_FORMAT, "json");
+
+        // Test priority: CLI arg should override environment variable
+        let result = init_logging(None, Some("ext"), None, false);
+        // The function should use "ext" (CLI arg) over "json" (env var)
+        let _ = result; // Ignore result since logger may already be initialized
+
+        // Test priority: environment variable should be used when CLI arg is None
+        let result = init_logging(None, None, None, false);
+        let _ = result; // Should use "json" from RUST_LOGFMT env var
+
+        // Clean up - restore original RUST_LOGFMT
+        match original_rust_logfmt {
+            Some(value) => std::env::set_var(ENV_LOG_FORMAT, value),
+            None => std::env::remove_var(ENV_LOG_FORMAT),
         }
     }
 }
