@@ -1,7 +1,8 @@
 //! Markdown output formatter
 
 use super::{FormatResult, OutputFormatter};
-use crate::plugin::data_export::{DataPayload, ExportFormat, PluginDataExport, Value};
+use crate::plugin::builtin::output::traits::ExportFormat;
+use crate::plugin::data_export::{DataPayload, PluginDataExport, Value};
 
 /// Markdown formatter implementation
 pub struct MarkdownFormatter {

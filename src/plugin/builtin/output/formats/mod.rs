@@ -11,21 +11,8 @@ pub mod template;
 pub mod text;
 pub mod xml;
 
-use crate::plugin::data_export::{ExportFormat, PluginDataExport};
-use crate::plugin::error::PluginResult;
-
-/// Format-specific output result
-pub type FormatResult = PluginResult<String>;
-
-/// Trait for output formatters
-pub trait OutputFormatter {
-    /// Format the provided data export into the target format
-    /// use_colors parameter comes from PluginConfig processing
-    fn format(&self, data: &PluginDataExport, use_colors: bool) -> FormatResult;
-
-    /// Get the format type this formatter handles
-    fn format_type(&self) -> ExportFormat;
-}
+use crate::plugin::builtin::output::traits::{ExportFormat, FormatResult, OutputFormatter};
+use crate::plugin::data_export::PluginDataExport;
 
 /// Get formatter for the specified format
 pub fn get_formatter(format: ExportFormat) -> Box<dyn OutputFormatter> {

@@ -1,16 +1,11 @@
 //! Output destination handling for OutputPlugin
 
-use crate::plugin::builtin::output::args::{OutputConfig, OutputDestination};
+use crate::plugin::builtin::output::args::OutputConfig;
+use crate::plugin::builtin::output::traits::{OutputDestination, OutputWriter};
 use crate::plugin::error::{PluginError, PluginResult};
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
-
-/// Output writer trait for abstraction over different output destinations
-pub trait OutputWriter: Write {
-    /// Flush and finalize the output
-    fn finalize(&mut self) -> io::Result<()>;
-}
 
 /// Standard output writer
 pub struct StdoutWriter {

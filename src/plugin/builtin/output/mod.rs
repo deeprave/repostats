@@ -7,6 +7,7 @@
 pub mod args;
 pub mod formats;
 pub mod output;
+pub mod traits;
 
 #[cfg(test)]
 pub mod tests;
@@ -34,6 +35,8 @@ pub struct OutputPlugin {
     initialized: bool,
     output_destination: Option<String>,
     template_path: Option<String>,
+    /// Detected output format based on function invocation
+    detected_format: Option<crate::plugin::builtin::output::traits::ExportFormat>,
     /// Scan ID of data currently being processed
     processing_scan_id: Option<String>,
     /// Repository contexts indexed by scan_id
@@ -51,6 +54,7 @@ impl OutputPlugin {
             initialized: false,
             output_destination: None,
             template_path: None,
+            detected_format: None,
             processing_scan_id: None,
             repository_contexts: HashMap::new(),
             received_data: HashMap::new(),
@@ -402,24 +406,43 @@ impl Plugin for OutputPlugin {
             author: "repostats built-in".to_string(),
             api_version: crate::core::version::get_api_version(),
             plugin_type: PluginType::Output,
-            functions: vec![PluginFunction {
-                name: "output".to_string(),
-                description: "Export processed data in various formats".to_string(),
-                aliases: vec![
-                    // Primary aliases for output functionality
-                    "export".to_string(),
-                    "format".to_string(),
-                    // Format-specific aliases - allows direct format invocation
-                    // e.g., `repostats json` is equivalent to `repostats output --format json`
-                    "json".to_string(),
-                    "csv".to_string(),
-                    "xml".to_string(),
-                    "html".to_string(),
-                    "markdown".to_string(),
-                    "text".to_string(),
-                    "template".to_string(),
-                ],
-            }],
+            functions: vec![
+                PluginFunction {
+                    name: "output".to_string(),
+                    description: "Export processed data in various formats".to_string(),
+                    aliases: vec!["export".to_string(), "format".to_string()],
+                },
+                PluginFunction {
+                    name: "json".to_string(),
+                    description: "Export processed data in JSON format".to_string(),
+                    aliases: vec![],
+                },
+                PluginFunction {
+                    name: "csv".to_string(),
+                    description: "Export processed data in CSV format".to_string(),
+                    aliases: vec![],
+                },
+                PluginFunction {
+                    name: "xml".to_string(),
+                    description: "Export processed data in XML format".to_string(),
+                    aliases: vec![],
+                },
+                PluginFunction {
+                    name: "html".to_string(),
+                    description: "Export processed data in HTML format".to_string(),
+                    aliases: vec![],
+                },
+                PluginFunction {
+                    name: "markdown".to_string(),
+                    description: "Export processed data in Markdown format".to_string(),
+                    aliases: vec![],
+                },
+                PluginFunction {
+                    name: "text".to_string(),
+                    description: "Export processed data in plain text format".to_string(),
+                    aliases: vec![],
+                },
+            ],
             required: ScanRequires::NONE,
             auto_active: true,
         }

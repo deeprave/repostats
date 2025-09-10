@@ -2,7 +2,8 @@
 
 use super::{FormatResult, OutputFormatter};
 use crate::core::styles::StyleRole;
-use crate::plugin::data_export::{DataPayload, ExportFormat, PluginDataExport, Value};
+use crate::plugin::builtin::output::traits::ExportFormat;
+use crate::plugin::data_export::{DataPayload, PluginDataExport, Value};
 
 /// Text formatter for console output
 pub struct TextFormatter;

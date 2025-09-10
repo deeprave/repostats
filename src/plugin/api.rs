@@ -14,6 +14,12 @@ pub use crate::plugin::manager::{PluginManager, PluginManagerConfig};
 // Error handling
 pub use crate::plugin::error::{PluginError, PluginResult};
 
+// Data export types for plugin data interchange
+pub use crate::plugin::data_export::{
+    ColumnDef, ColumnType, DataExportType, DataPayload, DataSchema, ExportHints, PluginDataExport,
+    PluginDataExportBuilder, Row, TreeNode, Value,
+};
+
 // Event constants
 pub use crate::plugin::events::SYSTEM_SCAN_ID;
 
