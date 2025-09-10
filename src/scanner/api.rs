@@ -12,9 +12,10 @@ pub use crate::scanner::manager::ScannerManager;
 // Error handling
 pub use crate::scanner::error::{ScanError, ScanResult};
 
-// Scanner task functionality - exported for integration tests
+// Scanner task functionality - exported for integration tests only
 // Note: Integration tests run as separate binaries, so #[cfg(test)] doesn't work
-// This is exported publicly but only intended for testing use
+// Hidden from public documentation as this is only intended for testing use
+#[doc(hidden)]
 pub use crate::scanner::task::ScannerTask;
 
 // Core data types and structures
