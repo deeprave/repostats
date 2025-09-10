@@ -214,6 +214,28 @@ async fn test_non_output_plugins_not_affected_by_constraint() {
         .register_plugin(Box::new(processing_plugin))
         .unwrap();
 
+    // Verify registry contains correct plugins after registration
+    let plugin_names = registry.get_plugin_names();
+    assert_eq!(plugin_names.len(), 2, "Registry should contain two plugins");
+    assert!(
+        plugin_names.contains(&"output1".to_string()),
+        "Registry should contain output1 plugin"
+    );
+    assert!(
+        plugin_names.contains(&"processing1".to_string()),
+        "Registry should contain processing1 plugin"
+    );
+
+    // Verify plugin types are correct
+    assert!(
+        registry.has_plugin("output1"),
+        "Registry should have output1 plugin"
+    );
+    assert!(
+        registry.has_plugin("processing1"),
+        "Registry should have processing1 plugin"
+    );
+
     // Activate both plugins - they should coexist
     registry.activate_plugin("output1").unwrap();
     registry.activate_plugin("processing1").unwrap();

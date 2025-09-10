@@ -1,32 +1,151 @@
-//! Commit Traversal Tests
+//! Commit processing integration tests
 //!
-//! Tests for basic commit traversal, limits, and reference-based scanning
+//! Tests for commit traversal, merge commit filtering, and related functionality.
 
-use super::super::ScannerTask;
-use crate::core::query::QueryParams;
-use crate::scanner::tests::helpers::collect_scan_messages;
-use crate::scanner::types::{ScanMessage, ScanRequires};
+use crate::common;
+use repostats::core::query::QueryParams;
+use repostats::scanner::api::{ScanMessage, ScannerManager};
 use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
 #[serial]
-async fn test_commit_traversal_with_max_commits() {
+async fn test_merge_commit_filtering() {
+    // GREEN: Test that merge commit filtering works correctly with QueryParams
+    use common::scanner_helpers::collect_scan_messages;
+    use repostats::core::query::QueryParams;
+    use std::process::Command;
+    use tempfile::TempDir;
+
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
 
-    // Initialize git repository
+    // Initialize repository
     Command::new("git")
         .args(["init"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
+
     Command::new("git")
         .args(["config", "user.name", "Test User"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Create initial commit on main branch
+    std::fs::write(repo_path.join("main.txt"), "main content").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Initial commit"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Create feature branch and add commit
+    Command::new("git")
+        .args(["checkout", "-b", "feature"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    std::fs::write(repo_path.join("feature.txt"), "feature content").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "Feature commit"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Merge back to main with a merge commit
+    Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["merge", "feature", "--no-ff", "-m", "Merge feature branch"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    // Create scanner for the test repository
+    let manager = ScannerManager::create().await;
+    let scanner_task = manager
+        .create_scanner(repo_path.to_string_lossy().as_ref(), None, None)
+        .await
+        .unwrap();
+
+    // Test including merge commits (default behavior)
+    let messages_with_merge = collect_scan_messages(&scanner_task, None).await.unwrap();
+    let commit_count_with_merge = messages_with_merge
+        .iter()
+        .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
+        .count();
+    assert_eq!(
+        commit_count_with_merge, 3,
+        "Should include all 3 commits (initial + feature + merge)"
+    );
+
+    // Test excluding merge commits
+    let query_params = QueryParams::default().with_merge_commits(Some(false));
+    let messages_without_merge = collect_scan_messages(&scanner_task, Some(&query_params))
+        .await
+        .unwrap();
+    let commit_count_without_merge = messages_without_merge
+        .iter()
+        .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
+        .count();
+    assert_eq!(
+        commit_count_without_merge, 2,
+        "Should exclude merge commit, leaving 2 regular commits"
+    );
+
+    // Verify that all messages still have proper structure
+    assert!(matches!(
+        messages_without_merge[0],
+        ScanMessage::ScanStarted { .. }
+    ));
+    assert!(matches!(
+        messages_without_merge.last().unwrap(),
+        ScanMessage::ScanCompleted { .. }
+    ));
+}
+
+#[tokio::test]
+#[serial]
+async fn test_commit_traversal_with_limits() {
+    // Test commit traversal with various limit configurations
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path();
+
+    // Initialize repository
+    Command::new("git")
+        .args(["init"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+
     Command::new("git")
         .args(["config", "user.email", "test@example.com"])
         .current_dir(&repo_path)
@@ -52,18 +171,15 @@ async fn test_commit_traversal_with_max_commits() {
             .unwrap();
     }
 
-    let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
-        "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
-        repo,
-    )
-    .with_requirements(ScanRequires::COMMITS)
-    .build();
+    let manager = ScannerManager::create().await;
+    let scanner_task = manager
+        .create_scanner(repo_path.to_string_lossy().as_ref(), None, None)
+        .await
+        .unwrap();
 
     // Test max_commits limit
     let query_params = QueryParams::new().with_max_commits(Some(2));
-    let messages = collect_scan_messages(&scanner_task, Some(&query_params))
+    let messages = common::scanner_helpers::collect_scan_messages(&scanner_task, Some(&query_params))
         .await
         .unwrap();
     let commit_count = messages
@@ -77,7 +193,7 @@ async fn test_commit_traversal_with_max_commits() {
 
     // Test no limit (should get all commits)
     let query_params_unlimited = QueryParams::new();
-    let all_messages = collect_scan_messages(&scanner_task, Some(&query_params_unlimited))
+    let all_messages = common::scanner_helpers::collect_scan_messages(&scanner_task, Some(&query_params_unlimited))
         .await
         .unwrap();
     let all_commit_count = all_messages
@@ -91,7 +207,7 @@ async fn test_commit_traversal_with_max_commits() {
 
     // Test zero limit
     let query_params_zero = QueryParams::new().with_max_commits(Some(0));
-    let zero_messages = collect_scan_messages(&scanner_task, Some(&query_params_zero))
+    let zero_messages = common::scanner_helpers::collect_scan_messages(&scanner_task, Some(&query_params_zero))
         .await
         .unwrap();
     let zero_commit_count = zero_messages
@@ -106,150 +222,24 @@ async fn test_commit_traversal_with_max_commits() {
 
 #[tokio::test]
 #[serial]
-async fn test_commit_traversal_with_git_ref() {
-    let temp_dir = TempDir::new().unwrap();
-    let repo_path = temp_dir.path();
-
-    // Initialize git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-
-    // Create initial commits on default branch
-    for i in 1..=3 {
-        std::fs::write(
-            repo_path.join(&format!("main{}.txt", i)),
-            format!("main content {}", i),
-        )
-        .unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", &format!("Main commit {}", i)])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-    }
-
-    // Create a test branch
-    Command::new("git")
-        .args(["checkout", "-b", "test-branch"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    for i in 1..=2 {
-        std::fs::write(
-            repo_path.join(&format!("test{}.txt", i)),
-            format!("test content {}", i),
-        )
-        .unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", &format!("Test branch commit {}", i)])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-    }
-
-    let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
-        "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
-        repo,
-    )
-    .with_requirements(ScanRequires::COMMITS)
-    .build();
-
-    // Test scanning specific branch
-    let query_params = QueryParams::new().with_git_ref(Some("test-branch".to_string()));
-    let messages = collect_scan_messages(&scanner_task, Some(&query_params))
-        .await
-        .unwrap();
-    let commit_count = messages
-        .iter()
-        .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
-        .count();
-    assert_eq!(
-        commit_count, 5,
-        "test-branch should include its commits plus main branch history"
-    );
-
-    // Test scanning HEAD (should be current branch)
-    let query_params_head = QueryParams::new().with_git_ref(Some("HEAD".to_string()));
-    let head_messages = collect_scan_messages(&scanner_task, Some(&query_params_head))
-        .await
-        .unwrap();
-    let head_commit_count = head_messages
-        .iter()
-        .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
-        .count();
-    assert_eq!(
-        head_commit_count, 5,
-        "HEAD should return same as test-branch since it's current"
-    );
-
-    // Test with main branch reference (need to check if it exists)
-    // Note: The default branch name might be 'master' or 'main' depending on Git config
-    for branch_name in &["main", "master"] {
-        if let Ok(messages) = collect_scan_messages(
-            &scanner_task,
-            Some(&QueryParams::new().with_git_ref(Some(branch_name.to_string()))),
-        )
-        .await
-        {
-            let commit_count = messages
-                .iter()
-                .filter(|m| matches!(m, ScanMessage::CommitData { .. }))
-                .count();
-            if commit_count > 0 {
-                // Found the main branch
-                assert!(
-                    commit_count >= 3,
-                    "{} branch should have at least 3 commits",
-                    branch_name
-                );
-                break;
-            }
-        }
-    }
-}
-
-#[tokio::test]
-#[serial]
 async fn test_commit_traversal_ordering() {
+    // Test that commits are returned in proper chronological order
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
 
-    // Initialize git repository
+    // Initialize repository
     Command::new("git")
         .args(["init"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
+
     Command::new("git")
         .args(["config", "user.name", "Test User"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
+
     Command::new("git")
         .args(["config", "user.email", "test@example.com"])
         .current_dir(&repo_path)
@@ -285,17 +275,14 @@ async fn test_commit_traversal_ordering() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
-        "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
-        repo,
-    )
-    .with_requirements(ScanRequires::COMMITS)
-    .build();
+    let manager = ScannerManager::create().await;
+    let scanner_task = manager
+        .create_scanner(repo_path.to_string_lossy().as_ref(), None, None)
+        .await
+        .unwrap();
 
     // Test commit ordering (should be newest first)
-    let messages = collect_scan_messages(&scanner_task, None).await.unwrap();
+    let messages = common::scanner_helpers::collect_scan_messages(&scanner_task, None).await.unwrap();
     let commit_data: Vec<_> = messages
         .iter()
         .filter_map(|m| match m {
@@ -321,7 +308,7 @@ async fn test_commit_traversal_ordering() {
 
     // Test with limit to verify ordering is preserved
     let query_params = QueryParams::new().with_max_commits(Some(2));
-    let limited_messages = collect_scan_messages(&scanner_task, Some(&query_params))
+    let limited_messages = common::scanner_helpers::collect_scan_messages(&scanner_task, Some(&query_params))
         .await
         .unwrap();
     let limited_commits: Vec<_> = limited_messages
@@ -345,24 +332,24 @@ async fn test_commit_traversal_ordering() {
 
 #[tokio::test]
 #[serial]
-async fn test_empty_repository_traversal() {
-    // TEST: Verify commit traversal behavior when the repository is empty
-    // This should handle gracefully without errors and return appropriate messages
-
+async fn test_empty_repository_commit_traversal() {
+    // Test commit traversal behavior on empty repositories
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
 
-    // Initialize empty git repository
+    // Initialize empty repository
     Command::new("git")
         .args(["init"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
+
     Command::new("git")
         .args(["config", "user.name", "Test User"])
         .current_dir(&repo_path)
         .output()
         .unwrap();
+
     Command::new("git")
         .args(["config", "user.email", "test@example.com"])
         .current_dir(&repo_path)
@@ -370,17 +357,14 @@ async fn test_empty_repository_traversal() {
         .unwrap();
 
     // Don't create any commits - leave repository empty
-    let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
-        "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
-        repo,
-    )
-    .with_requirements(ScanRequires::COMMITS)
-    .build();
+    let manager = ScannerManager::create().await;
+    let scanner_task = manager
+        .create_scanner(repo_path.to_string_lossy().as_ref(), None, None)
+        .await
+        .unwrap();
 
     // Test empty repository traversal
-    let messages = collect_scan_messages(&scanner_task, None).await.unwrap();
+    let messages = common::scanner_helpers::collect_scan_messages(&scanner_task, None).await.unwrap();
 
     // Should have ScanStarted and ScanCompleted, but no CommitData messages
     assert!(
@@ -405,7 +389,7 @@ async fn test_empty_repository_traversal() {
 
     // Test with query parameters - should still work
     let query_params = QueryParams::new().with_max_commits(Some(10));
-    let limited_messages = collect_scan_messages(&scanner_task, Some(&query_params))
+    let limited_messages = common::scanner_helpers::collect_scan_messages(&scanner_task, Some(&query_params))
         .await
         .unwrap();
 

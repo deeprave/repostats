@@ -3,5 +3,6 @@
 //! This module organizes all the test suites for the scanner system,
 //! including manager tests and types tests.
 
+pub mod helpers;
 pub mod manager;
 pub mod types;

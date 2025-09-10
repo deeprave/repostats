@@ -5,38 +5,12 @@
 
 use crate::core::query::QueryParams;
 use crate::notifications::api::ScanEventType;
-use crate::scanner::error::ScanResult;
 use crate::scanner::manager::ScannerManager;
 use crate::scanner::task::ScannerTask;
+use crate::scanner::tests::helpers::{collect_scan_messages, scan_and_capture_messages};
 use crate::scanner::types::{ScanMessage, ScanStats};
 use serial_test::serial;
 use std::time::SystemTime;
-
-/// Test helper to collect scan messages into a Vec using the streaming callback API
-async fn collect_scan_messages(
-    scanner_task: &ScannerTask,
-    query_params: Option<&QueryParams>,
-) -> ScanResult<Vec<ScanMessage>> {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    let messages = Rc::new(RefCell::new(Vec::new()));
-    let messages_clone = Rc::clone(&messages);
-
-    scanner_task
-        .scan_commits_with_query(query_params, move |msg| {
-            messages_clone.borrow_mut().push(msg);
-            async { Ok(()) }
-        })
-        .await?;
-
-    Ok(Rc::try_unwrap(messages).unwrap().into_inner())
-}
-
-/// Alias for collect_scan_messages for backward compatibility
-async fn scan_and_capture_messages(scanner_task: &ScannerTask) -> ScanResult<Vec<ScanMessage>> {
-    collect_scan_messages(scanner_task, None).await
-}
 
 #[tokio::test]
 async fn test_scanner_manager_creation() {
