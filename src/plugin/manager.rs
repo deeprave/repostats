@@ -8,11 +8,11 @@ use crate::notifications::api::AsyncNotificationManager;
 use crate::notifications::api::{Event, EventFilter, PluginEventType};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::SharedPluginRegistry;
-use crate::plugin::traits::{ConsumerPlugin, Plugin};
+use crate::plugin::traits::Plugin;
 use crate::plugin::types::PluginSource;
 use crate::plugin::types::{ActivePluginInfo, PluginFunction, PluginInfo};
 use crate::plugin::unified_discovery::PluginDiscovery;
-use crate::queue::api::{QueueConsumer, QueueManager};
+use crate::queue::api::QueueManager;
 use log;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,14 +107,6 @@ pub struct PluginManager {
     /// Plugin-specific TOML configuration sections
     plugin_configs: HashMap<String, Table>,
 
-    /// Queue consumers that have been created but not yet activated
-    /// Maps plugin name to its QueueConsumer
-    pending_consumers: HashMap<String, QueueConsumer>,
-
-    /// Shared reference to pending consumers for system event handler
-    /// This is set when the system notification subscriber is initialized
-    shared_pending_consumers: Option<Arc<Mutex<HashMap<String, QueueConsumer>>>>,
-
     /// Notification receivers to keep channels alive
     /// Maps subscriber ID to notification receiver
     notification_receivers: HashMap<String, crate::notifications::api::EventReceiver>,
@@ -143,10 +135,6 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    /// Error message for shared consumer storage not initialized
-    const SHARED_STORAGE_ERROR: &'static str =
-        "Shared consumer storage not initialized. Call initialize() first.";
-
     /// Error message for plugin event subscription not initialized
     const EVENT_SUBSCRIPTION_ERROR: &'static str =
         "Plugin event subscription not initialized. Call initialize() first.";
@@ -165,8 +153,6 @@ impl PluginManager {
             active_plugins: ActivePluginInfo::new(),
             auto_active_plugins: Vec::new(),
             plugin_configs: HashMap::new(),
-            pending_consumers: HashMap::new(),
-            shared_pending_consumers: None,
             notification_receivers: HashMap::new(),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             plugin_completion: Arc::new(RwLock::new(HashMap::new())),
@@ -259,32 +245,6 @@ impl PluginManager {
         None // defer to auto (TTY) at point of use
     }
 
-    /// Check if a plugin API version is compatible
-    pub fn is_api_compatible(&self, plugin_api_version: u32) -> bool {
-        // Same major version (year) is compatible
-        self.get_major_version(self.api_version) == self.get_major_version(plugin_api_version)
-    }
-
-    /// Get major version (year) from API version
-    pub fn get_major_version(&self, api_version: u32) -> u32 {
-        api_version / 10000
-    }
-
-    /// Validate plugin compatibility before registration
-    pub fn validate_plugin_compatibility(&self, plugin_info: &PluginInfo) -> PluginResult<()> {
-        if !self.is_api_compatible(plugin_info.api_version) {
-            return Err(PluginError::VersionIncompatible {
-                message: format!(
-                    "Plugin '{}' has incompatible API version {} (expected major version {})",
-                    plugin_info.name,
-                    plugin_info.api_version,
-                    self.get_major_version(self.api_version)
-                ),
-            });
-        }
-        Ok(())
-    }
-
     // MARK: Helper methods to DRY up registry lookup patterns
 
     /// Helper: Execute a closure on a plugin if found in either registry
@@ -295,8 +255,6 @@ impl PluginManager {
         let registry = self.registry.inner().read().await;
         if let Some(plugin) = registry.get_plugin(plugin_name) {
             Some(f(plugin))
-        } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
-            Some(f(consumer_plugin))
         } else {
             None
         }
@@ -371,19 +329,49 @@ impl PluginManager {
             discovered_plugins.len()
         );
 
-        // Helper enum to hold plugin instances during registration
-        enum RegistrationTarget {
-            Plugin(Box<dyn Plugin>),
-            ConsumerPlugin(Box<dyn ConsumerPlugin>),
-        }
+        // Helper struct to hold plugin instances during registration
+        type RegistrationTarget = Box<dyn Plugin>;
 
         // Instantiate plugins and collect auto-active plugins before acquiring the write lock
         let mut instantiated_plugins = Vec::new();
         let mut auto_active_plugins = Vec::new();
 
         for discovered in discovered_plugins {
-            // Validate compatibility
-            self.validate_plugin_compatibility(&discovered.info)?;
+            // Check plugin compatibility (let plugin decide)
+            let plugin = match &discovered.source {
+                PluginSource::Builtin { factory } => factory(),
+                PluginSource::BuiltinConsumer { factory } => {
+                    let mut consumer_plugin = factory();
+                    // ConsumerPlugin extends Plugin, so we can get a reference to the Plugin trait
+                    let _plugin_ref =
+                        consumer_plugin.as_mut() as &mut dyn crate::plugin::traits::Plugin;
+                    // We just need to check compatibility, so we'll create a temporary instance
+                    // and check its compatibility directly
+                    if !consumer_plugin.is_compatible(self.api_version) {
+                        return Err(PluginError::VersionIncompatible {
+                            message: format!(
+                                "Plugin '{}' is incompatible with system API version {}",
+                                discovered.info.name, self.api_version
+                            ),
+                        });
+                    }
+                    // Skip the general check below since we already checked
+                    continue;
+                }
+                PluginSource::External { .. } => {
+                    // External plugins not implemented yet - skip compatibility check
+                    continue;
+                }
+            };
+
+            if !plugin.is_compatible(self.api_version) {
+                return Err(PluginError::VersionIncompatible {
+                    message: format!(
+                        "Plugin '{}' is incompatible with system API version {}",
+                        discovered.info.name, self.api_version
+                    ),
+                });
+            }
 
             // Track auto-active plugins for later activation
             if discovered.info.auto_active {
@@ -394,15 +382,11 @@ impl PluginManager {
             match discovered.source {
                 PluginSource::Builtin { factory } => {
                     let plugin = factory();
-                    instantiated_plugins
-                        .push((discovered.info, RegistrationTarget::Plugin(plugin)));
+                    instantiated_plugins.push((discovered.info, plugin));
                 }
                 PluginSource::BuiltinConsumer { factory } => {
                     let consumer_plugin = factory();
-                    instantiated_plugins.push((
-                        discovered.info,
-                        RegistrationTarget::ConsumerPlugin(consumer_plugin),
-                    ));
+                    instantiated_plugins.push((discovered.info, consumer_plugin));
                 }
                 PluginSource::External { library_path: _ } => {
                     // External plugin support is disabled in this version
@@ -419,15 +403,8 @@ impl PluginManager {
         // Register plugins with the registry, holding the write lock only during registration
         {
             let mut registry = self.registry.inner().write().await;
-            for (_info, target) in instantiated_plugins {
-                match target {
-                    RegistrationTarget::Plugin(plugin) => {
-                        registry.register_plugin(plugin)?;
-                    }
-                    RegistrationTarget::ConsumerPlugin(consumer_plugin) => {
-                        registry.register_consumer_plugin(consumer_plugin)?;
-                    }
-                }
+            for (_info, plugin) in instantiated_plugins {
+                registry.register_plugin(plugin)?;
             }
         } // Write lock is dropped here
 
@@ -441,56 +418,43 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Activate plugins based on command segments
-    ///
-    /// Simple logic:
-    /// - Set active_output_plugin to None
-    /// - Iterate the list of plugins
-    ///   - Check for segment matches (plugin name or functions)
-    ///   - If matched: activate and store args, if Output plugin override active_output_plugin
-    ///   - If auto-activate: activate with synthetic args, if Output plugin set active_output_plugin if None
-    /// - Any segments left over? Unknown command -> error
-    /// - Initialize all active plugins with their args (replaces initialize_active_plugins)
-    pub async fn activate_plugins(
+    /// Helper: Check if a command segment matches a plugin
+    async fn check_segment_match(&self, plugin_name: &str, segment: &CommandSegment) -> bool {
+        // Check if plugin name matches
+        if plugin_name == segment.command_name {
+            return true;
+        }
+
+        // Check if any function name or alias matches
+        if let Some(functions) = self.get_advertised_functions(plugin_name).await {
+            for function in &functions {
+                if function.name == segment.command_name
+                    || function.aliases.contains(&segment.command_name)
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Helper: Process segment matching for plugins
+    async fn process_segment_matching(
         &mut self,
-        command_segments: &[CommandSegment],
-    ) -> PluginResult<()> {
-        // Get all available plugins
-        let registry = self.registry.inner().read().await;
-        let all_plugin_names = registry.get_plugin_names();
-        drop(registry);
-
+        all_plugin_names: &[String],
+        segments_to_process: &mut Vec<CommandSegment>,
+    ) -> PluginResult<(Vec<(String, Vec<String>)>, Option<String>)> {
+        let mut plugins_to_activate: Vec<(String, Vec<String>)> = Vec::new();
         let mut active_output_plugin: Option<String> = None;
-        let mut segments_to_process: Vec<CommandSegment> = command_segments.to_vec();
-        let mut plugins_to_activate: Vec<(String, Vec<String>)> = Vec::new(); // (plugin_name, args)
 
-        // Single loop: handle segment matching and auto-activation
-        for plugin_name in &all_plugin_names {
+        for plugin_name in all_plugin_names {
             let mut segments_matched = Vec::new();
 
             // Check if any command segments match this plugin
             for (index, segment) in segments_to_process.iter().enumerate() {
-                let mut matched = false;
-
-                // Check if plugin name matches
-                if plugin_name == &segment.command_name {
-                    matched = true;
-                } else {
-                    // Check if any function name or alias matches
-                    if let Some(functions) = self.get_advertised_functions(plugin_name).await {
-                        for function in &functions {
-                            if function.name == segment.command_name
-                                || function.aliases.contains(&segment.command_name)
-                            {
-                                matched = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if matched {
-                    // Build args: command name as argv[0] + segment args
+                if self.check_segment_match(plugin_name, segment).await {
+                    // Build args: segment args
                     plugins_to_activate.push((plugin_name.clone(), segment.args.clone()));
 
                     // Check if it's an Output plugin - segment match always wins
@@ -509,19 +473,126 @@ impl PluginManager {
             for &index in segments_matched.iter().rev() {
                 segments_to_process.remove(index);
             }
+        }
 
-            // If not matched and plugin is auto-activate
-            if segments_matched.is_empty() && self.auto_active_plugins.contains(plugin_name) {
+        Ok((plugins_to_activate, active_output_plugin))
+    }
+
+    /// Helper: Process auto-activation for plugins
+    async fn process_auto_activation(
+        &mut self,
+        all_plugin_names: &[String],
+        active_output_plugin: &mut Option<String>,
+    ) -> Vec<(String, Vec<String>)> {
+        let mut auto_activated_plugins = Vec::new();
+
+        for plugin_name in all_plugin_names {
+            if self.auto_active_plugins.contains(plugin_name) {
+                // Auto-activate with empty args
+                auto_activated_plugins.push((plugin_name.clone(), Vec::new()));
+
                 // Check if it's an Output plugin - only set if no Output plugin chosen yet
-                if let Some(plugin_info) = self.get_plugin_info_by_name(plugin_name).await {
-                    if plugin_info.plugin_type == crate::plugin::types::PluginType::Output
-                        && active_output_plugin.is_none()
-                    {
-                        active_output_plugin = Some(plugin_name.clone());
+                if active_output_plugin.is_none() {
+                    if let Some(plugin_info) = self.get_plugin_info_by_name(plugin_name).await {
+                        if plugin_info.plugin_type == crate::plugin::types::PluginType::Output {
+                            *active_output_plugin = Some(plugin_name.clone());
+                        }
                     }
                 }
             }
         }
+
+        auto_activated_plugins
+    }
+
+    /// Helper: Initialize a single plugin with its configuration and arguments
+    async fn initialize_plugin(
+        &self,
+        registry: &mut crate::plugin::registry::PluginRegistry,
+        plugin_name: &str,
+        args: &[String],
+        notification_manager: Arc<Mutex<AsyncNotificationManager>>,
+        use_colors: Option<bool>,
+        plugin_toml_config: Option<&toml::Table>,
+        queue: &Arc<QueueManager>,
+    ) -> PluginResult<()> {
+        // Create plugin config once
+        let plugin_config = if let Some(toml_table) = plugin_toml_config {
+            crate::plugin::args::PluginConfig::from_toml(use_colors, toml_table)
+        } else {
+            crate::plugin::args::PluginConfig::default()
+        };
+
+        // Initialize plugin with notification manager and args
+        if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
+            // Set notification manager, initialize, and parse arguments
+            plugin.set_notification_manager(notification_manager);
+            plugin
+                .initialize()
+                .await
+                .map_err(|e| PluginError::ExecutionError {
+                    plugin_name: plugin_name.to_string(),
+                    operation: "initialize".to_string(),
+                    cause: format!("Failed to initialize plugin: {}", e),
+                })?;
+            plugin.parse_plugin_arguments(args, &plugin_config).await?;
+
+            // Inject consumer immediately if this is a ConsumerPlugin
+            if let Some(consumer_plugin) = plugin.as_mut().as_consumer_plugin() {
+                let consumer = queue
+                    .create_consumer(plugin_name.to_string())
+                    .map_err(|e| PluginError::AsyncError {
+                        message: format!(
+                            "Failed to create consumer for plugin '{}': {}",
+                            plugin_name, e
+                        ),
+                    })?;
+
+                consumer_plugin
+                    .inject_consumer(consumer)
+                    .await
+                    .map_err(|e| PluginError::ExecutionError {
+                        plugin_name: plugin_name.to_string(),
+                        operation: "inject_consumer".to_string(),
+                        cause: format!("Failed to inject consumer: {}", e),
+                    })?;
+
+                log::trace!(
+                    "PluginManager: Consumer injected into plugin '{}' during initialization",
+                    plugin_name
+                );
+            }
+        } else {
+            return Err(PluginError::PluginNotFound {
+                plugin_name: plugin_name.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Activate plugins based on command segments
+    ///
+    /// Simple logic:
+    /// - Process segment matching to find explicitly requested plugins
+    /// - Process auto-activation for plugins marked as auto-active
+    /// - Apply Output plugin uniqueness constraint
+    /// - Initialize all active plugins with their args
+    /// - Ensure fallback Output plugin if needed
+    pub async fn activate_plugins(
+        &mut self,
+        command_segments: &[CommandSegment],
+    ) -> PluginResult<()> {
+        // Get all available plugins
+        let registry = self.registry.inner().read().await;
+        let all_plugin_names = registry.get_plugin_names();
+        drop(registry);
+
+        // Process segment matching to find explicitly requested plugins
+        let mut segments_to_process = command_segments.to_vec();
+        let (mut plugins_to_activate, mut active_output_plugin) = self
+            .process_segment_matching(&all_plugin_names, &mut segments_to_process)
+            .await?;
 
         // Any segments left over? Unknown command error
         if !segments_to_process.is_empty() {
@@ -530,7 +601,15 @@ impl PluginManager {
             });
         }
 
-        // Filter out non-active Output plugins
+        // Process auto-activation for plugins marked as auto-active
+        let auto_activated = self
+            .process_auto_activation(&all_plugin_names, &mut active_output_plugin)
+            .await;
+
+        // Merge auto-activated plugins with explicitly requested ones
+        plugins_to_activate.extend(auto_activated);
+
+        // Apply Output plugin uniqueness constraint
         if let Some(ref chosen_output) = active_output_plugin {
             let mut filtered_plugins = Vec::new();
             for (plugin_name, args) in plugins_to_activate {
@@ -550,76 +629,37 @@ impl PluginManager {
             plugins_to_activate = filtered_plugins;
         }
 
-        // Third pass: Activate and initialize all plugins (replaces initialize_active_plugins)
-        let notification_manager = self.notification_manager.clone();
+        // Initialize all active plugins with their args
         let mut registry = self.registry.inner().write().await;
+        let notification_manager = self.notification_manager.clone();
+        let use_colors = self.get_use_colors_setting();
+        let queue = std::sync::Arc::new(crate::queue::api::get_queue_service());
 
         for (plugin_name, args) in &plugins_to_activate {
             // Activate in registry
             self.active_plugins.add(plugin_name);
             registry.activate_plugin(plugin_name)?;
 
-            // Initialize plugin with notification manager and args
-            if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
-                // Set notification manager
-                plugin.set_notification_manager(notification_manager.clone());
+            // Get plugin config for initialization
+            let plugin_toml_config = self.get_plugin_config(plugin_name);
 
-                // Initialize
-                plugin
-                    .initialize()
-                    .await
-                    .map_err(|e| PluginError::ExecutionError {
-                        plugin_name: plugin_name.clone(),
-                        operation: "initialize".to_string(),
-                        cause: format!("Failed to initialize plugin: {}", e),
-                    })?;
-
-                // Create plugin config
-                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(
-                        self.get_use_colors_setting(),
-                        toml_table,
-                    )
-                } else {
-                    crate::plugin::args::PluginConfig::default()
-                };
-
-                // Parse arguments
-                plugin.parse_plugin_arguments(args, &plugin_config).await?;
-            } else if let Some(consumer_plugin) = registry.get_consumer_plugin_mut(plugin_name) {
-                // Set notification manager
-                consumer_plugin.set_notification_manager(notification_manager.clone());
-
-                // Initialize
-                consumer_plugin
-                    .initialize()
-                    .await
-                    .map_err(|e| PluginError::ExecutionError {
-                        plugin_name: plugin_name.clone(),
-                        operation: "initialize".to_string(),
-                        cause: format!("Failed to initialize consumer plugin: {}", e),
-                    })?;
-
-                // Create plugin config
-                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(
-                        self.get_use_colors_setting(),
-                        toml_table,
-                    )
-                } else {
-                    crate::plugin::args::PluginConfig::default()
-                };
-
-                // Parse arguments
-                consumer_plugin
-                    .parse_plugin_arguments(args, &plugin_config)
-                    .await?;
-            } else {
-                return Err(PluginError::PluginNotFound {
-                    plugin_name: plugin_name.clone(),
-                });
-            }
+            // Initialize the plugin
+            self.initialize_plugin(
+                &mut registry,
+                plugin_name,
+                args,
+                notification_manager.clone(),
+                use_colors,
+                plugin_toml_config,
+                &queue,
+            )
+            .await?;
         }
+
+        drop(registry); // Release write lock before calling ensure_output_plugin_fallback
+
+        // Ensure fallback Output plugin if needed
+        self.ensure_output_plugin_fallback().await?;
 
         Ok(())
     }
@@ -743,108 +783,6 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Setup plugin consumers for queue processing (internal)
-    /// Only creates queue consumers for Processing plugins
-    pub async fn setup_plugin_consumers(
-        &mut self,
-        queue: &Arc<QueueManager>,
-        plugin_names: &[String],
-        plugin_args: &[String],
-    ) -> PluginResult<()> {
-        // LOCK ORDERING DOCUMENTATION:
-        // To prevent deadlocks, we maintain consistent lock acquisition order:
-        // 1. Registry locks (read/write)
-        // 2. shared_pending_consumers
-        // All locks are held for minimal duration and dropped before acquiring subsequent locks.
-
-        // Phase 1: Collect plugin information with registry read lock
-        let mut plugin_info_map = Vec::new();
-        {
-            let registry = self.registry.inner().read().await;
-            for plugin_name in plugin_names {
-                let should_create_consumer = if let Some(plugin) = registry.get_plugin(plugin_name)
-                {
-                    let plugin_info = plugin.plugin_info();
-                    matches!(
-                        plugin_info.plugin_type,
-                        crate::plugin::types::PluginType::Processing
-                    )
-                } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
-                    let plugin_info = consumer_plugin.plugin_info();
-                    matches!(
-                        plugin_info.plugin_type,
-                        crate::plugin::types::PluginType::Processing
-                    )
-                } else {
-                    log::warn!(
-                        "Plugin '{}' not found in registry, skipping consumer creation",
-                        plugin_name
-                    );
-                    false
-                };
-                plugin_info_map.push((plugin_name.clone(), should_create_consumer));
-            }
-        } // Registry read lock dropped here
-
-        // Phase 2: Create and store consumers without holding any locks
-        if !plugin_info_map.is_empty() {
-            let shared_consumers =
-                self.shared_pending_consumers
-                    .as_ref()
-                    .ok_or_else(|| PluginError::LoadError {
-                        plugin_name: "plugin_manager".to_string(),
-                        cause: Self::SHARED_STORAGE_ERROR.to_string(),
-                    })?;
-
-            let mut consumers_to_store = Vec::new();
-            for (plugin_name, should_create) in &plugin_info_map {
-                if *should_create {
-                    let consumer = queue.create_consumer(plugin_name.clone()).map_err(|e| {
-                        PluginError::AsyncError {
-                            message: e.to_string(),
-                        }
-                    })?;
-                    consumers_to_store.push((plugin_name.clone(), consumer));
-                }
-            }
-
-            // Store all consumers with single lock acquisition
-            if !consumers_to_store.is_empty() {
-                let mut shared = shared_consumers.lock().await;
-                for (plugin_name, consumer) in consumers_to_store {
-                    shared.insert(plugin_name.clone(), consumer);
-                    log::trace!(
-                        "Created queue consumer for Processing plugin '{}'",
-                        plugin_name
-                    );
-                }
-            } // shared_pending_consumers lock dropped here
-        }
-
-        // Phase 3: Parse plugin arguments with registry write lock
-        {
-            let mut registry = self.registry.inner().write().await;
-            for plugin_name in plugin_names {
-                let plugin_config = if let Some(toml_table) = self.get_plugin_config(plugin_name) {
-                    crate::plugin::args::PluginConfig::from_toml(
-                        self.get_use_colors_setting(),
-                        toml_table,
-                    )
-                } else {
-                    crate::plugin::args::PluginConfig::default()
-                };
-
-                if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
-                    plugin
-                        .parse_plugin_arguments(plugin_args, &plugin_config)
-                        .await?;
-                }
-            }
-        } // Registry write lock dropped here
-
-        Ok(())
-    }
-
     /// Setup notification subscribers for active plugins during initialization
     pub async fn setup_plugin_notification_subscribers(&mut self) -> PluginResult<()> {
         use crate::notifications::api::get_notification_service;
@@ -889,34 +827,13 @@ impl PluginManager {
     /// - `Ok(())` if subscription setup succeeds
     /// - `Err(PluginError)` if notification service interaction fails
     pub async fn setup_system_notification_subscriber(&mut self) -> PluginResult<()> {
-        self.initialize_shared_consumer_storage();
         self.subscribe_to_system_events().await
-    }
-
-    /// Initialize shared consumer storage for system event handler
-    ///
-    /// Creates an Arc<Mutex> wrapper around pending_consumers that can be shared
-    /// with the spawned system event handler task. This enables safe concurrent
-    /// access to consumer activation during system startup events.
-    fn initialize_shared_consumer_storage(&mut self) {
-        // Create an Arc<Mutex> wrapper around pending_consumers
-        // that can be shared with the spawned task
-        // We need to wrap the existing HashMap instead of moving
-        // it out since consumers are added later
-        let pending_consumers_ref = Arc::new(Mutex::new(std::mem::replace(
-            &mut self.pending_consumers,
-            HashMap::new(),
-        )));
-
-        // Store the shared reference in the plugin manager for later use
-        self.shared_pending_consumers = Some(pending_consumers_ref);
     }
 
     /// Subscribe to system events and spawn handler task
     ///
-    /// Subscribes to system events (startup/shutdown) and spawns a background task
-    /// to handle plugin consumer activation during system startup. This approach
-    /// prevents deadlocks by handling consumer activation outside the main thread.
+    /// Subscribes to system events (startup/shutdown) for monitoring purposes.
+    /// Consumer injection is now handled during plugin initialization.
     ///
     /// # Returns
     ///
@@ -931,67 +848,15 @@ impl PluginManager {
         let subscriber_id = "plugin-manager-system".to_string();
         let source = "PluginManager-System".to_string();
 
-        // Clone shared references to data needed by the system event handler
-        let registry = self.registry.clone();
-        let pending_consumers_ref = self
-            .shared_pending_consumers
-            .as_ref()
-            .expect("Shared consumer storage must be initialized before subscription")
-            .clone();
-
         match notification_manager.subscribe(subscriber_id.clone(), EventFilter::SystemOnly, source)
         {
             Ok(mut receiver) => {
-                // Spawn a task to listen for system events and handle them directly
+                // Spawn a task to listen for system events for monitoring
                 tokio::spawn(async move {
                     while let Some(event) = receiver.recv().await {
                         if let Event::System(sys_event) = event {
                             if sys_event.event_type == SystemEventType::Startup {
-                                log::trace!("PluginManager: Received system startup event");
-
-                                // Activate plugin consumers directly in this task to avoid deadlock
-                                let mut pending_consumers = pending_consumers_ref.lock().await;
-                                if pending_consumers.is_empty() {
-                                    log::trace!("PluginManager: No pending consumers to activate");
-                                } else {
-                                    let consumers_to_activate: Vec<(String, QueueConsumer)> =
-                                        pending_consumers.drain().collect();
-
-                                    let mut registry = registry.inner().write().await;
-
-                                    for (plugin_name, consumer) in consumers_to_activate.into_iter()
-                                    {
-                                        log::info!(
-                                            "PluginManager: Activating consumer for plugin '{}'",
-                                            plugin_name
-                                        );
-
-                                        // Find the consumer plugin and start consuming
-                                        if let Some(plugin) =
-                                            registry.get_consumer_plugin_mut(&plugin_name)
-                                        {
-                                            match plugin.start_consuming(consumer).await {
-                                                Ok(()) => {
-                                                    log::trace!(
-                                                        "PluginManager: Plugin '{}' is now actively consuming from queue",
-                                                        plugin_name
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    log::error!(
-                                                        "PluginManager: Failed to start consuming for plugin '{}': {}",
-                                                        plugin_name, e
-                                                    );
-                                                }
-                                            }
-                                        } else {
-                                            log::warn!(
-                                                "PluginManager: Consumer plugin '{}' not found during activation",
-                                                plugin_name
-                                            );
-                                        }
-                                    }
-                                }
+                                log::trace!("PluginManager: Received system startup event - plugins already initialized with consumers");
                             } else if sys_event.event_type == SystemEventType::Shutdown {
                                 log::trace!("PluginManager: Received system shutdown event");
                                 // Plugin shutdown is handled elsewhere through the shutdown coordination system
@@ -1010,71 +875,6 @@ impl PluginManager {
                 ),
             }),
         }
-    }
-
-    /// Handle system started event by activating plugin consumers
-    pub async fn handle_system_started_event(&mut self) -> PluginResult<()> {
-        self.activate_plugin_consumers().await?;
-
-        log::trace!("PluginManager: System started event handling completed");
-        Ok(())
-    }
-
-    /// Activate all pending plugin consumers (called when system started event is received)
-    pub async fn activate_plugin_consumers(&mut self) -> PluginResult<()> {
-        // Always use shared reference for consistent storage access
-        let shared_consumers =
-            self.shared_pending_consumers
-                .as_ref()
-                .ok_or_else(|| PluginError::LoadError {
-                    plugin_name: "plugin_manager".to_string(),
-                    cause: Self::SHARED_STORAGE_ERROR.to_string(),
-                })?;
-
-        let consumers_to_activate: Vec<(String, QueueConsumer)> = {
-            let mut shared = shared_consumers.lock().await;
-            if shared.is_empty() {
-                log::trace!("PluginManager: No pending consumers to activate");
-                return Ok(());
-            }
-            // Move consumers out of shared storage for activation
-            shared.drain().collect()
-        };
-
-        let mut registry = self.registry.inner().write().await;
-
-        for (plugin_name, consumer) in consumers_to_activate.into_iter() {
-            log::trace!(
-                "PluginManager: Activating consumer for plugin '{}'",
-                plugin_name
-            );
-
-            // Find the consumer plugin and start consuming
-            if let Some(plugin) = registry.get_consumer_plugin_mut(&plugin_name) {
-                match plugin.start_consuming(consumer).await {
-                    Ok(()) => {
-                        log::trace!(
-                            "PluginManager: Plugin '{}' is now actively consuming from queue",
-                            plugin_name
-                        );
-                    }
-                    Err(e) => {
-                        return Err(PluginError::AsyncError {
-                            message: format!(
-                                "Failed to start consuming for plugin '{}': {}",
-                                plugin_name, e
-                            ),
-                        });
-                    }
-                }
-            } else {
-                return Err(PluginError::PluginNotFound {
-                    plugin_name: plugin_name.clone(),
-                });
-            }
-        }
-
-        Ok(())
     }
 
     /// Execute the resolved command (when ready)
@@ -1415,45 +1215,18 @@ impl PluginManager {
         let mut timed_out_plugins = Vec::new();
         let mut error_plugins = Vec::new();
 
-        // Stop all consumer plugins first
+        // Call cleanup on all active plugins (plugins handle their own consumer stopping internally)
         let stop_result = timeout(stop_timeout, async {
             let mut registry = self.registry.inner().write().await;
 
             for plugin_name in &active_plugin_names {
-                if let Some(consumer_plugin) = registry.get_consumer_plugin_mut(plugin_name) {
-                    match consumer_plugin.stop_consuming().await {
-                        Ok(()) => {
-                            // Consumer stopped successfully, but don't add to completed yet
-                            // Wait for cleanup phase to mark as completed
-                        }
-                        Err(e) => {
-                            log::trace!("Failed to stop consumer plugin '{}': {}", plugin_name, e);
-                            error_plugins.push(plugin_name.clone());
-                        }
-                    }
-                }
-            }
-
-            // Call cleanup on all active plugins
-            for plugin_name in &active_plugin_names {
                 if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
-                    match plugin.cleanup().await {
+                    match plugin.as_mut().cleanup().await {
                         Ok(()) => {
                             completed_plugins.push(plugin_name.clone());
                         }
                         Err(e) => {
                             log::trace!("Plugin '{}' cleanup failed: {}", plugin_name, e);
-                            error_plugins.push(plugin_name.clone());
-                        }
-                    }
-                } else if let Some(consumer_plugin) = registry.get_consumer_plugin_mut(plugin_name)
-                {
-                    match consumer_plugin.cleanup().await {
-                        Ok(()) => {
-                            completed_plugins.push(plugin_name.clone());
-                        }
-                        Err(e) => {
-                            log::trace!("Consumer plugin '{}' cleanup failed: {}", plugin_name, e);
                             error_plugins.push(plugin_name.clone());
                         }
                     }
@@ -1555,9 +1328,6 @@ impl PluginManager {
         let has_active_output_plugin = active_plugins.iter().any(|plugin_name| {
             if let Some(plugin) = registry.get_plugin(plugin_name) {
                 plugin.plugin_info().plugin_type == crate::plugin::types::PluginType::Output
-            } else if let Some(consumer_plugin) = registry.get_consumer_plugin(plugin_name) {
-                consumer_plugin.plugin_info().plugin_type
-                    == crate::plugin::types::PluginType::Output
             } else {
                 false
             }
@@ -1706,77 +1476,6 @@ mod tests {
         assert_eq!(manager.api_version, crate::core::version::get_api_version());
     }
 
-    #[test]
-    fn test_plugin_manager_api_compatibility() {
-        let manager = PluginManager::new(crate::core::version::get_api_version());
-
-        // Same year should be compatible
-        assert!(manager.is_api_compatible(20250101));
-        assert!(manager.is_api_compatible(20250215));
-        assert!(manager.is_api_compatible(20251231));
-
-        // Different years should not be compatible
-        assert!(!manager.is_api_compatible(20240101));
-        assert!(!manager.is_api_compatible(20260101));
-    }
-
-    #[test]
-    fn test_plugin_manager_major_version() {
-        let manager = PluginManager::new(20250315); // Different version for compatibility test
-
-        assert_eq!(manager.get_major_version(20250101), 2025);
-        assert_eq!(manager.get_major_version(20240831), 2024);
-        assert_eq!(manager.get_major_version(20261225), 2026);
-    }
-
-    #[test]
-    fn test_validate_plugin_compatibility() {
-        let manager = PluginManager::new(crate::core::version::get_api_version());
-
-        // Compatible plugin
-        let compatible_info = PluginInfo {
-            name: "compatible".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Compatible plugin".to_string(),
-            author: "Test".to_string(),
-            api_version: 20250215,
-            plugin_type: PluginType::Processing,
-            functions: vec![],
-            required: ScanRequires::NONE,
-            auto_active: false,
-        };
-
-        assert!(manager
-            .validate_plugin_compatibility(&compatible_info)
-            .is_ok());
-
-        // Incompatible plugin
-        let incompatible_info = PluginInfo {
-            name: "incompatible".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Incompatible plugin".to_string(),
-            author: "Test".to_string(),
-            api_version: 20240101,
-            plugin_type: PluginType::Processing,
-            functions: vec![],
-            required: ScanRequires::NONE,
-            auto_active: false,
-        };
-
-        let result = manager.validate_plugin_compatibility(&incompatible_info);
-        assert!(result.is_err());
-
-        match result.unwrap_err() {
-            PluginError::VersionIncompatible { message } => {
-                assert!(message.contains("incompatible"));
-                assert!(message.contains("incompatible"));
-                assert!(message.contains("20240101"));
-                assert!(message.contains("2025"));
-            }
-            _ => panic!("Expected VersionIncompatible error"),
-        }
-    }
-
     #[tokio::test]
     async fn test_plugin_registry_access() {
         let manager = PluginManager::new(crate::core::version::get_api_version());
@@ -1886,47 +1585,6 @@ mod tests {
         assert_eq!(info.functions[0].name, "main");
         assert_eq!(info.required, ScanRequires::NONE);
         assert!(!info.auto_active);
-    }
-
-    #[tokio::test]
-    async fn test_dual_storage_race_condition_fixed() {
-        // This test verifies the dual storage race condition is fixed
-        // It tests that consumer storage and activation use consistent single storage
-
-        let mut manager = PluginManager::new(crate::core::version::get_api_version());
-
-        // Before initialization, shared storage should be None
-        assert!(
-            manager.shared_pending_consumers.is_none(),
-            "Initially no shared storage"
-        );
-
-        // Test that after the fix:
-        // 1. Consumer storage requires shared storage to be initialized
-        // 2. Consumer activation uses the same shared storage
-        // 3. No fallback to local storage that could cause race conditions
-
-        // The fix ensures that:
-        // - setup_plugin_consumers() will fail if shared storage not initialized
-        // - activate_plugin_consumers() will fail if shared storage not initialized
-        // - Both methods use the same shared storage consistently
-
-        // Verify both storage operations require shared storage initialization
-        // (We can't easily test actual consumer creation without full system setup,
-        //  but we can verify the error handling works correctly)
-
-        let result = manager.activate_plugin_consumers().await;
-        match result {
-            Err(PluginError::LoadError { plugin_name, cause }) => {
-                assert_eq!(plugin_name, "plugin_manager");
-                assert!(cause.contains("Shared consumer storage not initialized"));
-                log::trace!("✅ Race condition fixed: activation properly requires shared storage");
-            }
-            _ => panic!("Expected LoadError when shared storage not initialized"),
-        }
-
-        // This test verifies the race condition is eliminated by ensuring consistent storage
-        assert!(true, "Dual storage race condition successfully fixed");
     }
 
     #[tokio::test]

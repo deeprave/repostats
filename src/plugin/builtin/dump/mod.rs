@@ -158,6 +158,11 @@ impl Plugin for DumpPlugin {
         reqs
     }
 
+    fn is_compatible(&self, system_api_version: u32) -> bool {
+        // Builtin plugins require system API version to be at least the current version
+        system_api_version >= crate::core::version::get_api_version()
+    }
+
     fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
         self.notification_manager = Some(manager);
     }
@@ -181,7 +186,7 @@ impl Plugin for DumpPlugin {
     }
 
     async fn cleanup(&mut self) -> PluginResult<()> {
-        let _ = self.stop_consuming().await;
+        let _ = self.stop_consumer_loop().await;
         self.initialized = false;
         Ok(())
     }
@@ -197,11 +202,8 @@ impl Plugin for DumpPlugin {
 
 #[async_trait::async_trait]
 impl ConsumerPlugin for DumpPlugin {
-    async fn start_consuming(&mut self, consumer: QueueConsumer) -> PluginResult<()> {
+    async fn inject_consumer(&mut self, consumer: QueueConsumer) -> PluginResult<()> {
         self.start_consumer_loop(consumer).await
-    }
-    async fn stop_consuming(&mut self) -> PluginResult<()> {
-        self.stop_consumer_loop().await
     }
 }
 

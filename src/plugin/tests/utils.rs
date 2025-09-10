@@ -216,7 +216,7 @@ impl Plugin for MockConsumerPlugin {
     }
 
     async fn cleanup(&mut self) -> PluginResult<()> {
-        let _ = self.stop_consuming().await;
+        self.consuming = false;
         self.base.cleanup().await
     }
 
@@ -232,27 +232,15 @@ impl Plugin for MockConsumerPlugin {
 #[cfg(test)]
 #[async_trait::async_trait]
 impl ConsumerPlugin for MockConsumerPlugin {
-    async fn start_consuming(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
+    async fn inject_consumer(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
         if self.should_fail_start {
             return Err(PluginError::ExecutionError {
                 plugin_name: self.base.info.name.clone(),
-                operation: "start_consuming".to_string(),
-                cause: "Mock start consuming failure".to_string(),
+                operation: "inject_consumer".to_string(),
+                cause: "Mock inject consumer failure".to_string(),
             });
         }
         self.consuming = true;
-        Ok(())
-    }
-
-    async fn stop_consuming(&mut self) -> PluginResult<()> {
-        if self.should_fail_stop {
-            return Err(PluginError::ExecutionError {
-                plugin_name: self.base.info.name.clone(),
-                operation: "stop_consuming".to_string(),
-                cause: "Mock stop consuming failure".to_string(),
-            });
-        }
-        self.consuming = false;
         Ok(())
     }
 }
@@ -322,12 +310,8 @@ mod tests {
             .create_consumer("test-consumer".to_string())
             .unwrap();
 
-        let result = plugin.start_consuming(consumer).await;
+        let result = plugin.inject_consumer(consumer).await;
         assert!(result.is_ok());
         assert!(plugin.consuming);
-
-        let result = plugin.stop_consuming().await;
-        assert!(result.is_ok());
-        assert!(!plugin.consuming);
     }
 }

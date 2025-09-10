@@ -1,5 +1,4 @@
 use crate::app::cli::display::display_plugin_table;
-use crate::core::error_handling::log_error_with_context;
 use crate::core::error_handling::ContextualError;
 use crate::core::validation::ValidationError;
 use crate::plugin::error::PluginError;
@@ -622,7 +621,7 @@ async fn configure_scanner(
     };
 
     // Step 2: Get plugin manager and check for active processing plugins
-    let plugin_names = {
+    let _plugin_names = {
         let plugin_manager = crate::plugin::api::get_plugin_service().await;
         let active_plugins = plugin_manager.get_active_plugins();
 
@@ -635,26 +634,8 @@ async fn configure_scanner(
         active_plugins
     }; // plugin_manager lock is released here
 
-    // Step 3: Setup plugin integration
-    let queue_manager = crate::queue::api::get_queue_service();
-    {
-        // Setup plugin consumers (get mutable access to plugin manager)
-        let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
-
-        // Note: setup_plugin_consumers expects plugin_args, using empty for now
-        let plugin_args: Vec<String> = Vec::new();
-
-        if let Err(e) = plugin_manager
-            .setup_plugin_consumers(&queue_manager, &plugin_names, &plugin_args)
-            .await
-        {
-            log_error_with_context(&e, "Failed to setup plugin consumers for queue integration");
-            log::debug!("Plugin names: {plugin_names:?}");
-            return None;
-        }
-    }
-
-    // Step 4: Create scanners for all repositories using batch method with all-or-nothing semantics
+    // Step 3: Create scanners for all repositories using batch method with all-or-nothing semantics
+    let _queue_manager = crate::queue::api::get_queue_service();
     match scanner_manager
         .create_scanners(
             &repositories_to_scan,
