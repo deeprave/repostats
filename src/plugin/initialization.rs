@@ -139,8 +139,89 @@ impl PluginInitializer {
 mod tests {
     use super::*;
     use crate::notifications::api::AsyncNotificationManager;
-    use crate::plugin::tests::utils::MockPlugin;
-    use crate::plugin::types::PluginType;
+    use crate::plugin::args::PluginConfig;
+    use crate::plugin::error::{PluginError, PluginResult};
+    use crate::plugin::traits::Plugin;
+    use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+    use crate::scanner::types::ScanRequires;
+
+    /// Simple mock plugin for testing
+    #[derive(Debug)]
+    struct MockPlugin {
+        name: String,
+        info: PluginInfo,
+        initialized: bool,
+    }
+
+    impl MockPlugin {
+        fn new(name: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                info: PluginInfo {
+                    name: name.to_string(),
+                    version: "1.0.0".to_string(),
+                    description: "Mock plugin for testing".to_string(),
+                    author: "Test Author".to_string(),
+                    api_version: 20250101,
+                    plugin_type: PluginType::Processing,
+                    functions: vec![PluginFunction {
+                        name: "test".to_string(),
+                        description: "Test function".to_string(),
+                        aliases: vec![],
+                    }],
+                    required: ScanRequires::NONE,
+                    auto_active: false,
+                },
+                initialized: false,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for MockPlugin {
+        fn plugin_info(&self) -> PluginInfo {
+            self.info.clone()
+        }
+
+        fn plugin_type(&self) -> PluginType {
+            PluginType::Processing
+        }
+
+        fn advertised_functions(&self) -> Vec<PluginFunction> {
+            vec![PluginFunction {
+                name: "test".to_string(),
+                description: "Test function".to_string(),
+                aliases: vec!["t".to_string()],
+            }]
+        }
+
+        fn requirements(&self) -> ScanRequires {
+            ScanRequires::NONE
+        }
+
+        fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {}
+
+        async fn initialize(&mut self) -> PluginResult<()> {
+            self.initialized = true;
+            Ok(())
+        }
+
+        async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
+            Ok(())
+        }
+
+        async fn cleanup(&mut self) -> PluginResult<()> {
+            Ok(())
+        }
+
+        async fn parse_plugin_arguments(
+            &mut self,
+            _args: &[String],
+            _config: &PluginConfig,
+        ) -> PluginResult<()> {
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn test_plugin_initializer_creation() {

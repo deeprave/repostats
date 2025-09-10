@@ -3,10 +3,8 @@
 //! This module provides reusable utilities for testing scanner functionality,
 //! particularly for collecting and validating scan messages.
 
-use crate::core::query::QueryParams;
-use crate::scanner::error::ScanResult;
-use crate::scanner::task::ScannerTask;
-use crate::scanner::types::ScanMessage;
+use repostats::core::query::QueryParams;
+use repostats::scanner::api::{ScanMessage, ScanResult, ScannerTask};
 
 /// Test helper to collect scan messages into a Vec using the streaming callback API
 ///

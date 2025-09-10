@@ -6,4 +6,3 @@
 mod compatibility;
 mod coordination;
 mod error;
-pub mod utils;
