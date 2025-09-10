@@ -9,7 +9,7 @@ use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 
 // Core plugin management
-pub use crate::plugin::manager::PluginManager;
+pub use crate::plugin::manager::{PluginManager, PluginManagerConfig};
 
 // Error handling
 pub use crate::plugin::error::{PluginError, PluginResult};

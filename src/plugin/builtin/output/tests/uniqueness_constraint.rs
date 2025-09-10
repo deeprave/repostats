@@ -84,6 +84,75 @@ impl Plugin for MockOutputPlugin {
     }
 }
 
+/// Mock Processing Plugin for testing
+#[derive(Debug)]
+struct MockPlugin {
+    name: String,
+}
+
+impl MockPlugin {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Plugin for MockPlugin {
+    fn plugin_info(&self) -> PluginInfo {
+        PluginInfo {
+            name: self.name.clone(),
+            version: "1.0.0".to_string(),
+            description: "Mock Processing plugin for testing".to_string(),
+            author: "Test Author".to_string(),
+            api_version: 20250101,
+            plugin_type: PluginType::Processing,
+            functions: vec![PluginFunction {
+                name: "test".to_string(),
+                description: "Test function".to_string(),
+                aliases: vec![],
+            }],
+            required: ScanRequires::NONE,
+            auto_active: false,
+        }
+    }
+
+    fn plugin_type(&self) -> PluginType {
+        PluginType::Processing
+    }
+
+    fn advertised_functions(&self) -> Vec<PluginFunction> {
+        vec![]
+    }
+
+    fn requirements(&self) -> ScanRequires {
+        ScanRequires::NONE
+    }
+
+    fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {}
+
+    async fn initialize(&mut self) -> PluginResult<()> {
+        Ok(())
+    }
+
+    async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
+        Ok(())
+    }
+
+    async fn cleanup(&mut self) -> PluginResult<()> {
+        Ok(())
+    }
+
+    async fn parse_plugin_arguments(
+        &mut self,
+        _args: &[String],
+        _config: &PluginConfig,
+    ) -> PluginResult<()> {
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn test_output_plugin_uniqueness_constraint_works() {
     // TEST: Verify that uniqueness constraint for Output plugins is properly enforced
@@ -131,7 +200,7 @@ async fn test_non_output_plugins_not_affected_by_constraint() {
     // Other plugin types (Processing, etc.) should be able to coexist
 
     use crate::plugin::registry::PluginRegistry;
-    use crate::plugin::tests::utils::MockPlugin;
+    // Note: Using local MockPlugin since test utilities were moved to tests/common/
 
     let mut registry = PluginRegistry::new();
 

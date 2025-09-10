@@ -4,12 +4,32 @@
 
 use super::super::ScannerTask;
 use crate::core::query::QueryParams;
-use crate::scanner::tests::helpers::collect_scan_messages;
-// Removed unused imports: super::helpers::*, count_commit_messages
+use crate::scanner::error::ScanResult;
 use crate::scanner::types::{ScanMessage, ScanRequires};
 use serial_test::serial;
 use std::process::Command;
 use tempfile::TempDir;
+
+/// Test helper to collect scan messages into a Vec using the streaming callback API
+async fn collect_scan_messages(
+    scanner_task: &ScannerTask,
+    query_params: Option<&QueryParams>,
+) -> ScanResult<Vec<ScanMessage>> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let messages = Rc::new(RefCell::new(Vec::new()));
+    let messages_clone = Rc::clone(&messages);
+
+    scanner_task
+        .scan_commits_with_query(query_params, move |msg| {
+            messages_clone.borrow_mut().push(msg);
+            async { Ok(()) }
+        })
+        .await?;
+
+    Ok(Rc::try_unwrap(messages).unwrap().into_inner())
+}
 
 #[tokio::test]
 #[serial]
