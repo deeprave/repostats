@@ -13,11 +13,8 @@ use tokio::sync::{Mutex, RwLock};
 
 /// Plugin registry for managing loaded plugins
 pub struct PluginRegistry {
-    /// Map of plugin name to plugin instance
+    /// Map of plugin name to plugin instance (stores all plugins regardless of type)
     plugins: HashMap<String, Box<dyn Plugin>>,
-
-    /// Map of plugin name to consumer plugin instance
-    consumer_plugins: HashMap<String, Box<dyn ConsumerPlugin>>,
 
     /// Set of plugin names that are currently active
     active_plugins: HashSet<String>,
@@ -27,10 +24,6 @@ impl std::fmt::Debug for PluginRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PluginRegistry")
             .field("plugins", &self.plugins.keys().collect::<Vec<_>>())
-            .field(
-                "consumer_plugins",
-                &self.consumer_plugins.keys().collect::<Vec<_>>(),
-            )
             .field("active_plugins", &self.active_plugins)
             .finish()
     }
@@ -41,12 +34,11 @@ impl PluginRegistry {
     pub fn new() -> Self {
         Self {
             plugins: HashMap::new(),
-            consumer_plugins: HashMap::new(),
             active_plugins: HashSet::new(),
         }
     }
 
-    /// Register a plugin in the registry
+    /// Register a plugin in the registry (works for both Plugin and ConsumerPlugin)
     pub fn register_plugin(&mut self, plugin: Box<dyn Plugin>) -> PluginResult<()> {
         let plugin_name = plugin.plugin_info().name.clone();
 
@@ -61,26 +53,6 @@ impl PluginRegistry {
         Ok(())
     }
 
-    /// Register a consumer plugin in the registry
-    pub fn register_consumer_plugin(
-        &mut self,
-        plugin: Box<dyn ConsumerPlugin>,
-    ) -> PluginResult<()> {
-        let plugin_name = plugin.plugin_info().name.clone();
-
-        // Check if plugin name is already registered
-        if self.consumer_plugins.contains_key(&plugin_name)
-            || self.plugins.contains_key(&plugin_name)
-        {
-            return Err(PluginError::Generic {
-                message: format!("Plugin '{}' is already registered", plugin_name),
-            });
-        }
-
-        self.consumer_plugins.insert(plugin_name, plugin);
-        Ok(())
-    }
-
     /// Get a plugin by name
     pub fn get_plugin(&self, name: &str) -> Option<&dyn Plugin> {
         self.plugins.get(name).map(|p| p.as_ref())
@@ -91,26 +63,14 @@ impl PluginRegistry {
         self.plugins.get_mut(name)
     }
 
-    /// Get a consumer plugin by name
-    pub fn get_consumer_plugin(&self, name: &str) -> Option<&dyn ConsumerPlugin> {
-        self.consumer_plugins.get(name).map(|p| p.as_ref())
-    }
-
-    /// Get a mutable consumer plugin by name
-    pub fn get_consumer_plugin_mut(&mut self, name: &str) -> Option<&mut Box<dyn ConsumerPlugin>> {
-        self.consumer_plugins.get_mut(name)
-    }
-
     /// Check if a plugin exists in the registry
     pub fn has_plugin(&self, name: &str) -> bool {
-        self.plugins.contains_key(name) || self.consumer_plugins.contains_key(name)
+        self.plugins.contains_key(name)
     }
 
     /// Get list of all plugin names
     pub fn get_plugin_names(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        names.extend(self.plugins.keys().cloned());
-        names.extend(self.consumer_plugins.keys().cloned());
+        let mut names: Vec<String> = self.plugins.keys().cloned().collect();
         names.sort();
         names
     }
@@ -191,8 +151,6 @@ impl PluginRegistry {
     pub fn get_plugin_type(&self, name: &str) -> PluginResult<PluginType> {
         if let Some(plugin) = self.plugins.get(name) {
             Ok(plugin.plugin_info().plugin_type)
-        } else if let Some(consumer_plugin) = self.consumer_plugins.get(name) {
-            Ok(consumer_plugin.plugin_info().plugin_type)
         } else {
             Err(PluginError::PluginNotFound {
                 plugin_name: name.to_string(),
@@ -202,8 +160,7 @@ impl PluginRegistry {
 
     /// Remove a plugin from the registry
     pub fn unregister_plugin(&mut self, name: &str) -> PluginResult<()> {
-        let removed =
-            self.plugins.remove(name).is_some() || self.consumer_plugins.remove(name).is_some();
+        let removed = self.plugins.remove(name).is_some();
 
         if !removed {
             return Err(PluginError::PluginNotFound {
@@ -218,13 +175,12 @@ impl PluginRegistry {
 
     /// Get total count of registered plugins
     pub fn plugin_count(&self) -> usize {
-        self.plugins.len() + self.consumer_plugins.len()
+        self.plugins.len()
     }
 
     /// Clear all plugins from registry
     pub fn clear(&mut self) {
         self.plugins.clear();
-        self.consumer_plugins.clear();
         self.active_plugins.clear();
     }
 }
@@ -440,13 +396,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ConsumerPlugin for MockConsumerPlugin {
-        async fn start_consuming(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
+        async fn inject_consumer(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
             self.consuming = true;
-            Ok(())
-        }
-
-        async fn stop_consuming(&mut self) -> PluginResult<()> {
-            self.consuming = false;
             Ok(())
         }
     }
@@ -489,7 +440,7 @@ mod tests {
         let consumer_plugin = Box::new(MockConsumerPlugin::new("consumer-plugin"));
 
         // Register consumer plugin
-        registry.register_consumer_plugin(consumer_plugin).unwrap();
+        registry.register_plugin(consumer_plugin).unwrap();
 
         assert_eq!(registry.plugin_count(), 1);
         assert!(registry.has_plugin("consumer-plugin"));
@@ -548,21 +499,21 @@ mod tests {
         let mut registry = PluginRegistry::new();
         let consumer_plugin = Box::new(MockConsumerPlugin::new("consumer-test"));
 
-        registry.register_consumer_plugin(consumer_plugin).unwrap();
+        registry.register_plugin(consumer_plugin).unwrap();
 
-        // Test get_consumer_plugin
-        let retrieved = registry.get_consumer_plugin("consumer-test");
+        // Test get_plugin
+        let retrieved = registry.get_plugin("consumer-test");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().plugin_info().name, "consumer-test");
 
-        // Test get_consumer_plugin_mut
-        let retrieved_mut = registry.get_consumer_plugin_mut("consumer-test");
+        // Test get_plugin_mut
+        let retrieved_mut = registry.get_plugin_mut("consumer-test");
         assert!(retrieved_mut.is_some());
         assert_eq!(retrieved_mut.unwrap().plugin_info().name, "consumer-test");
 
         // Test nonexistent plugin
-        assert!(registry.get_consumer_plugin("nonexistent").is_none());
-        assert!(registry.get_consumer_plugin_mut("nonexistent").is_none());
+        assert!(registry.get_plugin("nonexistent").is_none());
+        assert!(registry.get_plugin_mut("nonexistent").is_none());
     }
 
     #[test]
@@ -602,7 +553,7 @@ mod tests {
             .register_plugin(Box::new(MockPlugin::new("plugin2")))
             .unwrap();
         registry
-            .register_consumer_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
+            .register_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
             .unwrap();
 
         assert_eq!(registry.plugin_count(), 3);
@@ -625,10 +576,10 @@ mod tests {
             .register_plugin(Box::new(MockPlugin::new("regular2")))
             .unwrap();
         registry
-            .register_consumer_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
+            .register_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
             .unwrap();
         registry
-            .register_consumer_plugin(Box::new(MockConsumerPlugin::new("consumer2")))
+            .register_plugin(Box::new(MockConsumerPlugin::new("consumer2")))
             .unwrap();
 
         assert_eq!(registry.plugin_count(), 4);
@@ -791,7 +742,7 @@ mod tests {
             .register_plugin(Box::new(MockPlugin::new("plugin2")))
             .unwrap();
         registry
-            .register_consumer_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
+            .register_plugin(Box::new(MockConsumerPlugin::new("consumer1")))
             .unwrap();
 
         // Verify all are registered
@@ -831,8 +782,7 @@ mod tests {
             .unwrap();
 
         // Try to register consumer plugin with same name - should fail
-        let result =
-            registry.register_consumer_plugin(Box::new(MockConsumerPlugin::new("collision")));
+        let result = registry.register_plugin(Box::new(MockConsumerPlugin::new("collision")));
         assert!(result.is_err());
 
         match result.unwrap_err() {

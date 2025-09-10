@@ -49,6 +49,19 @@ pub trait Plugin: Send + Sync {
         ScanRequires::NONE
     }
 
+    /// Check if this plugin is compatible with the given system API version
+    ///
+    /// The plugin determines its own compatibility requirements. The default
+    /// implementation returns false to force plugins to explicitly implement
+    /// their compatibility logic.
+    ///
+    /// Builtin plugins should use `crate::core::version::get_api_version()` as
+    /// their minimum required version. External plugins should set this based
+    /// on the API version they were compiled against.
+    fn is_compatible(&self, _system_api_version: u32) -> bool {
+        false // Force plugins to implement their own compatibility check
+    }
+
     /// Set the notification manager for this plugin
     ///
     /// This should be called before initialize() to inject the notification
@@ -70,6 +83,12 @@ pub trait Plugin: Send + Sync {
         args: &[String],
         config: &PluginConfig,
     ) -> PluginResult<()>;
+
+    /// Attempt to get this plugin as a ConsumerPlugin if it implements that trait
+    /// Returns None if this plugin is not a ConsumerPlugin
+    fn as_consumer_plugin(&mut self) -> Option<&mut dyn ConsumerPlugin> {
+        None // Default implementation - plugins that implement ConsumerPlugin should override this
+    }
 }
 
 /// Consumer plugin trait for plugins that consume messages from queue
@@ -78,17 +97,26 @@ pub trait Plugin: Send + Sync {
 /// This includes both real-time processors (like dump) that output messages
 /// immediately, and accumulating processors that collect and analyze data
 /// over time before passing results to output plugins.
+///
+/// The plugin manages its own consuming lifecycle internally - it starts
+/// consuming immediately when the consumer is injected and stops automatically
+/// during cleanup or on scan completion/error.
 #[async_trait::async_trait]
 pub trait ConsumerPlugin: Plugin {
-    /// Start consuming messages from the provided consumer
+    /// Inject the queue consumer for this plugin
     ///
-    /// This method should spawn a background task to continuously read
-    /// messages from the queue and process them according to the plugin's
-    /// specific functionality.
-    async fn start_consuming(&mut self, consumer: QueueConsumer) -> PluginResult<()>;
+    /// The plugin should immediately start consuming messages and manage
+    /// its own lifecycle internally. The plugin will stop consuming
+    /// automatically during cleanup or on scan completion/error.
+    async fn inject_consumer(&mut self, consumer: QueueConsumer) -> PluginResult<()>;
 
-    /// Stop consuming messages
-    async fn stop_consuming(&mut self) -> PluginResult<()>;
+    /// Override the default Plugin implementation to return self as ConsumerPlugin
+    fn as_consumer_plugin(&mut self) -> Option<&mut dyn ConsumerPlugin>
+    where
+        Self: Sized,
+    {
+        Some(self)
+    }
 }
 
 #[cfg(test)]
@@ -184,6 +212,11 @@ mod tests {
             self.args_parsed = true;
             Ok(())
         }
+
+        fn is_compatible(&self, _system_api_version: u32) -> bool {
+            // Mock plugin is always compatible for testing
+            true
+        }
     }
 
     // Mock consumer plugin for testing
@@ -240,24 +273,23 @@ mod tests {
         ) -> PluginResult<()> {
             self.base.parse_plugin_arguments(args, config).await
         }
+
+        fn is_compatible(&self, system_api_version: u32) -> bool {
+            self.base.is_compatible(system_api_version)
+        }
     }
 
     #[async_trait::async_trait]
     impl ConsumerPlugin for MockConsumerPlugin {
-        async fn start_consuming(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
+        async fn inject_consumer(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
             if !self.base.initialized {
                 return Err(PluginError::ExecutionError {
                     plugin_name: self.base.info.name.clone(),
-                    operation: "start_consuming".to_string(),
+                    operation: "inject_consumer".to_string(),
                     cause: "Plugin not initialized".to_string(),
                 });
             }
             self.consuming = true;
-            Ok(())
-        }
-
-        async fn stop_consuming(&mut self) -> PluginResult<()> {
-            self.consuming = false;
             Ok(())
         }
     }
@@ -360,12 +392,8 @@ mod tests {
             .unwrap();
 
         assert!(!consumer_plugin.consuming);
-        consumer_plugin.start_consuming(consumer).await.unwrap();
+        consumer_plugin.inject_consumer(consumer).await.unwrap();
         assert!(consumer_plugin.consuming);
-
-        // Test stop consuming
-        consumer_plugin.stop_consuming().await.unwrap();
-        assert!(!consumer_plugin.consuming);
     }
 
     #[tokio::test]
@@ -378,14 +406,14 @@ mod tests {
             .create_consumer("test-plugin".to_string())
             .unwrap();
 
-        let result = consumer_plugin.start_consuming(consumer).await;
+        let result = consumer_plugin.inject_consumer(consumer).await;
         assert!(result.is_err());
 
         match result.unwrap_err() {
             PluginError::ExecutionError {
                 operation, cause, ..
             } => {
-                assert_eq!(operation, "start_consuming");
+                assert_eq!(operation, "inject_consumer");
                 assert_eq!(cause, "Plugin not initialized");
             }
             _ => panic!("Expected ExecutionError"),

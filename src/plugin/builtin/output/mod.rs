@@ -442,6 +442,11 @@ impl Plugin for OutputPlugin {
         }
     }
 
+    fn is_compatible(&self, system_api_version: u32) -> bool {
+        // Builtin plugins require system API version to be at least the current version
+        system_api_version >= crate::core::version::get_api_version()
+    }
+
     fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
         self.notification_manager = Some(manager);
     }
