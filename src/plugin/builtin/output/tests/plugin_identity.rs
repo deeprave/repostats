@@ -34,9 +34,14 @@ async fn test_advertised_functions() {
     let plugin = OutputPlugin::new();
     let functions = plugin.advertised_functions();
 
-    assert_eq!(functions.len(), 1);
+    // Should advertise 7 functions: output, json, csv, xml, html, markdown, text
+    assert_eq!(functions.len(), 7);
 
-    let output_func = &functions[0];
+    // Find the main output function
+    let output_func = functions
+        .iter()
+        .find(|f| f.name == "output")
+        .expect("output function should be advertised");
     assert_eq!(output_func.name, "output");
     assert_eq!(
         output_func.description,
@@ -45,6 +50,19 @@ async fn test_advertised_functions() {
     // Check that export and format are in the aliases (order doesn't matter)
     assert!(output_func.aliases.contains(&"export".to_string()));
     assert!(output_func.aliases.contains(&"format".to_string()));
+
+    // Verify all format-specific functions are advertised
+    let expected_functions = vec!["json", "csv", "xml", "html", "markdown", "text"];
+    for func_name in expected_functions {
+        let func = functions
+            .iter()
+            .find(|f| f.name == func_name)
+            .expect(&format!("{} function should be advertised", func_name));
+        assert_eq!(func.name, func_name);
+        assert!(!func.description.is_empty());
+        // Format functions have no aliases
+        assert!(func.aliases.is_empty());
+    }
 }
 
 // Removed test_requirements - replaced by more specific progress suppression tests

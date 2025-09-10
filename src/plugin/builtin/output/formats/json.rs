@@ -1,7 +1,8 @@
 //! JSON output formatter
 
 use super::{FormatResult, OutputFormatter};
-use crate::plugin::data_export::{DataPayload, ExportFormat, PluginDataExport, Value};
+use crate::plugin::builtin::output::traits::ExportFormat;
+use crate::plugin::data_export::{DataPayload, PluginDataExport, Value};
 use crate::plugin::error::PluginError;
 use serde_json::{json, Map, Value as JsonValue};
 

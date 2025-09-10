@@ -67,8 +67,10 @@ impl PluginActivator {
             // Check if any command segments match this plugin
             for (index, segment) in segments_to_process.iter().enumerate() {
                 if self.matches_segment(plugin_name, segment, functions) {
-                    // Build args from segment
-                    plugins_to_activate.push((plugin_name.clone(), segment.args.clone()));
+                    // Build args from segment, prepending the function name that was invoked
+                    let mut full_args = vec![format!("--function={}", segment.command_name)];
+                    full_args.extend(segment.args.clone());
+                    plugins_to_activate.push((plugin_name.clone(), full_args));
 
                     // Check if it's an Output plugin - segment match always wins
                     if let Some(info) = plugin_info {

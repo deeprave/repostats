@@ -339,9 +339,18 @@ impl PluginManager {
         let mut auto_active_plugins = Vec::new();
 
         for discovered in discovered_plugins {
-            // Check plugin compatibility (let plugin decide)
-            let plugin = match &discovered.source {
-                PluginSource::Builtin { factory } => factory(),
+            match &discovered.source {
+                PluginSource::Builtin { factory } => {
+                    let plugin = factory();
+                    if !plugin.is_compatible(self.api_version) {
+                        return Err(PluginError::VersionIncompatible {
+                            message: format!(
+                                "Plugin '{}' is incompatible with system API version {}",
+                                discovered.info.name, self.api_version
+                            ),
+                        });
+                    }
+                }
                 PluginSource::BuiltinConsumer { factory } => {
                     let mut consumer_plugin = factory();
                     // ConsumerPlugin extends Plugin, so we can get a reference to the Plugin trait
@@ -357,22 +366,11 @@ impl PluginManager {
                             ),
                         });
                     }
-                    // Skip the general check below since we already checked
-                    continue;
                 }
                 PluginSource::External { .. } => {
                     // External plugins not implemented yet - skip compatibility check
                     continue;
                 }
-            };
-
-            if !plugin.is_compatible(self.api_version) {
-                return Err(PluginError::VersionIncompatible {
-                    message: format!(
-                        "Plugin '{}' is incompatible with system API version {}",
-                        discovered.info.name, self.api_version
-                    ),
-                });
             }
 
             // Track auto-active plugins for later activation

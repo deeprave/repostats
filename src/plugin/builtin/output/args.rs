@@ -2,7 +2,7 @@
 
 use super::OutputPlugin;
 use crate::plugin::args::{PluginArgParser, PluginConfig};
-use crate::plugin::data_export::ExportFormat;
+use crate::plugin::builtin::output::traits::{ExportFormat, OutputDestination};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::Plugin; // for plugin_info()
 use clap::Arg;
@@ -22,13 +22,6 @@ pub struct OutputConfig {
 }
 
 /// Output destination enum
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputDestination {
-    /// Write to stdout
-    Stdout,
-    /// Write to a file
-    File(String),
-}
 
 impl Default for OutputConfig {
     fn default() -> Self {
@@ -167,14 +160,46 @@ fn detect_format_from_extension(file_path: &str) -> PluginResult<ExportFormat> {
 }
 
 impl OutputPlugin {
+    /// Extract function name from args array (first arg with --function= prefix)
+    /// Returns (function_name, remaining_args)
+    fn extract_function_name(args: &[String]) -> (String, Vec<String>) {
+        if let Some(first_arg) = args.first() {
+            if let Some(function_name) = first_arg.strip_prefix("--function=") {
+                return (function_name.to_string(), args[1..].to_vec());
+            }
+        }
+        // Fallback to plugin name if no function specified
+        ("output".to_string(), args.to_vec())
+    }
+
+    /// Detect format based on function name
+    fn detect_format_from_function_name(function_name: &str) -> Option<ExportFormat> {
+        match function_name {
+            "json" => Some(ExportFormat::Json),
+            "csv" => Some(ExportFormat::Csv),
+            "xml" => Some(ExportFormat::Xml),
+            "html" => Some(ExportFormat::Html),
+            "markdown" => Some(ExportFormat::Markdown),
+            "text" => Some(ExportFormat::Console),
+            _ => None, // "output" or unknown functions get no automatic format
+        }
+    }
+
     pub(super) async fn args_parse(
         &mut self,
         args: &[String],
         config: &PluginConfig,
     ) -> PluginResult<()> {
+        // Extract function name from args (passed by plugin activation system)
+        let (function_name, actual_args) = Self::extract_function_name(args);
+
+        // Detect format based on function name
+        let detected_format = Self::detect_format_from_function_name(&function_name);
+
         let info = self.plugin_info();
-        let parser = PluginArgParser::new(
+        let parser = PluginArgParser::new_with_display_name(
             &info.name,
+            &function_name,
             &info.description,
             &info.version,
             config.use_colors,
@@ -243,7 +268,7 @@ impl OutputPlugin {
                 .help("Use plain text output format"),
         );
 
-        let matches = parser.parse(args)?;
+        let matches = parser.parse(&actual_args)?;
 
         // Parse output destination - check command line args first, then config
         if let Some(output_path) = matches.get_one::<String>("output") {
@@ -264,40 +289,48 @@ impl OutputPlugin {
             }
         }
 
-        // Parse template path first - this overrides all other format settings
-        let _format = if let Some(template_path) = matches.get_one::<PathBuf>("template-path") {
+        // Parse format with correct priority order:
+        // 1. Template path (highest priority)
+        // 2. Explicit format flags/options (user override)
+        // 3. Function name detection (automatic)
+        // 4. File extension detection (fallback)
+        // 5. Console format (final fallback)
+        let format = if let Some(template_path) = matches.get_one::<PathBuf>("template-path") {
             // Template path provided - force template format and store path
             self.template_path = Some(template_path.to_string_lossy().to_string());
             ExportFormat::Template
+        } else if matches.get_flag("json") {
+            ExportFormat::Json
+        } else if matches.get_flag("csv") {
+            ExportFormat::Csv
+        } else if matches.get_flag("xml") {
+            ExportFormat::Xml
+        } else if matches.get_flag("html") {
+            ExportFormat::Html
+        } else if matches.get_flag("markdown") {
+            ExportFormat::Markdown
+        } else if matches.get_flag("text") {
+            ExportFormat::Console
+        } else if let Some(format_str) = matches.get_one::<String>("format") {
+            parse_format_string(format_str)?
+        } else if let Some(detected) = detected_format {
+            // Format was detected from function invocation - use it
+            detected
         } else {
-            // No template path - check other format options
-            if matches.get_flag("json") {
-                ExportFormat::Json
-            } else if matches.get_flag("csv") {
-                ExportFormat::Csv
-            } else if matches.get_flag("xml") {
-                ExportFormat::Xml
-            } else if matches.get_flag("html") {
-                ExportFormat::Html
-            } else if matches.get_flag("markdown") {
-                ExportFormat::Markdown
-            } else if matches.get_flag("text") {
-                ExportFormat::Console
-            } else if let Some(format_str) = matches.get_one::<String>("format") {
-                parse_format_string(format_str)?
-            } else {
-                // Auto-detect format from file extension if writing to file
-                if let Some(ref dest) = self.output_destination {
-                    if dest != "-" {
-                        detect_format_from_extension(dest)?
-                    } else {
-                        ExportFormat::Console
-                    }
+            // Auto-detect format from file extension if writing to file
+            if let Some(ref dest) = self.output_destination {
+                if dest != "-" {
+                    detect_format_from_extension(dest)?
                 } else {
                     ExportFormat::Console
                 }
+            } else {
+                ExportFormat::Console
             }
         };
+
+        // Store the detected format in the plugin instance for future use
+        self.detected_format = Some(format);
 
         Ok(())
     }
