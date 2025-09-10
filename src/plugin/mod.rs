@@ -4,6 +4,7 @@
 //! Supports dynamic plugin loading, version compatibility, and real-time notifications.
 
 // Internal modules - all access should go through api module
+pub(crate) mod activation;
 pub(crate) mod args;
 pub(crate) mod builtin;
 pub(crate) mod data_export;
@@ -11,6 +12,7 @@ pub(crate) mod discovery;
 pub(crate) mod error;
 pub(crate) mod error_handling;
 pub(crate) mod events;
+pub(crate) mod initialization;
 pub(crate) mod manager;
 pub(crate) mod registry;
 pub(crate) mod traits;
