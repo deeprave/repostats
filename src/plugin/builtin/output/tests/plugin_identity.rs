@@ -34,34 +34,24 @@ async fn test_advertised_functions() {
     let plugin = OutputPlugin::new();
     let functions = plugin.advertised_functions();
 
-    // Should advertise 8 functions: output, json, csv, tsv, xml, html, markdown, text
-    assert_eq!(functions.len(), 8);
+    // Should advertise 8 functions: output, text, json, csv, tsv, xml, html, md, yaml
+    assert_eq!(functions.len(), 9);
 
     // Find the main output function
     let output_func = functions
         .iter()
-        .find(|f| f.name == "output")
+        .find(|name| *name == "output")
         .expect("output function should be advertised");
-    assert_eq!(output_func.name, "output");
-    assert_eq!(
-        output_func.description,
-        "Export processed data in various formats"
-    );
-    // Check that export and format are in the aliases (order doesn't matter)
-    assert!(output_func.aliases.contains(&"export".to_string()));
-    assert!(output_func.aliases.contains(&"format".to_string()));
+    assert_eq!(output_func, "output");
 
     // Verify all format-specific functions are advertised
-    let expected_functions = vec!["json", "csv", "tsv", "xml", "html", "markdown", "text"];
+    let expected_functions = vec!["text", "json", "csv", "tsv", "xml", "html", "md", "yaml"];
     for func_name in expected_functions {
         let func = functions
             .iter()
-            .find(|f| f.name == func_name)
+            .find(|name| **name == func_name)
             .expect(&format!("{} function should be advertised", func_name));
-        assert_eq!(func.name, func_name);
-        assert!(!func.description.is_empty());
-        // Format functions have no aliases
-        assert!(func.aliases.is_empty());
+        assert_eq!(func, &func_name);
     }
 }
 

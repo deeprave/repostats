@@ -3,7 +3,7 @@
 //! This module handles the logic for matching command segments to plugins
 //! and managing plugin activation based on user commands and auto-activation rules.
 
-use crate::app::cli::command_segmenter::CommandSegment;
+use crate::app::cli::segmenter::CommandSegment;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::types::{PluginInfo, PluginType};
 use std::collections::HashSet;
@@ -27,18 +27,16 @@ impl PluginActivator {
         &self,
         plugin_name: &str,
         segment: &CommandSegment,
-        plugin_functions: &[crate::plugin::types::PluginFunction],
+        plugin_functions: &[String],
     ) -> bool {
         // Check if plugin name matches
         if plugin_name == segment.command_name {
             return true;
         }
 
-        // Check if any function name or alias matches
-        for function in plugin_functions {
-            if function.name == segment.command_name
-                || function.aliases.contains(&segment.command_name)
-            {
+        // Check if any function name matches
+        for function_name in plugin_functions {
+            if function_name == &segment.command_name {
                 return true;
             }
         }
@@ -50,11 +48,7 @@ impl PluginActivator {
     pub fn process_segments(
         &self,
         segments: &[CommandSegment],
-        all_plugins: &[(
-            String,
-            Vec<crate::plugin::types::PluginFunction>,
-            Option<PluginInfo>,
-        )],
+        all_plugins: &[(String, Vec<String>, Option<PluginInfo>)],
     ) -> PluginResult<ActivationResult> {
         let mut segments_to_process: Vec<CommandSegment> = segments.to_vec();
         let mut plugins_to_activate: Vec<(String, Vec<String>)> = Vec::new();
@@ -70,12 +64,12 @@ impl PluginActivator {
                     // Build args from segment, prepending the function name that was invoked
                     let mut full_args = vec![format!("--function={}", segment.command_name)];
                     full_args.extend(segment.args.clone());
-                    plugins_to_activate.push((plugin_name.clone(), full_args));
+                    plugins_to_activate.push((plugin_name.to_string(), full_args));
 
                     // Check if it's an Output plugin - segment match always wins
                     if let Some(info) = plugin_info {
                         if info.plugin_type == PluginType::Output {
-                            active_output_plugin = Some(plugin_name.clone());
+                            active_output_plugin = Some(plugin_name.to_string());
                         }
                     }
 
@@ -178,7 +172,6 @@ pub struct ActivationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::types::PluginFunction;
 
     #[test]
     fn test_matches_segment_by_name() {
@@ -200,11 +193,7 @@ mod tests {
             command_name: "run".to_string(),
             args: vec![],
         };
-        let functions = vec![PluginFunction {
-            name: "execute".to_string(),
-            description: "Execute plugin".to_string(),
-            aliases: vec!["run".to_string(), "start".to_string()],
-        }];
+        let functions = vec!["run".to_string()];
 
         assert!(activator.matches_segment("test", &segment, &functions));
     }

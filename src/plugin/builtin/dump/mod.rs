@@ -5,12 +5,13 @@ mod args;
 mod consumer;
 mod format;
 
+use crate::builtin;
 use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::{OutputFormat, PluginConfig};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::error_handling::log_plugin_error_with_context;
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
-use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::plugin::types::{PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
 use crate::scanner::types::ScanRequires;
 use std::path::PathBuf;
@@ -78,16 +79,34 @@ impl DumpPlugin {
         )
     }
 
+    /// Get static plugin info without creating instance
+    pub fn static_plugin_info() -> PluginInfo {
+        PluginInfo {
+            name: "dump".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Dump repository data for debugging purposes".to_string(),
+            author: "RepoStats".to_string(),
+            api_version: crate::core::version::get_api_version(),
+            plugin_type: PluginType::Processing,
+            functions: vec!["dump".to_string()],
+            required: ScanRequires::REPOSITORY_INFO
+                | ScanRequires::HISTORY
+                | ScanRequires::COMMITS
+                | ScanRequires::FILE_CONTENT,
+            auto_active: false,
+        }
+    }
+
     // Accessors for tests
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn test_output_format(&self) -> OutputFormat {
         self.output_format
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn test_use_colors(&self) -> bool {
         self.use_colors
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn test_output_file(&self) -> Option<&std::path::Path> {
         self.output_file.as_deref()
     }
@@ -118,29 +137,15 @@ impl std::fmt::Debug for DumpPlugin {
 #[async_trait::async_trait]
 impl Plugin for DumpPlugin {
     fn plugin_info(&self) -> PluginInfo {
-        PluginInfo {
-            name: "dump".into(),
-            version: "1.0.0".into(),
-            description: "Dump repository data for debugging purposes".into(),
-            author: "RepoStats".into(),
-            api_version: crate::core::version::get_api_version(),
-            plugin_type: self.plugin_type(),
-            functions: self.advertised_functions(),
-            required: self.requirements(),
-            auto_active: false,
-        }
+        Self::static_plugin_info()
     }
 
     fn plugin_type(&self) -> PluginType {
         PluginType::Processing
     }
 
-    fn advertised_functions(&self) -> Vec<PluginFunction> {
-        vec![PluginFunction {
-            name: "dump".into(),
-            description: "Start dumping messages to stdout".into(),
-            aliases: vec!["start".into(), "run".into()],
-        }]
+    fn advertised_functions(&self) -> Vec<String> {
+        vec!["dump".to_string()]
     }
 
     fn requirements(&self) -> ScanRequires {
@@ -207,8 +212,11 @@ impl ConsumerPlugin for DumpPlugin {
     }
 }
 
-// Re-export selected formatting functions for external tests if needed
-// pub use format::{format_compact_typed, format_json_typed, format_pretty_text_typed};
+// Register this builtin plugin for automatic discovery
+builtin!(|| crate::plugin::discovery::DiscoveredPlugin {
+    info: DumpPlugin::static_plugin_info(),
+    factory: Box::new(|| Box::new(DumpPlugin::new())),
+});
 
 #[cfg(test)]
 mod tests;

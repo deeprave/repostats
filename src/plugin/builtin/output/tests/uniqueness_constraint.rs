@@ -5,10 +5,10 @@
 
 use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::PluginConfig;
+use crate::plugin::discovery::BuiltinPluginDiscovery;
 use crate::plugin::error::PluginResult;
 use crate::plugin::traits::Plugin;
-use crate::plugin::types::{PluginFunction, PluginInfo, PluginSource, PluginType};
-use crate::plugin::unified_discovery::BuiltinPluginDiscovery;
+use crate::plugin::types::{PluginInfo, PluginType};
 use crate::scanner::types::ScanRequires;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -37,11 +37,7 @@ impl Plugin for MockOutputPlugin {
             author: "Test".to_string(),
             api_version: crate::core::version::get_api_version(),
             plugin_type: PluginType::Output,
-            functions: vec![PluginFunction {
-                name: "output".to_string(),
-                description: "Output function".to_string(),
-                aliases: vec![],
-            }],
+            functions: vec!["output".to_string()],
             required: ScanRequires::NONE,
             auto_active: false,
         }
@@ -51,12 +47,8 @@ impl Plugin for MockOutputPlugin {
         PluginType::Output
     }
 
-    fn advertised_functions(&self) -> Vec<PluginFunction> {
-        vec![PluginFunction {
-            name: "output".to_string(),
-            description: "Output function".to_string(),
-            aliases: vec![],
-        }]
+    fn advertised_functions(&self) -> Vec<String> {
+        vec!["output".to_string()]
     }
 
     fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
@@ -108,11 +100,7 @@ impl Plugin for MockPlugin {
             author: "Test Author".to_string(),
             api_version: 20250101,
             plugin_type: PluginType::Processing,
-            functions: vec![PluginFunction {
-                name: "test".to_string(),
-                description: "Test function".to_string(),
-                aliases: vec![],
-            }],
+            functions: vec!["test".to_string()],
             required: ScanRequires::NONE,
             auto_active: false,
         }
@@ -122,7 +110,7 @@ impl Plugin for MockPlugin {
         PluginType::Processing
     }
 
-    fn advertised_functions(&self) -> Vec<PluginFunction> {
+    fn advertised_functions(&self) -> Vec<String> {
         vec![]
     }
 
@@ -334,13 +322,9 @@ async fn test_output_plugin_factory_creates_plugin_with_correct_type() {
         .find(|p| p.info.name == "output")
         .expect("OutputPlugin should be discoverable");
 
-    if let PluginSource::Builtin { factory } = &output_plugin.source {
-        let plugin_instance = factory();
-        let info = plugin_instance.plugin_info();
+    let plugin_instance = (output_plugin.factory)();
+    let info = plugin_instance.plugin_info();
 
-        assert_eq!(info.plugin_type, PluginType::Output);
-        assert_eq!(info.name, "output");
-    } else {
-        panic!("OutputPlugin should have Builtin source type");
-    }
+    assert_eq!(info.plugin_type, PluginType::Output);
+    assert_eq!(info.name, "output");
 }

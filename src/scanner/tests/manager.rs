@@ -816,7 +816,10 @@ async fn test_merge_commit_filtering() {
     );
 
     // Test excluding merge commits
-    let query_params = QueryParams::default().with_merge_commits(Some(false));
+    let query_params = QueryParams {
+        merge_commits: Some(false),
+        ..Default::default()
+    };
     let messages_without_merge = collect_scan_messages(&scanner_task, Some(&query_params))
         .await
         .unwrap();

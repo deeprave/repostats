@@ -7,7 +7,6 @@ use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::PluginConfig;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::PluginRegistry;
-use crate::plugin::traits::Plugin;
 use crate::queue::api::QueueManager;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -142,7 +141,7 @@ mod tests {
     use crate::plugin::args::PluginConfig;
     use crate::plugin::error::{PluginError, PluginResult};
     use crate::plugin::traits::Plugin;
-    use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+    use crate::plugin::types::{PluginInfo, PluginType};
     use crate::scanner::types::ScanRequires;
 
     /// Simple mock plugin for testing
@@ -164,11 +163,7 @@ mod tests {
                     author: "Test Author".to_string(),
                     api_version: 20250101,
                     plugin_type: PluginType::Processing,
-                    functions: vec![PluginFunction {
-                        name: "test".to_string(),
-                        description: "Test function".to_string(),
-                        aliases: vec![],
-                    }],
+                    functions: vec!["test".to_string()],
                     required: ScanRequires::NONE,
                     auto_active: false,
                 },
@@ -187,12 +182,8 @@ mod tests {
             PluginType::Processing
         }
 
-        fn advertised_functions(&self) -> Vec<PluginFunction> {
-            vec![PluginFunction {
-                name: "test".to_string(),
-                description: "Test function".to_string(),
-                aliases: vec!["t".to_string()],
-            }]
+        fn advertised_functions(&self) -> Vec<String> {
+            vec!["test".to_string()]
         }
 
         fn requirements(&self) -> ScanRequires {

@@ -597,7 +597,7 @@ impl OutputFormatter for TemplateFormatter {
     }
 
     fn format_type(&self) -> ExportFormat {
-        ExportFormat::Custom("template".to_string())
+        ExportFormat::Template
     }
 }
 

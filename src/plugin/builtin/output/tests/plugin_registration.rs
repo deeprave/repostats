@@ -1,7 +1,7 @@
 //! Tests for OutputPlugin registration and discovery
 
+use crate::plugin::discovery::BuiltinPluginDiscovery;
 use crate::plugin::types::PluginType;
-use crate::plugin::unified_discovery::BuiltinPluginDiscovery;
 
 #[tokio::test]
 async fn test_output_plugin_appears_in_builtin_discovery() {
@@ -33,14 +33,10 @@ async fn test_output_plugin_factory_creates_working_instance() {
         .expect("OutputPlugin should be discoverable");
 
     // Test that the factory can create a plugin instance
-    if let crate::plugin::types::PluginSource::Builtin { factory } = &output_plugin.source {
-        let plugin_instance = (factory)();
+    let plugin_instance = (output_plugin.factory)();
 
-        // Verify it's the correct type by checking plugin info
-        let info = plugin_instance.plugin_info();
-        assert_eq!(info.name, "output");
-        assert_eq!(info.plugin_type, PluginType::Output);
-    } else {
-        panic!("OutputPlugin should have Builtin source type");
-    }
+    // Verify it's the correct type by checking plugin info
+    let info = plugin_instance.plugin_info();
+    assert_eq!(info.name, "output");
+    assert_eq!(info.plugin_type, PluginType::Output);
 }

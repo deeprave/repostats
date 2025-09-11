@@ -123,7 +123,7 @@ fn test_parse_all_fields() {
         "repostats".to_string(),
         "--config-file".to_string(),
         "custom.toml".to_string(),
-        "--plugin-dir".to_string(),
+        "--plugin-dirs".to_string(),
         "/plugins".to_string(),
         "--repo".to_string(),
         "/path/to/repo".to_string(),
@@ -134,7 +134,7 @@ fn test_parse_all_fields() {
     let result = Args::try_parse_from(&args).unwrap();
 
     assert_eq!(result.config_file, Some(PathBuf::from("custom.toml")));
-    assert_eq!(result.plugin_dir, Some("/plugins".to_string()));
+    assert_eq!(result.plugin_dirs, vec!["/plugins".to_string()]);
     assert_eq!(result.repository, vec![PathBuf::from("/path/to/repo")]);
     assert_eq!(result.log_level, Some("debug".to_string()));
 }

@@ -63,7 +63,7 @@ async fn test_output_plugin_no_scan_requirements() {
     // Verify it advertises output functions
     let functions = plugin.advertised_functions();
     assert!(!functions.is_empty()); // Should have output function
-    assert_eq!(functions[0].name, "output");
+    assert_eq!(functions[0], "output");
 }
 
 #[tokio::test]

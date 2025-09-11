@@ -473,7 +473,7 @@ impl ExportHints {
 
 impl Default for ExportHints {
     fn default() -> Self {
-        Self::new(ExportFormat::Console)
+        Self::new(ExportFormat::Text)
     }
 }
 
@@ -1433,7 +1433,7 @@ mod tests {
     fn test_export_hints_default() {
         let hints = ExportHints::default();
 
-        assert_eq!(hints.format, ExportFormat::Console);
+        assert_eq!(hints.format, ExportFormat::Text);
         assert_eq!(hints.max_rows, None);
         assert_eq!(hints.include_headers, true);
         assert_eq!(hints.pretty_print, true);

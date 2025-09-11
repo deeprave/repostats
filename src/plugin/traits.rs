@@ -19,7 +19,7 @@
 use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::PluginConfig;
 use crate::plugin::error::PluginResult;
-use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::plugin::types::{PluginInfo, PluginType};
 use crate::queue::api::QueueConsumer;
 use crate::scanner::types::ScanRequires;
 use std::sync::Arc;
@@ -39,7 +39,7 @@ pub trait Plugin: Send + Sync {
     fn plugin_type(&self) -> PluginType;
 
     /// Get list of functions this plugin advertises
-    fn advertised_functions(&self) -> Vec<PluginFunction>;
+    fn advertised_functions(&self) -> Vec<String>;
 
     /// Get scanner requirements for this plugin
     ///
@@ -144,11 +144,7 @@ mod tests {
                     author: "Test Author".to_string(),
                     api_version: 20250101,
                     plugin_type: crate::plugin::types::PluginType::Processing,
-                    functions: vec![crate::plugin::types::PluginFunction {
-                        name: "test".to_string(),
-                        description: "Test function".to_string(),
-                        aliases: vec![],
-                    }],
+                    functions: vec!["test".to_string()],
                     required: ScanRequires::NONE,
                     auto_active: false,
                 },
@@ -170,12 +166,8 @@ mod tests {
             PluginType::Processing
         }
 
-        fn advertised_functions(&self) -> Vec<PluginFunction> {
-            vec![PluginFunction {
-                name: "test".to_string(),
-                description: "Test function".to_string(),
-                aliases: vec!["t".to_string()],
-            }]
+        fn advertised_functions(&self) -> Vec<String> {
+            vec!["test".to_string()]
         }
 
         fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
@@ -245,7 +237,7 @@ mod tests {
             PluginType::Output
         }
 
-        fn advertised_functions(&self) -> Vec<PluginFunction> {
+        fn advertised_functions(&self) -> Vec<String> {
             self.base.advertised_functions()
         }
 
@@ -321,9 +313,7 @@ mod tests {
         let functions = plugin.advertised_functions();
 
         assert_eq!(functions.len(), 1);
-        assert_eq!(functions[0].name, "test");
-        assert_eq!(functions[0].description, "Test function");
-        assert_eq!(functions[0].aliases, vec!["t"]);
+        assert_eq!(functions[0], "test");
     }
 
     #[tokio::test]
@@ -447,18 +437,8 @@ mod tests {
         assert_eq!(info1, info2);
     }
 
-    #[test]
-    fn test_plugin_function_aliases() {
-        let function = PluginFunction {
-            name: "primary".to_string(),
-            description: "Primary function".to_string(),
-            aliases: vec!["p".to_string(), "pri".to_string()],
-        };
-
-        assert_eq!(function.aliases.len(), 2);
-        assert!(function.aliases.contains(&"p".to_string()));
-        assert!(function.aliases.contains(&"pri".to_string()));
-    }
+    // Test removed as PluginFunction struct no longer exists
+    // Functions are now represented as simple strings
 
     #[test]
     fn test_plugin_type_equality() {

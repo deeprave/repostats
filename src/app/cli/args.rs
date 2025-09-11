@@ -26,9 +26,9 @@ pub struct Args {
     #[arg(short = 'c', long = "config-file", value_name = "FILE")]
     pub config_file: Option<PathBuf>,
 
-    /// Plugin directory override
-    #[arg(short = 'p', long = "plugin-dir", value_name = "DIR")]
-    pub plugin_dir: Option<String>,
+    /// Plugin directories to search (can be specified multiple times)*
+    #[arg(short = 'p', long = "plugin-dirs", value_name = "DIRS", action = ArgAction::Append)]
+    pub plugin_dirs: Vec<String>,
 
     /// Plugins to exclude from discovery*
     #[arg(long = "exclude-plugin", value_name = "NAMES", action = ArgAction::Append)]
@@ -241,7 +241,7 @@ impl Default for Args {
         Self {
             repository: Vec::new(),
             config_file: None,
-            plugin_dir: None,
+            plugin_dirs: Vec::new(),
             plugin_exclusions: Vec::new(),
             color: None,
             log_level: None,

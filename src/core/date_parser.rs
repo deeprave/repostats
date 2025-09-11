@@ -146,8 +146,6 @@ fn parse_time_unit(unit: &str, count: i64) -> Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_parse_iso_date() {

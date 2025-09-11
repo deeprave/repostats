@@ -3,18 +3,15 @@
 //! Central coordinator for plugin lifecycle, compatibility checking, and plugin proxy management.
 //! Owns the plugin registry and provides high-level plugin management operations.
 
-use crate::app::cli::command_segmenter::CommandSegment;
+use crate::app::cli::segmenter::CommandSegment;
 use crate::notifications::api::AsyncNotificationManager;
 use crate::notifications::api::{Event, EventFilter, PluginEventType};
 use crate::plugin::activation::{ActivationResult, PluginActivator};
+use crate::plugin::discovery::PluginDiscovery;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::initialization::PluginInitializer;
 use crate::plugin::registry::SharedPluginRegistry;
-use crate::plugin::traits::Plugin;
-use crate::plugin::types::PluginSource;
-use crate::plugin::types::{ActivePluginInfo, PluginFunction, PluginInfo};
-use crate::plugin::unified_discovery::PluginDiscovery;
-use crate::queue::api::QueueManager;
+use crate::plugin::types::{ActivePluginInfo, PluginInfo};
 use log;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,16 +61,6 @@ impl PluginManagerConfig {
             shutdown_timeout,
             completion_check_interval,
             plugin_timeout,
-        };
-        config.validate()?;
-        Ok(config)
-    }
-
-    /// Create configuration with custom plugin timeout (keeping other defaults)
-    pub fn with_plugin_timeout(plugin_timeout: Duration) -> Result<Self, String> {
-        let config = Self {
-            plugin_timeout,
-            ..Self::default()
         };
         config.validate()?;
         Ok(config)
@@ -262,18 +249,6 @@ impl PluginManager {
         }
     }
 
-    /// Helper: Get first advertised function name from a plugin (either type)
-    async fn get_first_function_name(&self, plugin_name: &str) -> Option<String> {
-        self.with_plugin(plugin_name, |plugin| {
-            plugin
-                .advertised_functions()
-                .first()
-                .map(|f| f.name.clone())
-        })
-        .await
-        .flatten()
-    }
-
     /// Helper: Get plugin info from either registry (by name)
     async fn get_plugin_info_by_name(&self, plugin_name: &str) -> Option<PluginInfo> {
         self.with_plugin(plugin_name, |plugin| plugin.plugin_info())
@@ -281,7 +256,7 @@ impl PluginManager {
     }
 
     /// Helper: Get advertised functions from either registry
-    async fn get_advertised_functions(&self, plugin_name: &str) -> Option<Vec<PluginFunction>> {
+    async fn get_advertised_functions(&self, plugin_name: &str) -> Option<Vec<String>> {
         self.with_plugin(plugin_name, |plugin| plugin.advertised_functions())
             .await
     }
@@ -297,80 +272,39 @@ impl PluginManager {
 
     // MARK: End of helper methods
 
-    /// Get plugin info by ID (internal)
-
-    /// Resolve command to plugin info
-    pub async fn resolve_command(&mut self, command: &str) -> PluginResult<PluginInfo> {
-        // For now, assume command == plugin name (simplified)
-        self.get_plugin_info_by_name(command)
-            .await
-            .ok_or_else(|| PluginError::PluginNotFound {
-                plugin_name: command.to_string(),
-            })
-    }
-
     /// Discover and initialize plugins with simplified interface
     pub async fn discover_plugins(
         &mut self,
-        plugin_dir: Option<&str>,
+        plugin_dirs: &[String],
         exclusions: &[String],
     ) -> PluginResult<()> {
         // Create discovery implementation with our configuration
         let exclusion_strs: Vec<&str> = exclusions.iter().map(|s| s.as_str()).collect();
-        let discovery = PluginDiscovery::with_inclusion_config(
-            plugin_dir,
-            exclusion_strs,
-            true, // Always include builtins internally
-            true, // Always include externals internally
-        );
+        let discovery = PluginDiscovery::new(plugin_dirs, Some(exclusion_strs));
 
-        log::debug!("Starting plugin discovery with include_builtins=true, include_externals=true");
+        log::trace!("Starting plugin discovery");
         let discovered_plugins = discovery.discover_plugins().await?;
         log::debug!(
-            "Plugin discovery completed, found {} plugins total",
+            "Plugin discovery completed, {} plugins available",
             discovered_plugins.len()
         );
-
-        // Helper struct to hold plugin instances during registration
-        type RegistrationTarget = Box<dyn Plugin>;
 
         // Instantiate plugins and collect auto-active plugins before acquiring the write lock
         let mut instantiated_plugins = Vec::new();
         let mut auto_active_plugins = Vec::new();
 
         for discovered in discovered_plugins {
-            match &discovered.source {
-                PluginSource::Builtin { factory } => {
-                    let plugin = factory();
-                    if !plugin.is_compatible(self.api_version) {
-                        return Err(PluginError::VersionIncompatible {
-                            message: format!(
-                                "Plugin '{}' is incompatible with system API version {}",
-                                discovered.info.name, self.api_version
-                            ),
-                        });
-                    }
-                }
-                PluginSource::BuiltinConsumer { factory } => {
-                    let mut consumer_plugin = factory();
-                    // ConsumerPlugin extends Plugin, so we can get a reference to the Plugin trait
-                    let _plugin_ref =
-                        consumer_plugin.as_mut() as &mut dyn crate::plugin::traits::Plugin;
-                    // We just need to check compatibility, so we'll create a temporary instance
-                    // and check its compatibility directly
-                    if !consumer_plugin.is_compatible(self.api_version) {
-                        return Err(PluginError::VersionIncompatible {
-                            message: format!(
-                                "Plugin '{}' is incompatible with system API version {}",
-                                discovered.info.name, self.api_version
-                            ),
-                        });
-                    }
-                }
-                PluginSource::External { .. } => {
-                    // External plugins not implemented yet - skip compatibility check
-                    continue;
-                }
+            // Call factory to instantiate plugin
+            let plugin = (discovered.factory)();
+
+            // Check API compatibility
+            if !plugin.is_compatible(self.api_version) {
+                return Err(PluginError::VersionIncompatible {
+                    message: format!(
+                        "Plugin '{}' is incompatible with system API version {}",
+                        discovered.info.name, self.api_version
+                    ),
+                });
             }
 
             // Track auto-active plugins for later activation
@@ -378,26 +312,8 @@ impl PluginManager {
                 auto_active_plugins.push(discovered.info.name.clone());
             }
 
-            // Create plugin instances outside the write lock
-            match discovered.source {
-                PluginSource::Builtin { factory } => {
-                    let plugin = factory();
-                    instantiated_plugins.push((discovered.info, plugin));
-                }
-                PluginSource::BuiltinConsumer { factory } => {
-                    let consumer_plugin = factory();
-                    instantiated_plugins.push((discovered.info, consumer_plugin));
-                }
-                PluginSource::External { library_path: _ } => {
-                    // External plugin support is disabled in this version
-                    // Implementation would require dynamic library loading, symbol resolution,
-                    // and proper memory management across library boundaries
-                    return Err(PluginError::LoadError {
-                        plugin_name: discovered.info.name.clone(),
-                        cause: "External plugin support is not available in this version. Only built-in plugins are supported.".to_string(),
-                    });
-                }
-            }
+            // Add to instantiated plugins
+            instantiated_plugins.push((discovered.info, plugin));
         }
 
         // Register plugins with the registry, holding the write lock only during registration
@@ -416,27 +332,6 @@ impl PluginManager {
         self.auto_active_plugins = auto_active_plugins;
 
         Ok(())
-    }
-
-    /// Helper: Check if a command segment matches a plugin
-    async fn check_segment_match(&self, plugin_name: &str, segment: &CommandSegment) -> bool {
-        // Check if plugin name matches
-        if plugin_name == segment.command_name {
-            return true;
-        }
-
-        // Check if any function name or alias matches
-        if let Some(functions) = self.get_advertised_functions(plugin_name).await {
-            for function in &functions {
-                if function.name == segment.command_name
-                    || function.aliases.contains(&segment.command_name)
-                {
-                    return true;
-                }
-            }
-        }
-
-        false
     }
 
     /// Activate plugins based on command segments
@@ -521,25 +416,6 @@ impl PluginManager {
         self.ensure_output_plugin_fallback().await?;
 
         Ok(())
-    }
-
-    /// Get list of all plugins with their advertised functions (helper method)
-    async fn list_plugins_with_functions(
-        &self,
-    ) -> PluginResult<Vec<(String, Vec<PluginFunction>)>> {
-        let registry = self.registry.inner().read().await;
-        let mut plugin_functions = Vec::new();
-
-        // Get all plugin names and retrieve their functions using helper method
-        let plugin_names = registry.get_plugin_names();
-
-        for plugin_name in plugin_names {
-            if let Some(functions) = self.get_advertised_functions(&plugin_name).await {
-                plugin_functions.push((plugin_name, functions));
-            }
-        }
-
-        Ok(plugin_functions)
     }
 
     /// Get currently active plugins
@@ -1294,12 +1170,8 @@ mod tests {
             PluginType::Processing
         }
 
-        fn advertised_functions(&self) -> Vec<PluginFunction> {
-            vec![PluginFunction {
-                name: "test".to_string(),
-                description: "Test function".to_string(),
-                aliases: vec!["t".to_string()],
-            }]
+        fn advertised_functions(&self) -> Vec<String> {
+            vec!["test".to_string()]
         }
 
         fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
@@ -1359,7 +1231,7 @@ mod tests {
         let mut manager = PluginManager::new(crate::core::version::get_api_version());
 
         // Should discover the dump plugin
-        manager.discover_plugins(None, &[]).await.unwrap();
+        manager.discover_plugins(&[], &[]).await.unwrap();
     }
 
     #[tokio::test]
@@ -1368,7 +1240,7 @@ mod tests {
 
         let exclusions = vec!["excluded-plugin".to_string()];
         // Should succeed (no plugins to exclude currently)
-        manager.discover_plugins(None, &exclusions).await.unwrap();
+        manager.discover_plugins(&[], &exclusions).await.unwrap();
     }
 
     #[tokio::test]
@@ -1401,7 +1273,7 @@ mod tests {
         assert_eq!(all_plugins[0].description, "Mock plugin");
         assert_eq!(all_plugins[0].author, "Test");
         assert_eq!(all_plugins[0].functions.len(), 1);
-        assert_eq!(all_plugins[0].functions[0].name, "test");
+        assert_eq!(all_plugins[0].functions[0], "test");
 
         // Test that newly registered plugins are NOT active by default
         let active_plugins = manager.list_plugins_with_filter(true).await;
@@ -1427,11 +1299,7 @@ mod tests {
             author: "Test Author".to_string(),
             api_version: 20250101,
             plugin_type: PluginType::Processing,
-            functions: vec![PluginFunction {
-                name: "main".to_string(),
-                description: "Main function".to_string(),
-                aliases: vec!["m".to_string()],
-            }],
+            functions: vec!["main".to_string()],
             required: ScanRequires::NONE, // ScanRequires::NONE
             auto_active: false,
         };
@@ -1441,7 +1309,7 @@ mod tests {
         assert_eq!(info.description, "Test plugin");
         assert_eq!(info.author, "Test Author");
         assert_eq!(info.functions.len(), 1);
-        assert_eq!(info.functions[0].name, "main");
+        assert_eq!(info.functions[0], "main");
         assert_eq!(info.required, ScanRequires::NONE);
         assert!(!info.auto_active);
     }

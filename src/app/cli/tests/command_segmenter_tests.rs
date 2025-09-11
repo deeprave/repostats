@@ -3,7 +3,7 @@
 //! This module contains all tests for the command_segmenter module, including
 //! command boundary detection, argument parsing, and edge cases.
 
-use crate::app::cli::command_segmenter::*;
+use crate::app::cli::segmenter::*;
 
 #[test]
 fn test_segment_commands_only() {

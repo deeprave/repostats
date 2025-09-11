@@ -9,7 +9,7 @@ use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::args::PluginConfig;
 use crate::plugin::error::PluginResult;
 use crate::plugin::traits::Plugin;
-use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::plugin::types::{PluginInfo, PluginType};
 use crate::scanner::types::ScanRequires;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -37,7 +37,7 @@ impl Plugin for DefaultCompatibilityPlugin {
         PluginType::Processing
     }
 
-    fn advertised_functions(&self) -> Vec<PluginFunction> {
+    fn advertised_functions(&self) -> Vec<String> {
         vec![]
     }
 
@@ -91,7 +91,7 @@ impl Plugin for CustomCompatibilityPlugin {
         PluginType::Processing
     }
 
-    fn advertised_functions(&self) -> Vec<PluginFunction> {
+    fn advertised_functions(&self) -> Vec<String> {
         vec![]
     }
 
@@ -196,9 +196,9 @@ async fn test_all_builtin_plugins_override_is_compatible() {
     // Verify that ALL builtin plugins override is_compatible
     // This test will fail if a new builtin plugin forgets to implement is_compatible
 
-    use crate::plugin::unified_discovery::PluginDiscovery;
+    use crate::plugin::discovery::PluginDiscovery;
 
-    let discovery = PluginDiscovery::with_inclusion_config(None, vec![], true, false);
+    let discovery = PluginDiscovery::new(&[], None);
     let plugins = discovery
         .discover_plugins()
         .await
@@ -209,22 +209,7 @@ async fn test_all_builtin_plugins_override_is_compatible() {
     let current_version = crate::core::version::get_api_version();
 
     for discovered in plugins {
-        let plugin = match discovered.source {
-            crate::plugin::types::PluginSource::Builtin { factory } => factory(),
-            crate::plugin::types::PluginSource::BuiltinConsumer { factory } => {
-                let mut consumer_plugin = factory();
-                // ConsumerPlugin extends Plugin, so we can get a reference to the Plugin trait
-                let plugin_ref = consumer_plugin.as_mut() as &mut dyn crate::plugin::traits::Plugin;
-                // Check compatibility directly on the consumer plugin
-                assert!(
-                    consumer_plugin.is_compatible(current_version),
-                    "Plugin '{}' should be compatible with current API version",
-                    discovered.info.name
-                );
-                continue; // Skip the general check below since we already checked
-            }
-            _ => continue,
-        };
+        let plugin = (discovered.factory)();
 
         // All builtin plugins should be compatible with current version
         assert!(

@@ -306,8 +306,6 @@ impl CheckoutManager {
         }
     }
 
-    /// Resolve directory template with provided variables
-
     /// Clean up a specific checkout directory
     pub fn cleanup_checkout(&mut self, checkout_id: &str) -> CheckoutResult<()> {
         if let Some(checkout_path) = self.active_checkouts.remove(checkout_id) {
