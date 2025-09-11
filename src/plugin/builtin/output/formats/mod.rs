@@ -17,15 +17,13 @@ use crate::plugin::builtin::output::traits::{ExportFormat, FormatResult, OutputF
 pub fn get_formatter(format: ExportFormat) -> Box<dyn OutputFormatter> {
     match format {
         ExportFormat::Json => Box::new(json::JsonFormatter::new()),
-        ExportFormat::Console => Box::new(text::TextFormatter::new()),
+        ExportFormat::Text => Box::new(text::TextFormatter::new()),
         ExportFormat::Csv => Box::new(csv::CsvFormatter::new()),
         ExportFormat::Tsv => Box::new(csv::CsvFormatter::new_tsv()),
         ExportFormat::Xml => Box::new(xml::XmlFormatter::new()),
         ExportFormat::Html => Box::new(html::HtmlFormatter::new()),
         ExportFormat::Markdown => Box::new(markdown::MarkdownFormatter::new()),
-        ExportFormat::Custom(ref format_name) if format_name == "template" => {
-            Box::new(template::TemplateFormatter::new())
-        }
+        ExportFormat::Template => Box::new(template::TemplateFormatter::new()),
         _ => Box::new(json::JsonFormatter::new()), // Default fallback
     }
 }

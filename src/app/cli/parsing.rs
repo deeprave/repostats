@@ -13,6 +13,7 @@ impl Args {
     /// Apply enhanced parsing to handle comma-separated values, deduplication, and path validation
     pub fn apply_enhanced_parsing(&mut self) -> Result<(), ValidationError> {
         self.repository = Self::parse_comma_separated_paths(&self.repository);
+        self.plugin_dirs = Self::parse_comma_separated_strings(&self.plugin_dirs);
         self.plugin_exclusions = Self::parse_comma_separated_strings(&self.plugin_exclusions);
         self.author = Self::parse_comma_separated_strings(&self.author);
         self.exclude_author = Self::parse_comma_separated_strings(&self.exclude_author);
@@ -130,9 +131,9 @@ impl Args {
                     .help("Configuration file path"),
             )
             .arg(
-                clap::Arg::new("plugin_dir")
+                clap::Arg::new("plugin_dirs")
                     .short('p')
-                    .long("plugin-dir")
+                    .long("plugin-dirs")
                     .value_name("DIR")
                     .help("Plugin directory override"),
             )
@@ -532,8 +533,8 @@ impl Args {
         if let Some(config_file) = matches.get_one::<PathBuf>("config_file") {
             args.config_file = Some(config_file.clone());
         }
-        if let Some(plugin_dir) = matches.get_one::<String>("plugin_dir") {
-            args.plugin_dir = Some(plugin_dir.clone());
+        if let Some(plugin_dirs) = matches.get_many::<String>("plugin_dirs") {
+            args.plugin_dirs.extend(plugin_dirs.cloned());
         }
         if let Some(plugin_exclusions) = matches.get_many::<String>("plugin_exclusions") {
             args.plugin_exclusions.extend(plugin_exclusions.cloned());

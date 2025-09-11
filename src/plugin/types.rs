@@ -4,7 +4,6 @@
 //! the plugin system for metadata, configuration, and plugin management.
 
 use crate::scanner::types::ScanRequires;
-use std::path::PathBuf;
 
 /// Plugin metadata information
 #[derive(Debug, Clone, PartialEq)]
@@ -15,17 +14,9 @@ pub struct PluginInfo {
     pub author: String,
     pub api_version: u32,
     pub plugin_type: PluginType,
-    pub functions: Vec<PluginFunction>,
+    pub functions: Vec<String>,
     pub required: ScanRequires,
     pub auto_active: bool,
-}
-
-/// Plugin function metadata
-#[derive(Debug, Clone, PartialEq)]
-pub struct PluginFunction {
-    pub name: String,
-    pub description: String,
-    pub aliases: Vec<String>,
 }
 
 /// Plugin type classification
@@ -72,10 +63,6 @@ impl ActivePluginInfo {
         self.active_plugins.insert(plugin_name.to_string());
     }
 
-    pub fn remove(&mut self, plugin_name: &str) {
-        self.active_plugins.remove(plugin_name);
-    }
-
     pub fn contains(&self, plugin_name: &str) -> bool {
         self.active_plugins.contains(plugin_name)
     }
@@ -83,31 +70,4 @@ impl ActivePluginInfo {
     pub fn get_active_plugins(&self) -> Vec<String> {
         self.active_plugins.iter().cloned().collect()
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.active_plugins.is_empty()
-    }
-}
-
-/// Discovery result with plugin metadata and loading mechanism
-#[derive(Debug, Clone)]
-pub struct DiscoveredPlugin {
-    pub info: PluginInfo,
-    pub source: PluginSource,
-    pub manifest_path: Option<PathBuf>,
-}
-
-/// Source of a discovered plugin
-#[derive(Debug, Clone)]
-pub enum PluginSource {
-    /// External shared library plugin
-    External { library_path: PathBuf },
-    /// Built-in plugin factory
-    Builtin {
-        factory: fn() -> Box<dyn crate::plugin::traits::Plugin>,
-    },
-    /// Consumer plugin factory
-    BuiltinConsumer {
-        factory: fn() -> Box<dyn crate::plugin::traits::ConsumerPlugin>,
-    },
 }

@@ -100,19 +100,6 @@ impl XmlFormatter {
         let indent = " ".repeat(indent_level * self.indent_size);
         let mut xml = String::new();
 
-        // Use key as element name (sanitized)
-        let element_name = tree
-            .key
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-
         xml.push_str(&format!(
             "{}<node name=\"{}\">\n",
             indent,

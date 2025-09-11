@@ -4,7 +4,7 @@
 //! plugin table formatting, validation, and output handling.
 
 use crate::app::cli::display::*;
-use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::plugin::types::{PluginInfo, PluginType};
 use crate::scanner::types::ScanRequires;
 
 fn create_test_plugin(name: &str, description: &str, functions: Vec<&str>) -> PluginInfo {
@@ -15,14 +15,7 @@ fn create_test_plugin(name: &str, description: &str, functions: Vec<&str>) -> Pl
         author: "Test Author".to_string(),
         api_version: 20250101,
         plugin_type: PluginType::Processing,
-        functions: functions
-            .into_iter()
-            .map(|f| PluginFunction {
-                name: f.to_string(),
-                description: format!("{} function", f),
-                aliases: vec![],
-            })
-            .collect(),
+        functions: functions.into_iter().map(|f| f.to_string()).collect(),
         required: ScanRequires::NONE,
         auto_active: false,
     }

@@ -3,13 +3,12 @@
 //! Thread-safe plugin registry for managing loaded plugins with registration,
 //! retrieval, and lifecycle management capabilities.
 
-use crate::notifications::api::AsyncNotificationManager;
 use crate::plugin::error::{PluginError, PluginResult};
-use crate::plugin::traits::{ConsumerPlugin, Plugin};
+use crate::plugin::traits::Plugin;
 use crate::plugin::types::PluginType;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 /// Plugin registry for managing loaded plugins
 pub struct PluginRegistry {
@@ -268,9 +267,12 @@ impl Default for SharedPluginRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notifications::api::AsyncNotificationManager;
     use crate::plugin::args::PluginConfig;
-    use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+    use crate::plugin::traits::ConsumerPlugin;
+    use crate::plugin::types::{PluginInfo, PluginType};
     use crate::queue::api::QueueConsumer;
+    use tokio::sync::Mutex;
 
     // Mock plugin for testing
     #[derive(Debug)]
@@ -308,7 +310,7 @@ mod tests {
             PluginType::Processing
         }
 
-        fn advertised_functions(&self) -> Vec<PluginFunction> {
+        fn advertised_functions(&self) -> Vec<String> {
             vec![]
         }
 
@@ -364,7 +366,7 @@ mod tests {
             PluginType::Output
         }
 
-        fn advertised_functions(&self) -> Vec<PluginFunction> {
+        fn advertised_functions(&self) -> Vec<String> {
             self.base.advertised_functions()
         }
 

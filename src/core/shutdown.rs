@@ -117,6 +117,8 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
 
             tokio::spawn(async move {
                 if let Ok(mut sig) = signal(kind) {
+                    #[allow(clippy::never_loop)]
+                    // Intentional - circuit breaker pattern for signal handling
                     while sig.recv().await.is_some() {
                         let prev = sig_ctr.fetch_add(1, Ordering::AcqRel);
                         requested.store(true, Ordering::Release);

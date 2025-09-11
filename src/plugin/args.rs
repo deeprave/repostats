@@ -68,7 +68,6 @@ impl PluginConfig {
 pub struct PluginArgParser {
     command: Command,
     plugin_name: String,
-    display_name: String,
 }
 
 impl PluginArgParser {
@@ -81,24 +80,10 @@ impl PluginArgParser {
         version: &str,
         use_colors: Option<bool>,
     ) -> Self {
-        Self::new_with_display_name(plugin_name, plugin_name, description, version, use_colors)
-    }
-
-    /// Create a new plugin argument parser with a custom display name
-    ///
-    /// The display_name is used in the Usage line (e.g., "Usage: json [OPTIONS]")
-    /// while plugin_name is used internally for argument parsing context
-    pub fn new_with_display_name(
-        plugin_name: &str,
-        display_name: &str,
-        description: &str,
-        version: &str,
-        use_colors: Option<bool>,
-    ) -> Self {
         let colors =
             use_colors.unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
 
-        let command = Command::new(display_name.to_string())
+        let command = Command::new(plugin_name.to_string())
             .about(description.to_string())
             .version(version.to_string())
             .disable_version_flag(true)
@@ -123,7 +108,6 @@ impl PluginArgParser {
         Self {
             command,
             plugin_name: plugin_name.to_string(),
-            display_name: display_name.to_string(),
         }
     }
 
@@ -154,7 +138,7 @@ impl PluginArgParser {
     /// Parse arguments and return matches
     pub fn parse(&self, args: &[String]) -> PluginResult<ArgMatches> {
         // clap expects the first argument to be the program name
-        let mut full_args = vec![self.display_name.as_str()];
+        let mut full_args = vec![self.plugin_name.as_str()];
         full_args.extend(args.iter().map(|s| s.as_str()));
 
         match self.command.clone().try_get_matches_from(full_args) {

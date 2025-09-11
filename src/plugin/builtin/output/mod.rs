@@ -12,11 +12,13 @@ pub mod traits;
 #[cfg(test)]
 pub mod tests;
 
+use crate::builtin;
 use crate::notifications::api::AsyncNotificationManager;
+use crate::plugin::builtin::output::traits::ExportFormat;
 use crate::plugin::data_export::PluginDataExport;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::Plugin;
-use crate::plugin::types::{PluginFunction, PluginInfo, PluginType};
+use crate::plugin::types::{PluginInfo, PluginType};
 use crate::scanner::types::ScanRequires;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,6 +61,24 @@ impl OutputPlugin {
             repository_contexts: HashMap::new(),
             received_data: HashMap::new(),
             notification_manager: None,
+        }
+    }
+
+    /// Get static plugin info without creating instance
+    pub fn static_plugin_info() -> PluginInfo {
+        PluginInfo {
+            name: "output".to_string(),
+            version: "1.0.0".to_string(),
+            description: "Built-in output plugin for data export and formatting".to_string(),
+            author: "repostats built-in".to_string(),
+            api_version: crate::core::version::get_api_version(),
+            plugin_type: PluginType::Output,
+            functions: std::iter::once("output".to_string())
+                .chain(ExportFormat::names().map(|fmt| fmt.to_string()))
+                .filter(|name| name != "j2")
+                .collect(),
+            required: ScanRequires::NONE,
+            auto_active: true,
         }
     }
 
@@ -120,16 +140,17 @@ impl OutputPlugin {
         &self,
     ) -> crate::plugin::error::PluginResult<crate::notifications::api::EventReceiver> {
         if !self.initialized {
-            return Err(crate::plugin::error::PluginError::Generic {
+            return Err(PluginError::Generic {
                 message: "OutputPlugin not initialized".to_string(),
             });
         }
 
-        let manager = self.notification_manager.as_ref().ok_or_else(|| {
-            crate::plugin::error::PluginError::Generic {
+        let manager = self
+            .notification_manager
+            .as_ref()
+            .ok_or_else(|| PluginError::Generic {
                 message: "Notification manager not set".to_string(),
-            }
-        })?;
+            })?;
 
         let mut notification_manager = manager.lock().await;
         let receiver = notification_manager
@@ -138,7 +159,7 @@ impl OutputPlugin {
                 crate::notifications::api::EventFilter::PluginOnly,
                 format!("OutputPlugin-{}", self.plugin_info().name),
             )
-            .map_err(|e| crate::plugin::error::PluginError::Generic {
+            .map_err(|e| PluginError::Generic {
                 message: format!("Failed to subscribe to plugin events: {}", e),
             })?;
 
@@ -148,9 +169,9 @@ impl OutputPlugin {
     /// Subscribe to scan events
     pub async fn subscribe_to_scan_events(
         &self,
-    ) -> crate::plugin::error::PluginResult<crate::notifications::api::EventReceiver> {
+    ) -> PluginResult<crate::notifications::api::EventReceiver> {
         if !self.initialized {
-            return Err(crate::plugin::error::PluginError::Generic {
+            return Err(PluginError::Generic {
                 message: "OutputPlugin not initialized".to_string(),
             });
         }
@@ -399,66 +420,14 @@ impl Default for OutputPlugin {
 #[async_trait::async_trait]
 impl Plugin for OutputPlugin {
     fn plugin_info(&self) -> PluginInfo {
-        PluginInfo {
-            name: "output".to_string(),
-            version: "1.0.0".to_string(),
-            description: "Built-in output plugin for data export and formatting".to_string(),
-            author: "repostats built-in".to_string(),
-            api_version: crate::core::version::get_api_version(),
-            plugin_type: PluginType::Output,
-            functions: vec![
-                PluginFunction {
-                    name: "output".to_string(),
-                    description: "Export processed data in various formats".to_string(),
-                    aliases: vec!["export".to_string(), "format".to_string()],
-                },
-                PluginFunction {
-                    name: "json".to_string(),
-                    description: "Export processed data in JSON format".to_string(),
-                    aliases: vec![],
-                },
-                PluginFunction {
-                    name: "csv".to_string(),
-                    description: "Export processed data in CSV format".to_string(),
-                    aliases: vec![],
-                },
-                PluginFunction {
-                    name: "xml".to_string(),
-                    description: "Export processed data in XML format".to_string(),
-                    aliases: vec![],
-                },
-                PluginFunction {
-                    name: "html".to_string(),
-                    description: "Export processed data in HTML format".to_string(),
-                    aliases: vec![],
-                },
-                PluginFunction {
-                    name: "markdown".to_string(),
-                    description: "Export processed data in Markdown format".to_string(),
-                    aliases: vec![],
-                },
-                PluginFunction {
-                    name: "text".to_string(),
-                    description: "Export processed data in plain text format".to_string(),
-                    aliases: vec![],
-                },
-                PluginFunction {
-                    name: "tsv".to_string(),
-                    description: "Export processed data in TSV (Tab-Separated Values) format"
-                        .to_string(),
-                    aliases: vec![],
-                },
-            ],
-            required: ScanRequires::NONE,
-            auto_active: true,
-        }
+        Self::static_plugin_info()
     }
 
     fn plugin_type(&self) -> PluginType {
         PluginType::Output
     }
 
-    fn advertised_functions(&self) -> Vec<PluginFunction> {
+    fn advertised_functions(&self) -> Vec<String> {
         self.plugin_info().functions
     }
 
@@ -545,3 +514,9 @@ impl Plugin for OutputPlugin {
         self.args_parse(args, config).await
     }
 }
+
+// Register this builtin plugin for automatic discovery
+builtin!(|| crate::plugin::discovery::DiscoveredPlugin {
+    info: OutputPlugin::static_plugin_info(),
+    factory: Box::new(|| Box::new(OutputPlugin::new())),
+});

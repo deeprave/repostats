@@ -124,12 +124,6 @@ impl TextFormatter {
         for key in keys {
             if let Some(value) = data.get(key) {
                 let formatted_value = self.format_value(value);
-                let line = format!(
-                    "{:<width$}: {}",
-                    key,
-                    formatted_value,
-                    width = max_key_width
-                );
 
                 let styled_key = self.style_text(
                     &format!("{:<width$}", key, width = max_key_width),
@@ -173,6 +167,6 @@ impl OutputFormatter for TextFormatter {
     }
 
     fn format_type(&self) -> ExportFormat {
-        ExportFormat::Console
+        ExportFormat::Text
     }
 }

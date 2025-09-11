@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 pub mod args;
-pub mod command_segmenter;
 pub mod config;
 pub mod display;
 pub mod parsing;
+pub mod segmenter;
 pub mod validation;
 
 #[cfg(test)]
@@ -18,7 +18,7 @@ pub use args::CheckoutSettings;
 pub struct RequiredArgs {
     pub global_args: Vec<String>,
     pub config_file: Option<PathBuf>,
-    pub plugin_dir: Option<String>,
+    pub plugin_dirs: Vec<String>,
     pub plugin_exclusions: Vec<String>,
     pub color: Option<bool>,
     pub log_format: Option<String>,
@@ -41,7 +41,7 @@ pub fn initial_args(command_name: &str) -> Result<RequiredArgs, crate::app::star
     Ok(RequiredArgs {
         global_args,
         config_file: parsed_args.config_file,
-        plugin_dir: parsed_args.plugin_dir,
+        plugin_dirs: parsed_args.plugin_dirs,
         plugin_exclusions: parsed_args.plugin_exclusions,
         color: parsed_args.color,
         log_format: parsed_args.log_format,

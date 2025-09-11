@@ -294,8 +294,18 @@ async fn test_typed_message_metadata_methods() {
 
     // Timestamp should be between before and after
     let msg_timestamp = typed_msg.timestamp();
-    assert!(msg_timestamp >= timestamp_before);
-    assert!(msg_timestamp <= timestamp_after);
+    assert!(
+        msg_timestamp >= timestamp_before,
+        "msg: {:?} >= before: {:?}",
+        msg_timestamp,
+        timestamp_before
+    );
+    assert!(
+        msg_timestamp <= timestamp_after,
+        "msg: {:?} <= after {:?}",
+        msg_timestamp,
+        timestamp_after
+    );
 }
 
 #[tokio::test]

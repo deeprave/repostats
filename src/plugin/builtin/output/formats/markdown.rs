@@ -123,7 +123,8 @@ impl MarkdownFormatter {
 
         // Add value
         markdown.push_str(&format!(
-            "**Value:** {}\n\n",
+            "{}**Value:** {}\n\n",
+            indent,
             self.format_value(&tree.value)
         ));
 
@@ -132,7 +133,8 @@ impl MarkdownFormatter {
             markdown.push_str("**Metadata:**\n\n");
             for (key, value) in &tree.metadata {
                 markdown.push_str(&format!(
-                    "- **{}**: {}\n",
+                    "{}- **{}**: {}\n",
+                    indent,
                     Self::escape_markdown(key),
                     Self::escape_markdown(value)
                 ));

@@ -123,8 +123,18 @@ impl Args {
             let deduplicated = Self::parse_comma_separated_paths(&repo_paths);
             args.repository.extend(deduplicated);
         }
-        if let Some(plugin_dir) = config.get("plugin-dir").and_then(|v| v.as_str()) {
-            args.plugin_dir = Some(plugin_dir.to_string());
+        // Support both single plugin-dir (string) and plugin-dirs (array)
+        if let Some(plugin_dirs) = config.get("plugin-dirs") {
+            if let Some(dirs_array) = plugin_dirs.as_array() {
+                for dir in dirs_array {
+                    if let Some(dir_str) = dir.as_str() {
+                        args.plugin_dirs.push(dir_str.to_string());
+                    }
+                }
+            }
+        } else if let Some(plugin_dir) = config.get("plugin-dir").and_then(|v| v.as_str()) {
+            // Fallback to single plugin-dir if plugin-dirs not specified
+            args.plugin_dirs.push(plugin_dir.to_string());
         }
 
         // Handle plugin exclusions (support both single string and array formats)

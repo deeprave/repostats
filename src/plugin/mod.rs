@@ -17,10 +17,10 @@ pub(crate) mod manager;
 pub(crate) mod registry;
 pub(crate) mod traits;
 pub(crate) mod types;
-pub(crate) mod unified_discovery;
 
 // Public API module - the only public interface for the plugin system
 pub mod api;
 
+mod external;
 #[cfg(test)]
 mod tests;

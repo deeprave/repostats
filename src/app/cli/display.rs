@@ -35,11 +35,8 @@ pub fn display_plugin_table_to_writer<W: Write>(
             ));
         }
         for f in &p.functions {
-            if f.name.chars().any(|c| c.is_control() || c == '\t') {
-                return Err(format!(
-                    "Invalid function '{}' in plugin '{}'",
-                    f.name, p.name
-                ));
+            if f.chars().any(|c| c.is_control() || c == '\t') {
+                return Err(format!("Invalid function '{}' in plugin '{}'", f, p.name));
             }
         }
     }
@@ -115,7 +112,7 @@ pub fn display_plugin_table_to_writer<W: Write>(
         } else {
             p.functions
                 .iter()
-                .map(|f| f.name.clone())
+                .map(|f| f.clone())
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -134,7 +131,7 @@ pub fn display_plugin_table_to_writer<W: Write>(
             } else {
                 p.functions
                     .iter()
-                    .map(|f| StyleRole::Valid.paint(&f.name, true))
+                    .map(|f| StyleRole::Valid.paint(f, true))
                     .collect::<Vec<_>>()
                     .join(", ")
             };
@@ -179,11 +176,8 @@ pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result
             ));
         }
         for f in &p.functions {
-            if f.name.chars().any(|c| c.is_control() || c == '\t') {
-                return Err(format!(
-                    "Invalid function '{}' in plugin '{}'",
-                    f.name, p.name
-                ));
+            if f.chars().any(|c| c.is_control() || c == '\t') {
+                return Err(format!("Invalid function '{}' in plugin '{}'", f, p.name));
             }
         }
     }
@@ -259,7 +253,7 @@ pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result
         } else {
             p.functions
                 .iter()
-                .map(|f| f.name.clone())
+                .map(|f| f.clone())
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -278,7 +272,7 @@ pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result
             } else {
                 p.functions
                     .iter()
-                    .map(|f| StyleRole::Valid.paint(&f.name, true))
+                    .map(|f| StyleRole::Valid.paint(f, true))
                     .collect::<Vec<_>>()
                     .join(", ")
             };

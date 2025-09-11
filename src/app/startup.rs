@@ -108,14 +108,14 @@ pub async fn startup(
     command_name: &str,
 ) -> StartupResult<Option<std::sync::Arc<crate::scanner::api::ScannerManager>>> {
     use super::cli::args::Args;
-    use super::cli::command_segmenter::CommandSegmenter;
     use super::cli::initial_args;
+    use super::cli::segmenter::CommandSegmenter;
     use crate::core::logging::{init_logging, reconfigure_logging};
     use crate::core::strings::title_case;
 
     // Stage 1: Initial parsing for configuration discovery
     let args = initial_args(command_name)?;
-    let command_title = title_case(command_name);
+    let _command_title = title_case(command_name);
     let use_color = args
         .color
         .unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
@@ -147,11 +147,18 @@ pub async fn startup(
     let toml_config =
         Args::parse_config_file_with_raw_config(&mut final_args, args.config_file.clone()).await;
 
-    let plugin_dir = args
-        .plugin_dir
-        .clone()
-        .or(final_args.plugin_dir.clone())
-        .or(dirs::config_dir().map(|d| d.join(command_title).to_string_lossy().to_string()));
+    // Determine plugin directories:
+    // 1. CLI args override everything
+    // 2. Config file if no CLI args
+    // 3. Default fallback paths if neither CLI nor config
+    let plugin_dirs = if !args.plugin_dirs.is_empty() {
+        args.plugin_dirs.clone()
+    } else if !final_args.plugin_dirs.is_empty() {
+        final_args.plugin_dirs.clone()
+    } else {
+        // Default fallback paths
+        vec![]
+    };
 
     // Stage 2: Reconfigure logging with final values
     let log_level = args.log_level.clone().or(final_args.log_level.clone());
@@ -196,8 +203,7 @@ pub async fn startup(
 
     // Stage 4: Command discovery and segmentation
     log::trace!("Starting command discovery phase");
-    let _plugin_dir = plugin_dir.as_deref().or(final_args.plugin_dir.as_deref());
-    let commands = discover_commands(_plugin_dir, &args.plugin_exclusions)
+    let commands = discover_commands(&plugin_dirs, &args.plugin_exclusions)
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
     log::trace!(
@@ -292,12 +298,12 @@ pub async fn startup(
 
 /// Discover plugins and return list of available commands
 async fn discover_commands(
-    plugin_dir: Option<&str>,
+    plugin_dirs: &[String],
     exclusions: &[String],
 ) -> Result<Vec<String>, PluginError> {
     log::trace!(
-        "discover_commands starting with plugin_dir: {:?}, exclusions: {:?}",
-        plugin_dir,
+        "discover_commands starting with plugin_dirs: {:?}, exclusions: {:?}",
+        plugin_dirs,
         exclusions
     );
 
@@ -309,7 +315,7 @@ async fn discover_commands(
     // Enhanced error handling with context
     log::trace!("discover_commands calling plugin_manager.discover_plugins");
     plugin_manager
-        .discover_plugins(plugin_dir, exclusions)
+        .discover_plugins(plugin_dirs, exclusions)
         .await
         .map_err(|e| {
             log::warn!("Plugin discovery failed during plugin_manager.discover_plugins()");
@@ -326,8 +332,8 @@ async fn discover_commands(
     // Validate that we found plugins
     if plugins.is_empty() {
         let error_msg = format!(
-            "No plugins discovered in directory {:?} (exclusions: {:?})",
-            plugin_dir, exclusions
+            "No plugins discovered in directories {:?} (exclusions: {:?})",
+            plugin_dirs, exclusions
         );
         log::error!("{}", error_msg);
         return Err(PluginError::LoadError {
@@ -338,14 +344,7 @@ async fn discover_commands(
 
     let command_names: Vec<String> = plugins
         .iter()
-        .flat_map(|plugin| {
-            plugin.functions.iter().flat_map(|func| {
-                // Include both the primary function name and all aliases
-                let mut names = vec![func.name.clone()];
-                names.extend(func.aliases.clone());
-                names
-            })
-        })
+        .flat_map(|plugin| plugin.functions.iter().map(|func| func.clone()))
         .collect();
 
     // Validate that we have commands
@@ -370,7 +369,7 @@ async fn discover_commands(
 
 /// Configure plugins based on command segments
 async fn configure_plugins(
-    command_segments: &[super::cli::command_segmenter::CommandSegment],
+    command_segments: &[super::cli::segmenter::CommandSegment],
     toml_config: Option<&toml::Table>,
 ) -> StartupResult<()> {
     use log;
