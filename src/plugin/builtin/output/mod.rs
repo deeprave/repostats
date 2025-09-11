@@ -442,6 +442,12 @@ impl Plugin for OutputPlugin {
                     description: "Export processed data in plain text format".to_string(),
                     aliases: vec![],
                 },
+                PluginFunction {
+                    name: "tsv".to_string(),
+                    description: "Export processed data in TSV (Tab-Separated Values) format"
+                        .to_string(),
+                    aliases: vec![],
+                },
             ],
             required: ScanRequires::NONE,
             auto_active: true,

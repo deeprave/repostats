@@ -6,7 +6,7 @@ use crate::plugin::builtin::output::traits::{ExportFormat, OutputDestination};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::traits::Plugin; // for plugin_info()
 use clap::Arg;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Output plugin configuration derived from arguments
 #[derive(Debug, Clone)]
@@ -65,11 +65,17 @@ impl OutputConfig {
         } else if flags.contains("markdown") {
             output_config.format = ExportFormat::Markdown;
         } else if let Some(format_str) = args.get("format").or_else(|| args.get("f")) {
-            output_config.format = parse_format_string(format_str)?;
+            output_config.format = ExportFormat::from_str(format_str).ok_or_else(|| {
+                PluginError::ConfigurationError {
+                    plugin_name: "OutputPlugin".to_string(),
+                    message: format!("Unsupported format: {}", format_str),
+                }
+            })?;
         } else {
             // Auto-detect format from file extension if writing to file
             if let OutputDestination::File(ref path) = output_config.destination {
-                output_config.format = detect_format_from_extension(path)?;
+                output_config.format =
+                    ExportFormat::from_file_path(path).unwrap_or(ExportFormat::Console);
             }
         }
 
@@ -105,60 +111,6 @@ impl OutputConfig {
     }
 }
 
-/// Parse format string into ExportFormat enum
-fn parse_format_string(format_str: &str) -> PluginResult<ExportFormat> {
-    match format_str.to_lowercase().as_str() {
-        "json" => Ok(ExportFormat::Json),
-        "csv" => Ok(ExportFormat::Csv),
-        "tsv" => Ok(ExportFormat::Tsv),
-        "xml" => Ok(ExportFormat::Xml),
-        "html" => Ok(ExportFormat::Html),
-        "markdown" | "md" => Ok(ExportFormat::Markdown),
-        "yaml" => Ok(ExportFormat::Yaml),
-        "text" => Ok(ExportFormat::Console),
-        _ => Err(PluginError::ConfigurationError {
-            plugin_name: "OutputPlugin".to_string(),
-            message: format!("Unsupported format: {}", format_str),
-        }),
-    }
-}
-
-/// Detect format from file extension
-fn detect_format_from_extension(file_path: &str) -> PluginResult<ExportFormat> {
-    let path = Path::new(file_path);
-    let extension = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let format = match extension.as_str() {
-        "json" => ExportFormat::Json,
-        "csv" => ExportFormat::Csv,
-        "tsv" => ExportFormat::Tsv,
-        "xml" => ExportFormat::Xml,
-        "html" | "htm" => ExportFormat::Html,
-        "md" | "markdown" => ExportFormat::Markdown,
-        "txt" | "log" => ExportFormat::Console,
-        "j2" | "tera" => ExportFormat::Template,
-        "" => {
-            return Err(PluginError::ConfigurationError {
-                plugin_name: "OutputPlugin".to_string(),
-                message: "Cannot determine format from file extension. Please specify --format"
-                    .to_string(),
-            });
-        }
-        _ => {
-            return Err(PluginError::ConfigurationError {
-                plugin_name: "OutputPlugin".to_string(),
-                message: format!("Unsupported file extension: .{}", extension),
-            });
-        }
-    };
-
-    Ok(format)
-}
-
 impl OutputPlugin {
     /// Extract function name from args array (first arg with --function= prefix)
     /// Returns (function_name, remaining_args)
@@ -172,19 +124,6 @@ impl OutputPlugin {
         ("output".to_string(), args.to_vec())
     }
 
-    /// Detect format based on function name
-    fn detect_format_from_function_name(function_name: &str) -> Option<ExportFormat> {
-        match function_name {
-            "json" => Some(ExportFormat::Json),
-            "csv" => Some(ExportFormat::Csv),
-            "xml" => Some(ExportFormat::Xml),
-            "html" => Some(ExportFormat::Html),
-            "markdown" => Some(ExportFormat::Markdown),
-            "text" => Some(ExportFormat::Console),
-            _ => None, // "output" or unknown functions get no automatic format
-        }
-    }
-
     pub(super) async fn args_parse(
         &mut self,
         args: &[String],
@@ -194,7 +133,7 @@ impl OutputPlugin {
         let (function_name, actual_args) = Self::extract_function_name(args);
 
         // Detect format based on function name
-        let detected_format = Self::detect_format_from_function_name(&function_name);
+        let detected_format = ExportFormat::from_str(&function_name);
 
         let info = self.plugin_info();
         let parser = PluginArgParser::new_with_display_name(
@@ -266,6 +205,12 @@ impl OutputPlugin {
                 .long("text")
                 .action(clap::ArgAction::SetTrue)
                 .help("Use plain text output format"),
+        )
+        .arg(
+            Arg::new("tsv")
+                .long("tsv")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use TSV (Tab-Separated Values) output format"),
         );
 
         let matches = parser.parse(&actual_args)?;
@@ -311,8 +256,13 @@ impl OutputPlugin {
             ExportFormat::Markdown
         } else if matches.get_flag("text") {
             ExportFormat::Console
+        } else if matches.get_flag("tsv") {
+            ExportFormat::Tsv
         } else if let Some(format_str) = matches.get_one::<String>("format") {
-            parse_format_string(format_str)?
+            ExportFormat::from_str(format_str).ok_or_else(|| PluginError::ConfigurationError {
+                plugin_name: "OutputPlugin".to_string(),
+                message: format!("Unsupported format: {}", format_str),
+            })?
         } else if let Some(detected) = detected_format {
             // Format was detected from function invocation - use it
             detected
@@ -320,7 +270,8 @@ impl OutputPlugin {
             // Auto-detect format from file extension if writing to file
             if let Some(ref dest) = self.output_destination {
                 if dest != "-" {
-                    detect_format_from_extension(dest)?
+                    // Try to detect format from file extension, fall back to JSON if unknown
+                    ExportFormat::from_file_path(dest).unwrap_or(ExportFormat::Json)
                 } else {
                     ExportFormat::Console
                 }
@@ -350,29 +301,32 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_format_string() {
-        assert_eq!(parse_format_string("json").unwrap(), ExportFormat::Json);
-        assert_eq!(parse_format_string("CSV").unwrap(), ExportFormat::Csv);
-        assert_eq!(parse_format_string("xml").unwrap(), ExportFormat::Xml);
-        assert!(parse_format_string("invalid").is_err());
-    }
+    fn test_format_detection_methods() {
+        // Test centralized format detection methods from ExportFormat
+        assert_eq!(ExportFormat::from_str("json"), Some(ExportFormat::Json));
+        assert_eq!(ExportFormat::from_str("CSV"), Some(ExportFormat::Csv));
+        assert_eq!(ExportFormat::from_str("xml"), Some(ExportFormat::Xml));
+        assert_eq!(ExportFormat::from_str("invalid"), None);
 
-    #[test]
-    fn test_detect_format_from_extension() {
+        // Test file path detection
         assert_eq!(
-            detect_format_from_extension("output.json").unwrap(),
-            ExportFormat::Json
+            ExportFormat::from_file_path("output.json"),
+            Some(ExportFormat::Json)
         );
         assert_eq!(
-            detect_format_from_extension("data.csv").unwrap(),
-            ExportFormat::Csv
+            ExportFormat::from_file_path("data.csv"),
+            Some(ExportFormat::Csv)
         );
         assert_eq!(
-            detect_format_from_extension("report.html").unwrap(),
-            ExportFormat::Html
+            ExportFormat::from_file_path("data.tsv"),
+            Some(ExportFormat::Tsv)
         );
-        assert!(detect_format_from_extension("file").is_err());
-        assert!(detect_format_from_extension("file.unknown").is_err());
+        assert_eq!(
+            ExportFormat::from_file_path("report.html"),
+            Some(ExportFormat::Html)
+        );
+        assert_eq!(ExportFormat::from_file_path("file"), None);
+        assert_eq!(ExportFormat::from_file_path("file.unknown"), None);
     }
 
     #[test]
