@@ -34,8 +34,8 @@ async fn test_advertised_functions() {
     let plugin = OutputPlugin::new();
     let functions = plugin.advertised_functions();
 
-    // Should advertise 7 functions: output, json, csv, xml, html, markdown, text
-    assert_eq!(functions.len(), 7);
+    // Should advertise 8 functions: output, json, csv, tsv, xml, html, markdown, text
+    assert_eq!(functions.len(), 8);
 
     // Find the main output function
     let output_func = functions
@@ -52,7 +52,7 @@ async fn test_advertised_functions() {
     assert!(output_func.aliases.contains(&"format".to_string()));
 
     // Verify all format-specific functions are advertised
-    let expected_functions = vec!["json", "csv", "xml", "html", "markdown", "text"];
+    let expected_functions = vec!["json", "csv", "tsv", "xml", "html", "markdown", "text"];
     for func_name in expected_functions {
         let func = functions
             .iter()

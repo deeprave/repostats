@@ -59,8 +59,33 @@ impl ExportFormat {
             "html" | "htm" => Some(Self::Html),
             "md" | "markdown" => Some(Self::Markdown),
             "yaml" | "yml" => Some(Self::Yaml),
+            "txt" | "text" | "log" => Some(Self::Console),
             _ => None,
         }
+    }
+
+    /// Parse format from string name (handles both CLI format strings and function names)
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "json" => Some(Self::Json),
+            "csv" => Some(Self::Csv),
+            "tsv" => Some(Self::Tsv),
+            "xml" => Some(Self::Xml),
+            "html" => Some(Self::Html),
+            "markdown" | "md" => Some(Self::Markdown),
+            "yaml" | "yml" => Some(Self::Yaml),
+            "text" | "console" => Some(Self::Console),
+            "template" => Some(Self::Template),
+            _ => None,
+        }
+    }
+
+    /// Detect format from file path (using extension)
+    pub fn from_file_path(path: &str) -> Option<Self> {
+        let path = std::path::Path::new(path);
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
     }
 
     /// Get MIME type for this format
@@ -237,5 +262,44 @@ mod tests {
         let original = ExportFormat::Custom("test".to_string());
         let cloned = original.clone();
         assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn test_export_format_from_str() {
+        assert_eq!(ExportFormat::from_str("json"), Some(ExportFormat::Json));
+        assert_eq!(ExportFormat::from_str("JSON"), Some(ExportFormat::Json));
+        assert_eq!(ExportFormat::from_str("csv"), Some(ExportFormat::Csv));
+        assert_eq!(ExportFormat::from_str("xml"), Some(ExportFormat::Xml));
+        assert_eq!(ExportFormat::from_str("html"), Some(ExportFormat::Html));
+        assert_eq!(
+            ExportFormat::from_str("markdown"),
+            Some(ExportFormat::Markdown)
+        );
+        assert_eq!(ExportFormat::from_str("md"), Some(ExportFormat::Markdown));
+        assert_eq!(ExportFormat::from_str("yaml"), Some(ExportFormat::Yaml));
+        assert_eq!(
+            ExportFormat::from_str("console"),
+            Some(ExportFormat::Console)
+        );
+        assert_eq!(ExportFormat::from_str("text"), Some(ExportFormat::Console));
+        assert_eq!(ExportFormat::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_export_format_from_file_path() {
+        assert_eq!(
+            ExportFormat::from_file_path("output.json"),
+            Some(ExportFormat::Json)
+        );
+        assert_eq!(
+            ExportFormat::from_file_path("/path/to/file.csv"),
+            Some(ExportFormat::Csv)
+        );
+        assert_eq!(
+            ExportFormat::from_file_path("report.html"),
+            Some(ExportFormat::Html)
+        );
+        assert_eq!(ExportFormat::from_file_path("no_extension"), None);
+        assert_eq!(ExportFormat::from_file_path("file.unknown"), None);
     }
 }

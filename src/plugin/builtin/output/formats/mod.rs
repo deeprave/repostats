@@ -12,7 +12,6 @@ pub mod text;
 pub mod xml;
 
 use crate::plugin::builtin::output::traits::{ExportFormat, FormatResult, OutputFormatter};
-use crate::plugin::data_export::PluginDataExport;
 
 /// Get formatter for the specified format
 pub fn get_formatter(format: ExportFormat) -> Box<dyn OutputFormatter> {
