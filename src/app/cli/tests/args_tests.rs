@@ -139,6 +139,29 @@ fn test_parse_all_fields() {
 }
 
 #[test]
+fn test_parse_multiple_plugin_dirs() {
+    let args = vec![
+        "repostats".to_string(),
+        "--plugin-dirs".to_string(),
+        "/plugins1".to_string(),
+        "--plugin-dirs".to_string(),
+        "/plugins2".to_string(),
+        "--plugin-dirs".to_string(),
+        "/plugins3".to_string(),
+    ];
+
+    let result = Args::try_parse_from(&args).unwrap();
+    assert_eq!(
+        result.plugin_dirs,
+        vec![
+            "/plugins1".to_string(),
+            "/plugins2".to_string(),
+            "/plugins3".to_string()
+        ]
+    );
+}
+
+#[test]
 fn test_parse_initial_handles_equals_syntax() {
     let args = vec![
         "repostats".to_string(),

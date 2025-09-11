@@ -60,9 +60,9 @@ impl ExportFormat {
         }
     }
 
-    pub fn aliases(&self) -> Vec<&str> {
+    pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            Self::Text => Vec::from([
+            Self::Text => &[
                 "txt",
                 "log",
                 "out",
@@ -71,20 +71,17 @@ impl ExportFormat {
                 "env",
                 "properties",
                 "rst",
-                "out",
-            ]),
-            Self::Json => Vec::from(["jsn", "geojson", "har", "map", "avsc", "json5", "jsonc"]),
-            Self::Csv => Vec::from([]),
-            Self::Tsv => Vec::from(["tab"]),
-            Self::Xml => Vec::from([
+            ],
+            Self::Json => &["jsn", "geojson", "har", "map", "avsc", "json5", "jsonc"],
+            Self::Csv => &[],
+            Self::Tsv => &["tab"],
+            Self::Xml => &[
                 "xsd", "xlt", "dtd", "xsl", "rss", "atom", "svg", "gml", "project",
-            ]),
-            Self::Html => Vec::from(["htm", "xhtml", "xht", "xhtm", "shtml"]),
-            Self::Markdown => Vec::from(["markdown", "mdown", "mkd", "mdx"]),
-            Self::Yaml => Vec::from(["yml"]),
-            Self::Template => {
-                Vec::from(["j2", "html", "tpl", "tmpl", "template", "jinja", "jinja2"])
-            }
+            ],
+            Self::Html => &["htm", "xhtml", "xht", "xhtm", "shtml"],
+            Self::Markdown => &["markdown", "mdown", "mkd", "mdx"],
+            Self::Yaml => &["yml"],
+            Self::Template => &["j2", "html", "tpl", "tmpl", "template", "jinja", "jinja2"],
         }
     }
 
@@ -103,10 +100,8 @@ impl ExportFormat {
     }
 
     /// Get the common file extensions for this format
-    pub fn file_exts(&self) -> Vec<&str> {
-        std::iter::once(self.file_ext())
-            .chain(self.aliases().into_iter())
-            .collect()
+    pub fn file_exts(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.file_ext()).chain(self.aliases().iter().copied())
     }
 
     /// Parse format from string name (handles both CLI format strings and function names)
@@ -119,6 +114,7 @@ impl ExportFormat {
                 return fmt.clone();
             }
         }
+        log::warn!("Unknown format '{}', defaulting to text format", s);
         Self::Text
     }
 
