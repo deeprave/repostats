@@ -114,7 +114,6 @@ impl ExportFormat {
                 return fmt.clone();
             }
         }
-        log::warn!("Unknown format '{}', defaulting to text format", s);
         Self::Text
     }
 

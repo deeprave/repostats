@@ -225,7 +225,7 @@ async fn test_comprehensive_scanner_task_creation() {
             scanner_id,
             current_path.to_string(),
             repo,
-            ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
+            ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
             test_publisher,
             None,
             None,

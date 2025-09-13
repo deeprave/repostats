@@ -85,12 +85,21 @@ async fn test_plugin_argument_parsing() {
     let config = PluginConfig::default();
 
     // Argument parsing should succeed (basic implementation)
-    let result = plugin.parse_plugin_arguments(&[], &config).await;
+    let result = plugin
+        .parse_plugin_arguments(&["output".to_string()], &config)
+        .await;
     assert!(result.is_ok());
 
     // Should also work with some arguments
     let result = plugin
-        .parse_plugin_arguments(&["--output".to_string(), "test.json".to_string()], &config)
+        .parse_plugin_arguments(
+            &[
+                "output".to_string(),
+                "--outfile".to_string(),
+                "test.json".to_string(),
+            ],
+            &config,
+        )
         .await;
     assert!(result.is_ok());
 }

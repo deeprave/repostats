@@ -400,7 +400,7 @@ async fn test_commit_traversal_and_message_creation() {
             scanner_id,
             current_path.to_string(),
             repo,
-            ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
+            ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
             test_publisher,
             None,
             None,
