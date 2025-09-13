@@ -11,7 +11,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct PluginConfig {
     /// Forced color setting: Some(true)=force on, Some(false)=force off, None=auto (TTY based)
-    pub use_colors: Option<bool>,
+    pub use_colors: bool,
     /// Plugin-specific TOML configuration
     pub toml_config: HashMap<String, toml::Value>,
 }
@@ -19,7 +19,7 @@ pub struct PluginConfig {
 impl Default for PluginConfig {
     fn default() -> Self {
         Self {
-            use_colors: None,
+            use_colors: false,
             toml_config: HashMap::new(),
         }
     }
@@ -27,7 +27,7 @@ impl Default for PluginConfig {
 
 impl PluginConfig {
     /// Create a PluginConfig from a TOML table
-    pub fn from_toml(use_colors: Option<bool>, toml_table: &toml::value::Table) -> Self {
+    pub fn from_toml(use_colors: bool, toml_table: &toml::value::Table) -> Self {
         let mut config = HashMap::new();
         for (key, value) in toml_table.iter() {
             config.insert(key.clone(), value.clone());
@@ -48,6 +48,7 @@ impl PluginConfig {
     }
 
     /// Get a boolean configuration value with default
+    #[allow(dead_code)]
     pub fn get_bool(&self, key: &str, default: bool) -> bool {
         if let Some(toml::Value::Boolean(b)) = self.toml_config.get(key) {
             *b
@@ -67,48 +68,36 @@ impl PluginConfig {
 /// Base argument parser for plugins
 pub struct PluginArgParser {
     command: Command,
-    plugin_name: String,
 }
 
 impl PluginArgParser {
     /// Create a new plugin argument parser
     ///
     /// Caller supplies whether colors should be used (from global config/environment)
-    pub fn new(
-        plugin_name: &str,
-        description: &str,
-        version: &str,
-        use_colors: Option<bool>,
-    ) -> Self {
-        let colors =
-            use_colors.unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
-
+    pub fn new(plugin_name: &str, description: &str, version: &str, use_colors: bool) -> Self {
         let command = Command::new(plugin_name.to_string())
             .about(description.to_string())
             .version(version.to_string())
             .disable_version_flag(true)
             .disable_help_flag(true)
-            .color(Self::color_choice(use_colors))
-            .styles(Self::get_help_styles(colors))
+            .color(Self::color_choice(Some(use_colors)))
+            .styles(Self::get_help_styles(use_colors))
             .arg(
-                clap::Arg::new("version")
+                Arg::new("version")
                     .short('v')
                     .long("version")
                     .action(ArgAction::Version)
                     .help("Print version"),
             )
             .arg(
-                clap::Arg::new("help")
+                Arg::new("help")
                     .short('h')
                     .long("help")
                     .action(ArgAction::Help)
                     .help("Print help"),
             );
 
-        Self {
-            command,
-            plugin_name: plugin_name.to_string(),
-        }
+        Self { command }
     }
 
     fn get_help_styles(colors_enabled: bool) -> clap::builder::Styles {

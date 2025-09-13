@@ -57,13 +57,8 @@ impl DumpPlugin {
         self.request_file_content = matches.get_flag("checkout");
         self.request_file_info = matches.get_flag("files");
         self.output_file = matches.get_one::<PathBuf>("outfile").cloned();
-        let auto = std::io::IsTerminal::is_terminal(&std::io::stdout());
-        let base = config.use_colors.unwrap_or(auto);
-        self.use_colors = if self.output_file.is_some() {
-            false
-        } else {
-            base
-        };
+        self.use_colors = config.use_colors;
+
         Ok(())
     }
 
@@ -111,8 +106,6 @@ impl DumpPlugin {
         {
             "json" => OutputFormat::Json,
             "compact" => OutputFormat::Compact,
-            // Allow opting into raw explicitly via config: default_format = "raw"
-            "raw" => OutputFormat::Raw,
             _ => OutputFormat::Text,
         }
     }
@@ -126,7 +119,7 @@ mod tests {
     #[test]
     fn test_plugin_config_default() {
         let config = PluginConfig::default();
-        assert!(config.use_colors.is_none());
+        assert!(!config.use_colors);
         assert!(config.toml_config.is_empty());
     }
 
@@ -149,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_plugin_arg_parser() {
-        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", Some(true))
+        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", false)
             .args(DumpPlugin::format_args());
 
         let matches = parser
@@ -160,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_determine_format() {
-        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", Some(false))
+        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", false)
             .args(DumpPlugin::format_args());
         let config = PluginConfig::default();
 

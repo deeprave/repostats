@@ -34,61 +34,6 @@ impl Default for OutputConfig {
 }
 
 impl OutputConfig {
-    /// Parse configuration from plugin arguments and CLI parsing
-    /// This follows the same pattern as DumpPlugin - colors are handled by PluginConfig
-    pub fn from_plugin_config_and_args(
-        config: &PluginConfig,
-        args: &std::collections::HashMap<String, String>,
-        flags: &std::collections::HashSet<String>,
-    ) -> PluginResult<Self> {
-        let mut output_config = OutputConfig::default();
-
-        // Parse output destination from args
-        if let Some(output_arg) = args.get("output").or_else(|| args.get("o")) {
-            output_config.destination = if output_arg == "-" || output_arg.is_empty() {
-                OutputDestination::Stdout
-            } else {
-                OutputDestination::File(output_arg.clone())
-            };
-        }
-
-        // Parse format - check format flags first, then explicit format
-        if flags.contains("json") {
-            output_config.format = ExportFormat::Json;
-        } else if flags.contains("csv") {
-            output_config.format = ExportFormat::Csv;
-        } else if flags.contains("xml") {
-            output_config.format = ExportFormat::Xml;
-        } else if flags.contains("html") {
-            output_config.format = ExportFormat::Html;
-        } else if flags.contains("markdown") {
-            output_config.format = ExportFormat::Markdown;
-        } else if let Some(format_str) = args.get("format").or_else(|| args.get("f")) {
-            output_config.format = ExportFormat::from_str(format_str);
-        } else {
-            // Auto-detect format from file extension if writing to file
-            if let OutputDestination::File(ref path) = output_config.destination {
-                let detected = ExportFormat::from_file_path(path);
-                output_config.format = if matches!(detected, ExportFormat::Text) {
-                    ExportFormat::Json
-                } else {
-                    detected
-                };
-            }
-        }
-
-        // Use colors from PluginConfig - startup code already handled TTY detection
-        // Disable colors for file output regardless of config
-        output_config.use_colors =
-            if matches!(output_config.destination, OutputDestination::File(_)) {
-                false
-            } else {
-                config.use_colors.unwrap_or(false)
-            };
-
-        Ok(output_config)
-    }
-
     /// Check if this configuration suppresses progress output
     /// Progress is suppressed when writing to stdout (including '-')
     /// because progress would interfere with the data output

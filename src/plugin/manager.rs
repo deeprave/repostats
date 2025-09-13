@@ -223,17 +223,6 @@ impl PluginManager {
         self.api_version
     }
 
-    /// Get color configuration setting
-    fn get_use_colors_setting(&self) -> Option<bool> {
-        if std::env::var("FORCE_COLOR").is_ok() {
-            return Some(true);
-        }
-        if std::env::var("NO_COLOR").is_ok() {
-            return Some(false);
-        }
-        None // defer to auto (TTY) at point of use
-    }
-
     // MARK: Helper methods to DRY up registry lookup patterns
 
     /// Helper: Execute a closure on a plugin if found in either registry
@@ -344,6 +333,7 @@ impl PluginManager {
     pub async fn activate_plugins(
         &mut self,
         command_segments: &[CommandSegment],
+        use_colors: bool,
     ) -> PluginResult<()> {
         // Get all available plugins with their metadata
         let registry = self.registry.inner().read().await;
@@ -364,12 +354,9 @@ impl PluginManager {
 
         // Initialize all active plugins
         let mut registry = self.registry.inner().write().await;
-        let initializer = PluginInitializer::new(
-            self.notification_manager.clone(),
-            self.get_use_colors_setting(),
-        );
+        let initializer = PluginInitializer::new(self.notification_manager.clone(), use_colors);
 
-        let queue = Arc::new(crate::queue::api::get_queue_service());
+        let queue_manager = Arc::new(crate::queue::api::get_queue_service());
 
         // Activate and prepare plugins for initialization
         for (plugin_name, _) in &plugins_to_activate {
@@ -383,7 +370,7 @@ impl PluginManager {
                 &mut registry,
                 &plugins_to_activate,
                 &self.plugin_configs,
-                &queue,
+                &queue_manager,
             )
             .await?;
         drop(registry);

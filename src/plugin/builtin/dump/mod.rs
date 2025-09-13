@@ -31,8 +31,6 @@ pub enum OutputFormat {
     Text,
     Json,
     Compact,
-    /// Raw legacy dump format (pre-RS-32). Not exposed via CLI flag (use config).
-    Raw,
 }
 
 impl std::fmt::Display for OutputFormat {
@@ -41,7 +39,6 @@ impl std::fmt::Display for OutputFormat {
             OutputFormat::Text => write!(f, "text"),
             OutputFormat::Json => write!(f, "json"),
             OutputFormat::Compact => write!(f, "compact"),
-            OutputFormat::Raw => write!(f, "raw"),
         }
     }
 }
