@@ -125,9 +125,6 @@ impl DumpPlugin {
             OutputFormat::Compact => {
                 super::format::format_compact_typed(typed_msg, show_headers, use_colors)
             }
-            OutputFormat::Raw => {
-                super::format::format_text_typed(typed_msg, show_headers, use_colors)
-            }
             OutputFormat::Text => {
                 super::format::format_pretty_text_typed(typed_msg, show_headers, use_colors)
             }

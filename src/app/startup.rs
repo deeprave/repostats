@@ -208,7 +208,7 @@ pub async fn startup(
     let command_segments = segmenter.segment_commands(remaining_args)?;
 
     log::trace!("Plugin configuration and service validation");
-    configure_plugins(&command_segments, toml_config.as_ref()).await?;
+    configure_plugins(&command_segments, toml_config.as_ref(), use_color).await?;
 
     log::trace!("Building repository query");
     let query_params = build_query_params(&final_args, toml_config.as_ref()).await?;
@@ -312,6 +312,7 @@ async fn discover_commands(
 async fn configure_plugins(
     command_segments: &[super::cli::segmenter::CommandSegment],
     toml_config: Option<&toml::Table>,
+    use_color: bool,
 ) -> StartupResult<()> {
     use log;
 
@@ -331,7 +332,7 @@ async fn configure_plugins(
 
     log::trace!("Activating plugins {:?}", command_segments);
     plugin_manager
-        .activate_plugins(command_segments)
+        .activate_plugins(command_segments, use_color)
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
@@ -573,7 +574,6 @@ async fn configure_scanner(
     }; // plugin_manager lock is released here
 
     // Step 3: Create scanners for all repositories using batch method with all-or-nothing semantics
-    let _queue_manager = crate::queue::api::get_queue_service();
     match scanner_manager
         .create_scanners(
             &repositories_to_scan,
