@@ -1,9 +1,10 @@
 //! Argument parsing for DumpPlugin
-use super::DumpPlugin;
-use crate::plugin::args::{create_format_args, determine_format, PluginArgParser, PluginConfig};
+use crate::plugin::args::{PluginArgParser, PluginConfig};
+use crate::plugin::builtin::dump::DumpPlugin;
+use crate::plugin::builtin::dump::OutputFormat;
 use crate::plugin::error::PluginResult;
 use crate::plugin::traits::Plugin; // for plugin_info()
-use clap::Arg;
+use clap::{Arg, ArgMatches};
 use std::path::PathBuf;
 
 impl DumpPlugin {
@@ -19,7 +20,7 @@ impl DumpPlugin {
             &info.version,
             config.use_colors,
         )
-        .args(create_format_args())
+        .args(Self::format_args())
         .arg(
             Arg::new("no-headers")
                 .short('n')
@@ -51,7 +52,7 @@ impl DumpPlugin {
         );
 
         let matches = parser.parse(args)?;
-        self.output_format = determine_format(&matches, config);
+        self.output_format = Self::determine_format(&matches, config);
         self.show_headers = !matches.get_flag("no-headers");
         self.request_file_content = matches.get_flag("checkout");
         self.request_file_info = matches.get_flag("files");
@@ -64,5 +65,146 @@ impl DumpPlugin {
             base
         };
         Ok(())
+    }
+
+    /// Create standard format arguments for output plugins
+    pub fn format_args() -> Vec<Arg> {
+        vec![
+            Arg::new("json")
+                .short('J')
+                .long("json")
+                .action(clap::ArgAction::SetTrue)
+                .help("Output in JSON format")
+                .conflicts_with_all(&["text", "compact"]),
+            Arg::new("text")
+                .short('T')
+                .long("text")
+                .action(clap::ArgAction::SetTrue)
+                .help("Output in human-readable text format (default)")
+                .conflicts_with_all(&["json", "compact"]),
+            Arg::new("compact")
+                .short('C')
+                .long("compact")
+                .action(clap::ArgAction::SetTrue)
+                .help("Output in compact single-line format")
+                .conflicts_with_all(&["json", "text"]),
+        ]
+    }
+
+    /// Determine output format from parsed arguments and config
+    pub fn determine_format(matches: &ArgMatches, config: &PluginConfig) -> OutputFormat {
+        if matches.get_flag("json") {
+            return OutputFormat::Json;
+        }
+        if matches.get_flag("compact") {
+            return OutputFormat::Compact;
+        }
+        if matches.get_flag("text") {
+            return OutputFormat::Text;
+        }
+
+        // Check TOML configuration for default format
+        match config
+            .get_string("default_format", "text")
+            .to_lowercase()
+            .as_str()
+        {
+            "json" => OutputFormat::Json,
+            "compact" => OutputFormat::Compact,
+            // Allow opting into raw explicitly via config: default_format = "raw"
+            "raw" => OutputFormat::Raw,
+            _ => OutputFormat::Text,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::builtin::dump::OutputFormat;
+
+    #[test]
+    fn test_plugin_config_default() {
+        let config = PluginConfig::default();
+        assert!(config.use_colors.is_none());
+        assert!(config.toml_config.is_empty());
+    }
+
+    #[test]
+    fn test_plugin_config_get_methods() {
+        let mut config = PluginConfig::default();
+        config.toml_config.insert(
+            "test_key".to_string(),
+            toml::Value::String("test_value".to_string()),
+        );
+        config
+            .toml_config
+            .insert("test_bool".to_string(), toml::Value::Boolean(true));
+
+        assert_eq!(config.get_string("test_key", "default"), "test_value");
+        assert_eq!(config.get_string("missing_key", "default"), "default");
+        assert!(config.get_bool("test_bool", false));
+        assert!(!config.get_bool("missing_bool", false));
+    }
+
+    #[test]
+    fn test_plugin_arg_parser() {
+        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", Some(true))
+            .args(DumpPlugin::format_args());
+
+        let matches = parser
+            .parse(&["dump".to_string(), "--json".to_string()])
+            .unwrap();
+        assert!(matches.get_flag("json"));
+    }
+
+    #[test]
+    fn test_determine_format() {
+        let parser = PluginArgParser::new("test", "Test plugin", "1.0.0", Some(false))
+            .args(DumpPlugin::format_args());
+        let config = PluginConfig::default();
+
+        // Test JSON format
+        let matches = parser
+            .parse(&["dump".to_string(), "--json".to_string()])
+            .unwrap();
+        assert!(matches.get_flag("json"), "JSON flag should be true");
+        assert!(!matches.get_flag("text"), "Text flag should be false");
+        assert!(!matches.get_flag("compact"), "Compact flag should be false");
+        assert_eq!(
+            DumpPlugin::determine_format(&matches, &config),
+            OutputFormat::Json
+        );
+
+        // Test compact format
+        let matches = parser
+            .parse(&["dump".to_string(), "--compact".to_string()])
+            .unwrap();
+        assert!(matches.get_flag("compact"), "Compact flag should be true");
+        assert!(!matches.get_flag("json"), "JSON flag should be false");
+        assert!(!matches.get_flag("text"), "Text flag should be false");
+        assert_eq!(
+            DumpPlugin::determine_format(&matches, &config),
+            OutputFormat::Compact
+        );
+
+        // Test default (no flags)
+        let matches = parser.parse(&["dump".to_string()]).unwrap();
+        assert!(
+            !matches.get_flag("json"),
+            "JSON flag should be false by default"
+        );
+        assert!(
+            !matches.get_flag("text"),
+            "Text flag should be false by default"
+        );
+        assert!(
+            !matches.get_flag("compact"),
+            "Compact flag should be false by default"
+        );
+        assert_eq!(
+            DumpPlugin::determine_format(&matches, &config),
+            OutputFormat::Text
+        );
     }
 }

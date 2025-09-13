@@ -5,18 +5,46 @@ mod args;
 mod consumer;
 mod format;
 
-use crate::builtin;
-use crate::notifications::api::AsyncNotificationManager;
-use crate::plugin::args::{OutputFormat, PluginConfig};
-use crate::plugin::error::{PluginError, PluginResult};
-use crate::plugin::error_handling::log_plugin_error_with_context;
 use crate::plugin::traits::{ConsumerPlugin, Plugin};
-use crate::plugin::types::{PluginInfo, PluginType};
-use crate::queue::api::QueueConsumer;
-use crate::scanner::types::ScanRequires;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
+
+use crate::builtin;
+use crate::notifications::api::AsyncNotificationManager;
+use crate::plugin::api::{PluginError, PluginResult};
+use crate::plugin::args::PluginConfig;
+use crate::plugin::error_handling::log_plugin_error_with_context;
+use crate::plugin::types::{PluginInfo, PluginType};
+use crate::queue::api::QueueConsumer;
+use crate::scanner::api::ScanRequires;
+
+// Register this builtin plugin for automatic discovery
+builtin!(|| crate::plugin::discovery::DiscoveredPlugin {
+    info: DumpPlugin::static_plugin_info(),
+    factory: Box::new(|| Box::new(DumpPlugin::new())),
+});
+
+/// Standard output formats for dump
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    Compact,
+    /// Raw legacy dump format (pre-RS-32). Not exposed via CLI flag (use config).
+    Raw,
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputFormat::Text => write!(f, "text"),
+            OutputFormat::Json => write!(f, "json"),
+            OutputFormat::Compact => write!(f, "compact"),
+            OutputFormat::Raw => write!(f, "raw"),
+        }
+    }
+}
 
 /// Public dump plugin structure
 pub struct DumpPlugin {
@@ -53,32 +81,6 @@ impl DumpPlugin {
         }
     }
 
-    // Re-export formatting helpers used in tests (delegate to format module)
-    #[allow(dead_code)]
-    pub(crate) fn format_typed_message_direct(
-        typed_msg: &crate::queue::typed::TypedMessage<crate::scanner::api::ScanMessage>,
-        output_format: OutputFormat,
-        show_headers: bool,
-        use_colors: bool,
-    ) -> String {
-        format::format_typed_message_direct(typed_msg, output_format, show_headers, use_colors)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn format_typed_message_direct_with_color(
-        typed_msg: &crate::queue::typed::TypedMessage<crate::scanner::api::ScanMessage>,
-        output_format: OutputFormat,
-        show_headers: bool,
-        use_colors: bool,
-    ) -> String {
-        format::format_typed_message_direct_with_color(
-            typed_msg,
-            output_format,
-            show_headers,
-            use_colors,
-        )
-    }
-
     /// Get static plugin info without creating instance
     pub fn static_plugin_info() -> PluginInfo {
         PluginInfo {
@@ -89,26 +91,9 @@ impl DumpPlugin {
             api_version: crate::core::version::get_api_version(),
             plugin_type: PluginType::Processing,
             functions: vec!["dump".to_string()],
-            required: ScanRequires::REPOSITORY_INFO
-                | ScanRequires::HISTORY
-                | ScanRequires::COMMITS
-                | ScanRequires::FILE_CONTENT,
+            required: ScanRequires::HISTORY | ScanRequires::COMMITS | ScanRequires::FILE_CONTENT,
             auto_active: false,
         }
-    }
-
-    // Accessors for tests
-    #[cfg(test)]
-    pub fn test_output_format(&self) -> OutputFormat {
-        self.output_format
-    }
-    #[cfg(test)]
-    pub fn test_use_colors(&self) -> bool {
-        self.use_colors
-    }
-    #[cfg(test)]
-    pub fn test_output_file(&self) -> Option<&std::path::Path> {
-        self.output_file.as_deref()
     }
 }
 
@@ -149,8 +134,7 @@ impl Plugin for DumpPlugin {
     }
 
     fn requirements(&self) -> ScanRequires {
-        let mut reqs =
-            ScanRequires::REPOSITORY_INFO | ScanRequires::HISTORY | ScanRequires::COMMITS;
+        let mut reqs = ScanRequires::HISTORY | ScanRequires::COMMITS;
         if self.output_file.is_none() {
             reqs |= ScanRequires::SUPPRESS_PROGRESS;
         }
@@ -203,6 +187,11 @@ impl Plugin for DumpPlugin {
     ) -> PluginResult<()> {
         self.args_parse(args, config).await
     }
+
+    // Expose ConsumerPlugin via dyn Plugin
+    fn as_consumer_plugin(&mut self) -> Option<&mut dyn ConsumerPlugin> {
+        Some(self)
+    }
 }
 
 #[async_trait::async_trait]
@@ -211,12 +200,3 @@ impl ConsumerPlugin for DumpPlugin {
         self.start_consumer_loop(consumer).await
     }
 }
-
-// Register this builtin plugin for automatic discovery
-builtin!(|| crate::plugin::discovery::DiscoveredPlugin {
-    info: DumpPlugin::static_plugin_info(),
-    factory: Box::new(|| Box::new(DumpPlugin::new())),
-});
-
-#[cfg(test)]
-mod tests;

@@ -85,54 +85,35 @@ impl PluginRegistry {
     /// Enforces uniqueness constraint for Output plugins - only one can be active at a time
     pub fn activate_plugin(&mut self, name: &str) -> PluginResult<()> {
         if !self.has_plugin(name) {
-            return Err(PluginError::PluginNotFound {
+            Err(PluginError::PluginNotFound {
                 plugin_name: name.to_string(),
-            });
+            })
+        } else if self.active_plugins.contains(name) {
+            Err(PluginError::PluginInitializationError {
+                plugin_name: name.to_string(),
+                cause: "Plugin is already active".to_string(),
+            })
+        } else {
+            self.active_plugins.insert(name.to_string());
+            Ok(())
         }
-
-        // Check if this is an Output plugin and enforce uniqueness constraint
-        let plugin_type = self.get_plugin_type(name)?;
-        if plugin_type == PluginType::Output {
-            // Find any currently active Output plugins and deactivate them
-            let active_output_plugins: Vec<String> = self
-                .active_plugins
-                .iter()
-                .filter_map(|active_name| {
-                    if let Ok(active_type) = self.get_plugin_type(active_name) {
-                        if active_type == PluginType::Output && active_name != name {
-                            Some(active_name.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Deactivate any existing Output plugins
-            for active_output in &active_output_plugins {
-                log::info!(
-                    "Deactivating Output plugin '{}' due to uniqueness constraint (activating '{}')",
-                    active_output, name
-                );
-                self.active_plugins.remove(active_output);
-            }
-        }
-
-        self.active_plugins.insert(name.to_string());
-        Ok(())
     }
 
     /// Deactivate a plugin (mark it as inactive)
     pub fn deactivate_plugin(&mut self, name: &str) -> PluginResult<()> {
         if !self.has_plugin(name) {
-            return Err(PluginError::PluginNotFound {
+            Err(PluginError::PluginNotFound {
                 plugin_name: name.to_string(),
-            });
+            })
+        } else if !self.active_plugins.contains(name) {
+            Err(PluginError::PluginInitializationError {
+                plugin_name: name.to_string(),
+                cause: "Plugin is not currently active".to_string(),
+            })
+        } else {
+            self.active_plugins.remove(name);
+            Ok(())
         }
-        self.active_plugins.remove(name);
-        Ok(())
     }
 
     /// Check if a plugin is currently active

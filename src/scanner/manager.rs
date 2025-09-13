@@ -1027,8 +1027,7 @@ impl Drop for ScannerManager {
                 });
 
             if active_count > 0 {
-                log::warn!(
-                    "ScannerManager Drop: {} checkouts not cleaned up by shutdown coordinator - performing emergency cleanup with timeout",
+                log::warn!("ScannerManager Drop: {} checkouts not cleaned up by shutdown coordinator - performing emergency cleanup with timeout",
                     active_count
                 );
 
@@ -1037,8 +1036,6 @@ impl Drop for ScannerManager {
                 // if shutdown coordinator works properly
                 self.cleanup_all_checkouts_with_timeout(Self::EMERGENCY_CLEANUP_TIMEOUT);
             }
-        } else {
-            log::trace!("ScannerManager drop: cleanup already completed, skipping");
         }
     }
 }
