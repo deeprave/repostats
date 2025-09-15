@@ -14,7 +14,6 @@ use tokio::sync::RwLock;
 pub struct PluginRegistry {
     /// Map of plugin name to plugin instance (stores all plugins regardless of type)
     plugins: HashMap<String, Box<dyn Plugin>>,
-
     /// Set of plugin names that are currently active
     active_plugins: HashSet<String>,
 }
@@ -39,17 +38,72 @@ impl PluginRegistry {
 
     /// Register a plugin in the registry (works for both Plugin and ConsumerPlugin)
     pub fn register_plugin(&mut self, plugin: Box<dyn Plugin>) -> PluginResult<()> {
-        let plugin_name = plugin.plugin_info().name.clone();
+        let plugin_name = &plugin.plugin_info().name.clone();
 
         // Check if plugin name is already registered
-        if self.plugins.contains_key(&plugin_name) {
-            return Err(PluginError::Generic {
+        if self.plugins.contains_key(plugin_name) {
+            Err(PluginError::Generic {
                 message: format!("Plugin '{}' is already registered", plugin_name),
-            });
+            })
+        } else {
+            self.plugins.insert(plugin_name.to_string(), plugin);
+            log::trace!("Registered plugin '{}'", plugin_name.to_string());
+            Ok(())
+        }
+    }
+
+    /// Remove a plugin from the registry
+    pub fn deregister_plugin(&mut self, name: &str) -> PluginResult<()> {
+        if self.active_plugins.contains(name) {
+            self.active_plugins.remove(name);
+            log::trace!("Deactivated plugin '{}'", name);
         }
 
-        self.plugins.insert(plugin_name, plugin);
-        Ok(())
+        if self.plugins.remove(name).is_none() {
+            Err(PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            })
+        } else {
+            // Also remove from active plugins
+            log::trace!("Deregistered plugin '{}'", name);
+            Ok(())
+        }
+    }
+
+    /// Activate a plugin (mark it as active)
+    pub fn activate_plugin(&mut self, name: &str) -> PluginResult<()> {
+        if !self.has_plugin(name) {
+            Err(PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            })
+        } else if self.active_plugins.contains(name) {
+            Err(PluginError::PluginInitializationError {
+                plugin_name: name.to_string(),
+                cause: "Plugin is already active".to_string(),
+            })
+        } else {
+            log::trace!("Activating plugin '{}'", name);
+            self.active_plugins.insert(name.to_string());
+            Ok(())
+        }
+    }
+
+    /// Deactivate a plugin (mark it as inactive)
+    pub fn deactivate_plugin(&mut self, name: &str) -> PluginResult<()> {
+        if !self.has_plugin(name) {
+            Err(PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            })
+        } else if !self.active_plugins.contains(name) {
+            Err(PluginError::PluginInitializationError {
+                plugin_name: name.to_string(),
+                cause: "Plugin is not currently active".to_string(),
+            })
+        } else {
+            log::trace!("Deactivating plugin '{}'", name);
+            self.active_plugins.remove(name);
+            Ok(())
+        }
     }
 
     /// Get a plugin by name
@@ -76,63 +130,7 @@ impl PluginRegistry {
 
     /// Get list of active plugin names (only truly active plugins)
     pub fn get_active_plugins(&self) -> Vec<String> {
-        let mut active: Vec<String> = self.active_plugins.iter().cloned().collect();
-        active.sort();
-        active
-    }
-
-    /// Activate a plugin (mark it as active)
-    /// Enforces uniqueness constraint for Output plugins - only one can be active at a time
-    pub fn activate_plugin(&mut self, name: &str) -> PluginResult<()> {
-        if !self.has_plugin(name) {
-            return Err(PluginError::PluginNotFound {
-                plugin_name: name.to_string(),
-            });
-        }
-
-        // Check if this is an Output plugin and enforce uniqueness constraint
-        let plugin_type = self.get_plugin_type(name)?;
-        if plugin_type == PluginType::Output {
-            // Find any currently active Output plugins and deactivate them
-            let active_output_plugins: Vec<String> = self
-                .active_plugins
-                .iter()
-                .filter_map(|active_name| {
-                    if let Ok(active_type) = self.get_plugin_type(active_name) {
-                        if active_type == PluginType::Output && active_name != name {
-                            Some(active_name.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Deactivate any existing Output plugins
-            for active_output in &active_output_plugins {
-                log::info!(
-                    "Deactivating Output plugin '{}' due to uniqueness constraint (activating '{}')",
-                    active_output, name
-                );
-                self.active_plugins.remove(active_output);
-            }
-        }
-
-        self.active_plugins.insert(name.to_string());
-        Ok(())
-    }
-
-    /// Deactivate a plugin (mark it as inactive)
-    pub fn deactivate_plugin(&mut self, name: &str) -> PluginResult<()> {
-        if !self.has_plugin(name) {
-            return Err(PluginError::PluginNotFound {
-                plugin_name: name.to_string(),
-            });
-        }
-        self.active_plugins.remove(name);
-        Ok(())
+        self.active_plugins.iter().cloned().collect()
     }
 
     /// Check if a plugin is currently active
@@ -157,21 +155,6 @@ impl PluginRegistry {
         }
     }
 
-    /// Remove a plugin from the registry
-    pub fn unregister_plugin(&mut self, name: &str) -> PluginResult<()> {
-        let removed = self.plugins.remove(name).is_some();
-
-        if !removed {
-            return Err(PluginError::PluginNotFound {
-                plugin_name: name.to_string(),
-            });
-        }
-
-        // Also remove from active plugins
-        self.active_plugins.remove(name);
-        Ok(())
-    }
-
     /// Get total count of registered plugins
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
@@ -182,6 +165,29 @@ impl PluginRegistry {
         self.plugins.clear();
         self.active_plugins.clear();
     }
+
+    pub fn borrow_plugin(&mut self, name: &str) -> PluginResult<Box<dyn Plugin>> {
+        self.plugins
+            .remove(name)
+            .ok_or_else(|| PluginError::PluginNotFound {
+                plugin_name: name.to_string(),
+            })
+    }
+
+    pub fn return_plugin(&mut self, plugin: Box<dyn Plugin>) -> PluginResult<()> {
+        use std::collections::hash_map::Entry;
+
+        let plugin_name = &plugin.plugin_info().name;
+        match self.plugins.entry(plugin_name.to_string()) {
+            Entry::Vacant(slot) => {
+                slot.insert(plugin);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(PluginError::Generic {
+                message: format!("Plugin '{}' is already registered", plugin_name),
+            }),
+        }
+    }
 }
 
 impl Default for PluginRegistry {
@@ -191,9 +197,17 @@ impl Default for PluginRegistry {
 }
 
 /// Thread-safe shared plugin registry
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SharedPluginRegistry {
     inner: Arc<RwLock<PluginRegistry>>,
+}
+
+impl std::fmt::Debug for SharedPluginRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedPluginRegistry")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 impl SharedPluginRegistry {
@@ -235,14 +249,89 @@ impl SharedPluginRegistry {
 
     /// Convenience method to activate a plugin
     pub async fn activate_plugin(&self, name: &str) -> PluginResult<()> {
+        log::trace!("SharedPluginRegistry: activating plugin '{}'", name);
         let mut registry = self.inner.write().await;
         registry.activate_plugin(name)
     }
 
     /// Convenience method to deactivate a plugin
-    pub async fn deactivate_plugin(&self, name: &str) -> PluginResult<()> {
+    async fn deactivate_plugin(&self, name: &str) -> PluginResult<()> {
+        log::trace!("SharedPluginRegistry: deactivating plugin '{}'", name);
         let mut registry = self.inner.write().await;
         registry.deactivate_plugin(name)
+    }
+
+    /// Deactivate a plugin and publish Unregistered event
+    pub async fn register_plugin_with_notification(
+        &self,
+        plugin: Box<dyn Plugin>,
+    ) -> PluginResult<()> {
+        let plugin_name = &plugin.plugin_info().name.clone();
+
+        log::trace!(
+            "SharedPluginRegistry: registering plugin '{}' with notification",
+            plugin_name
+        );
+        let mut registry = self.inner.write().await;
+        registry.register_plugin(plugin)?;
+
+        // Then publish Registeration event
+        let event = crate::notifications::api::PluginEvent::with_message(
+            crate::notifications::event::PluginEventType::Registered,
+            plugin_name.to_string(),
+            crate::plugin::events::SYSTEM_SCAN_ID.to_string(),
+            "Plugin deregistered".to_string(),
+        );
+
+        let mut manager = crate::notifications::api::get_notification_service().await;
+        if let Err(e) = manager
+            .publish(crate::notifications::event::Event::Plugin(event))
+            .await
+        {
+            log::error!(
+                "Failed to publish plugin registrater event for '{}': {}",
+                plugin_name,
+                e
+            );
+        } else {
+            log::trace!("Published Registered event for plugin '{}'", plugin_name);
+        }
+
+        Ok(())
+    }
+
+    /// Deactivate a plugin and publish Unregistered event
+    pub async fn deregister_plugin_with_notification(&self, name: &str) -> PluginResult<()> {
+        log::trace!(
+            "SharedPluginRegistry: deactivating plugin '{}' with notification",
+            name
+        );
+        // First deactivate the plugin
+        self.deactivate_plugin(name).await?;
+
+        // Then publish Unregistered event
+        let event = crate::notifications::api::PluginEvent::with_message(
+            crate::notifications::event::PluginEventType::Unregistered,
+            name.to_string(),
+            crate::plugin::events::SYSTEM_SCAN_ID.to_string(),
+            "Plugin completed and deregistered".to_string(),
+        );
+
+        let mut manager = crate::notifications::api::get_notification_service().await;
+        if let Err(e) = manager
+            .publish(crate::notifications::event::Event::Plugin(event))
+            .await
+        {
+            log::error!(
+                "Failed to publish plugin unregistered event for '{}': {}",
+                name,
+                e
+            );
+        } else {
+            log::trace!("Published Unregistered event for plugin '{}'", name);
+        }
+
+        Ok(())
     }
 
     /// Convenience method to check if plugin is active
@@ -255,6 +344,22 @@ impl SharedPluginRegistry {
     pub async fn clear_active_plugins(&self) {
         let mut registry = self.inner.write().await;
         registry.clear_active_plugins();
+    }
+
+    pub async fn borrow_plugin(
+        &self,
+        name: &str,
+    ) -> crate::plugin::error::PluginResult<Box<dyn crate::plugin::traits::Plugin>> {
+        let mut registry = self.inner.write().await;
+        registry.borrow_plugin(name)
+    }
+
+    pub async fn return_plugin(
+        &self,
+        plugin: Box<dyn crate::plugin::traits::Plugin>,
+    ) -> crate::plugin::error::PluginResult<()> {
+        let mut registry = self.inner.write().await;
+        registry.return_plugin(plugin)
     }
 }
 
@@ -323,7 +428,7 @@ mod tests {
             Ok(())
         }
 
-        async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
+        async fn execute(&mut self) -> PluginResult<()> {
             Ok(())
         }
 
@@ -378,8 +483,8 @@ mod tests {
             self.base.initialize().await
         }
 
-        async fn execute(&mut self, args: &[String]) -> PluginResult<()> {
-            self.base.execute(args).await
+        async fn execute(&mut self) -> PluginResult<()> {
+            self.base.execute().await
         }
 
         async fn cleanup(&mut self) -> PluginResult<()> {
@@ -527,12 +632,12 @@ mod tests {
         assert!(registry.has_plugin("unregister-test"));
 
         // Unregister plugin
-        registry.unregister_plugin("unregister-test").unwrap();
+        registry.deregister_plugin("unregister-test").unwrap();
         assert!(!registry.has_plugin("unregister-test"));
         assert_eq!(registry.plugin_count(), 0);
 
         // Try to unregister nonexistent plugin
-        let result = registry.unregister_plugin("nonexistent");
+        let result = registry.deregister_plugin("nonexistent");
         assert!(result.is_err());
 
         match result.unwrap_err() {

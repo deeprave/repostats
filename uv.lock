@@ -3,6 +3,18 @@ revision = 3
 requires-python = ">=3.13"
 
 [[package]]
+name = "cc-sessions"
+version = "0.2.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/27/37/b42d329d05939368c3d435604ca0edc2ad3f77956752c794b9afa07055c5/cc_sessions-0.2.7.tar.gz", hash = "sha256:508d5c2110704b49f219d6c272641e6f40bc9a17b98fa880a65bd9dfbe574230", size = 81176, upload-time = "2025-09-02T17:21:50.416Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/b4/b548d9a3c15f2e9cb2aeba6685c43d24d040470178870356aa8b2f884236/cc_sessions-0.2.7-py3-none-any.whl", hash = "sha256:e37b192ed9e9ea5bf1d12eab084982b65442c0efebaf9f1ba28488b9f8403b46", size = 80987, upload-time = "2025-09-02T17:21:49.238Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2025.8.3"
 source = { registry = "https://pypi.org/simple" }
@@ -92,11 +104,15 @@ name = "repostats"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cc-sessions" },
     { name = "tiktoken" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tiktoken", specifier = ">=0.11.0" }]
+requires-dist = [
+    { name = "cc-sessions", specifier = ">=0.2.7" },
+    { name = "tiktoken", specifier = ">=0.11.0" },
+]
 
 [[package]]
 name = "requests"

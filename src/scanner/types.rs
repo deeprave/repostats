@@ -16,9 +16,6 @@ impl ScanRequires {
     /// No requirements
     pub const NONE: Self = Self(0);
 
-    /// Repository information (metadata)
-    pub const REPOSITORY_INFO: Self = Self(1 << 0);
-
     /// Commit information
     pub const COMMITS: Self = Self(1 << 1);
 
@@ -70,11 +67,6 @@ impl ScanRequires {
     /// Remove requirements
     pub const fn difference(&self, other: Self) -> Self {
         Self(self.0 & !other.0)
-    }
-
-    /// Check if repository info is required
-    pub const fn requires_repository_info(&self) -> bool {
-        self.contains(Self::REPOSITORY_INFO)
     }
 
     /// Check if commits are required
@@ -148,10 +140,6 @@ impl std::fmt::Display for ScanRequires {
 
         // Show all top-level requirements that were explicitly requested
         // Dependencies are automatically included but not separately displayed
-
-        if self.requires_repository_info() {
-            requirements.push("RepositoryInfo");
-        }
 
         // Show the highest level in the file content hierarchy
         if self.requires_file_content() {
@@ -501,13 +489,10 @@ mod tests {
     #[test]
     fn test_scan_requires_basic_operations() {
         let none = ScanRequires::NONE;
-        let repo_info = ScanRequires::REPOSITORY_INFO;
         let commits = ScanRequires::COMMITS;
 
         assert!(none.is_empty());
-        assert!(!repo_info.is_empty());
-        assert!(repo_info.requires_repository_info());
-        assert!(!repo_info.requires_commits());
+        assert!(!commits.is_empty());
         assert!(commits.requires_commits());
     }
 
@@ -532,16 +517,16 @@ mod tests {
 
     #[test]
     fn test_scan_requires_bitwise_operations() {
-        let repo_info = ScanRequires::REPOSITORY_INFO;
         let commits = ScanRequires::COMMITS;
+        let history = ScanRequires::HISTORY;
 
-        let combined = repo_info | commits;
-        assert!(combined.requires_repository_info());
+        let combined = commits | history;
         assert!(combined.requires_commits());
+        assert!(combined.requires_history());
 
-        let intersection = combined & repo_info;
-        assert!(intersection.requires_repository_info());
-        assert!(!intersection.requires_commits());
+        let intersection = combined & commits;
+        assert!(intersection.requires_commits());
+        assert!(!intersection.requires_history());
     }
 
     #[test]
@@ -549,11 +534,11 @@ mod tests {
         let none = ScanRequires::NONE;
         assert_eq!(format!("{}", none), "None");
 
-        let repo_info = ScanRequires::REPOSITORY_INFO;
-        assert_eq!(format!("{}", repo_info), "RepositoryInfo");
+        let commits = ScanRequires::COMMITS;
+        assert_eq!(format!("{}", commits), "Commits");
 
-        let combined = ScanRequires::REPOSITORY_INFO | ScanRequires::COMMITS;
-        assert_eq!(format!("{}", combined), "RepositoryInfo | Commits");
+        let combined = ScanRequires::COMMITS | ScanRequires::HISTORY;
+        assert_eq!(format!("{}", combined), "History");
 
         let file_content = ScanRequires::FILE_CONTENT;
         // FILE_CONTENT includes FILE_CHANGES which includes COMMITS
@@ -570,10 +555,8 @@ mod tests {
 
     #[test]
     fn test_scan_requires_complex_combinations() {
-        let everything =
-            ScanRequires::REPOSITORY_INFO | ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
+        let everything = ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
 
-        assert!(everything.requires_repository_info());
         assert!(everything.requires_file_content());
         assert!(everything.requires_file_changes()); // included by FILE_CONTENT
         assert!(everything.requires_commits()); // included by both FILE_CONTENT and HISTORY

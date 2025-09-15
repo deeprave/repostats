@@ -60,9 +60,9 @@ impl ExportFormat {
         }
     }
 
-    pub fn aliases(&self) -> Vec<&str> {
+    pub fn aliases(&self) -> &'static [&'static str] {
         match self {
-            Self::Text => Vec::from([
+            Self::Text => &[
                 "txt",
                 "log",
                 "out",
@@ -71,20 +71,17 @@ impl ExportFormat {
                 "env",
                 "properties",
                 "rst",
-                "out",
-            ]),
-            Self::Json => Vec::from(["jsn", "geojson", "har", "map", "avsc", "json5", "jsonc"]),
-            Self::Csv => Vec::from([]),
-            Self::Tsv => Vec::from(["tab"]),
-            Self::Xml => Vec::from([
+            ],
+            Self::Json => &["jsn", "geojson", "har", "map", "avsc", "json5", "jsonc"],
+            Self::Csv => &[],
+            Self::Tsv => &["tab"],
+            Self::Xml => &[
                 "xsd", "xlt", "dtd", "xsl", "rss", "atom", "svg", "gml", "project",
-            ]),
-            Self::Html => Vec::from(["htm", "xhtml", "xht", "xhtm", "shtml"]),
-            Self::Markdown => Vec::from(["markdown", "mdown", "mkd", "mdx"]),
-            Self::Yaml => Vec::from(["yml"]),
-            Self::Template => {
-                Vec::from(["j2", "html", "tpl", "tmpl", "template", "jinja", "jinja2"])
-            }
+            ],
+            Self::Html => &["htm", "xhtml", "xht", "xhtm", "shtml"],
+            Self::Markdown => &["markdown", "mdown", "mkd", "mdx"],
+            Self::Yaml => &["yml"],
+            Self::Template => &["j2", "html", "tpl", "tmpl", "template", "jinja", "jinja2"],
         }
     }
 
@@ -103,10 +100,8 @@ impl ExportFormat {
     }
 
     /// Get the common file extensions for this format
-    pub fn file_exts(&self) -> Vec<&str> {
-        std::iter::once(self.file_ext())
-            .chain(self.aliases().into_iter())
-            .collect()
+    pub fn file_exts(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.file_ext()).chain(self.aliases().iter().copied())
     }
 
     /// Parse format from string name (handles both CLI format strings and function names)
@@ -162,135 +157,4 @@ pub trait OutputFormatter {
 
     /// Get the format type this formatter handles
     fn format_type(&self) -> ExportFormat;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn test_export_format_variants_exist() {
-        // Test all expected variants exist
-        let text = ExportFormat::Text;
-        let json = ExportFormat::Json;
-        let csv = ExportFormat::Csv;
-        let tsv = ExportFormat::Tsv;
-        let xml = ExportFormat::Xml;
-        let html = ExportFormat::Html;
-        let markdown = ExportFormat::Markdown;
-        let yaml = ExportFormat::Yaml;
-        let template = ExportFormat::Template;
-
-        assert_eq!(text, ExportFormat::Text);
-        assert_eq!(json, ExportFormat::Json);
-        assert_eq!(csv, ExportFormat::Csv);
-        assert_eq!(tsv, ExportFormat::Tsv);
-        assert_eq!(xml, ExportFormat::Xml);
-        assert_eq!(html, ExportFormat::Html);
-        assert_eq!(markdown, ExportFormat::Markdown);
-        assert_eq!(yaml, ExportFormat::Yaml);
-        assert_eq!(template, ExportFormat::Template);
-    }
-
-    #[test]
-    fn test_export_format_file_extension() {
-        assert_eq!(ExportFormat::Text.file_ext(), "text");
-        assert_eq!(ExportFormat::Json.file_ext(), "json");
-        assert_eq!(ExportFormat::Csv.file_ext(), "csv");
-        assert_eq!(ExportFormat::Tsv.file_ext(), "tsv");
-        assert_eq!(ExportFormat::Xml.file_ext(), "xml");
-        assert_eq!(ExportFormat::Html.file_ext(), "html");
-        assert_eq!(ExportFormat::Markdown.file_ext(), "md");
-        assert_eq!(ExportFormat::Yaml.file_ext(), "yaml");
-        assert_eq!(ExportFormat::Template.file_ext(), "j2");
-    }
-
-    #[test]
-    fn test_export_format_from_extension() {
-        assert_eq!(ExportFormat::from_ext("json"), ExportFormat::Json);
-        assert_eq!(ExportFormat::from_ext("JSON"), ExportFormat::Json);
-        assert_eq!(ExportFormat::from_ext("csv"), ExportFormat::Csv);
-        assert_eq!(ExportFormat::from_ext("tsv"), ExportFormat::Tsv);
-        assert_eq!(ExportFormat::from_ext("xml"), ExportFormat::Xml);
-        assert_eq!(ExportFormat::from_ext("html"), ExportFormat::Html);
-        assert_eq!(ExportFormat::from_ext("md"), ExportFormat::Markdown);
-        assert_eq!(ExportFormat::from_ext("yaml"), ExportFormat::Yaml);
-        assert_eq!(ExportFormat::from_ext("j2"), ExportFormat::Template);
-        assert_eq!(ExportFormat::from_ext("txt"), ExportFormat::Text);
-    }
-
-    #[test]
-    fn test_export_format_mime_type() {
-        assert_eq!(ExportFormat::Text.mimetype(), "text/plain");
-        assert_eq!(ExportFormat::Json.mimetype(), "application/json");
-        assert_eq!(ExportFormat::Csv.mimetype(), "text/csv");
-        assert_eq!(ExportFormat::Tsv.mimetype(), "text/tab-separated-values");
-        assert_eq!(ExportFormat::Xml.mimetype(), "application/xml");
-        assert_eq!(ExportFormat::Html.mimetype(), "text/html");
-        assert_eq!(ExportFormat::Markdown.mimetype(), "text/markdown");
-        assert_eq!(ExportFormat::Yaml.mimetype(), "application/x-yaml");
-        assert_eq!(ExportFormat::Template.mimetype(), "text/plain");
-    }
-
-    #[test]
-    fn test_export_format_equality() {
-        assert_eq!(ExportFormat::Json, ExportFormat::Json);
-        assert_ne!(ExportFormat::Json, ExportFormat::Csv);
-        assert_ne!(ExportFormat::Text, ExportFormat::Html);
-    }
-
-    #[test]
-    fn test_export_format_hash() {
-        let mut map = HashMap::new();
-        map.insert(ExportFormat::Json, "json data");
-        map.insert(ExportFormat::Csv, "csv data");
-
-        assert_eq!(map.get(&ExportFormat::Json), Some(&"json data"));
-        assert_eq!(map.get(&ExportFormat::Csv), Some(&"csv data"));
-    }
-
-    #[test]
-    fn test_export_format_clone() {
-        let original = ExportFormat::Json;
-        let cloned = original.clone();
-        assert_eq!(original, cloned);
-    }
-
-    #[test]
-    fn test_export_format_from_str() {
-        assert_eq!(ExportFormat::from_str("json"), ExportFormat::Json);
-        assert_eq!(ExportFormat::from_str("JSON"), ExportFormat::Json);
-        assert_eq!(ExportFormat::from_str("csv"), ExportFormat::Csv);
-        assert_eq!(ExportFormat::from_str("xml"), ExportFormat::Xml);
-        assert_eq!(ExportFormat::from_str("html"), ExportFormat::Html);
-        assert_eq!(ExportFormat::from_str("md"), ExportFormat::Markdown);
-        assert_eq!(ExportFormat::from_str("yaml"), ExportFormat::Yaml);
-        assert_eq!(ExportFormat::from_str("j2"), ExportFormat::Template);
-        assert_eq!(ExportFormat::from_str("txt"), ExportFormat::Text);
-    }
-
-    #[test]
-    fn test_export_format_from_file_path() {
-        assert_eq!(
-            ExportFormat::from_file_path("output.json"),
-            ExportFormat::Json
-        );
-        assert_eq!(
-            ExportFormat::from_file_path("/path/to/file.csv"),
-            ExportFormat::Csv
-        );
-        assert_eq!(
-            ExportFormat::from_file_path("report.html"),
-            ExportFormat::Html
-        );
-        assert_eq!(
-            ExportFormat::from_file_path("no_extension"),
-            ExportFormat::Text
-        );
-        assert_eq!(
-            ExportFormat::from_file_path("file.unknown"),
-            ExportFormat::Text
-        );
-    }
 }

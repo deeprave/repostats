@@ -72,7 +72,7 @@ pub trait Plugin: Send + Sync {
     async fn initialize(&mut self) -> PluginResult<()>;
 
     /// Execute plugin functionality (for direct execution)
-    async fn execute(&mut self, args: &[String]) -> PluginResult<()>;
+    async fn execute(&mut self) -> PluginResult<()>;
 
     /// Clean up plugin resources
     async fn cleanup(&mut self) -> PluginResult<()>;
@@ -143,7 +143,7 @@ mod tests {
                     description: "Mock plugin for testing".to_string(),
                     author: "Test Author".to_string(),
                     api_version: 20250101,
-                    plugin_type: crate::plugin::types::PluginType::Processing,
+                    plugin_type: PluginType::Processing,
                     functions: vec!["test".to_string()],
                     required: ScanRequires::NONE,
                     auto_active: false,
@@ -170,6 +170,11 @@ mod tests {
             vec!["test".to_string()]
         }
 
+        fn is_compatible(&self, _system_api_version: u32) -> bool {
+            // Mock plugin is always compatible for testing
+            true
+        }
+
         fn set_notification_manager(&mut self, _manager: Arc<Mutex<AsyncNotificationManager>>) {
             // Mock implementation - just ignore the manager
         }
@@ -179,7 +184,7 @@ mod tests {
             Ok(())
         }
 
-        async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
+        async fn execute(&mut self) -> PluginResult<()> {
             if !self.initialized {
                 return Err(PluginError::ExecutionError {
                     plugin_name: self.info.name.clone(),
@@ -203,11 +208,6 @@ mod tests {
         ) -> PluginResult<()> {
             self.args_parsed = true;
             Ok(())
-        }
-
-        fn is_compatible(&self, _system_api_version: u32) -> bool {
-            // Mock plugin is always compatible for testing
-            true
         }
     }
 
@@ -241,6 +241,10 @@ mod tests {
             self.base.advertised_functions()
         }
 
+        fn is_compatible(&self, system_api_version: u32) -> bool {
+            self.base.is_compatible(system_api_version)
+        }
+
         fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
             self.base.set_notification_manager(manager);
         }
@@ -249,8 +253,8 @@ mod tests {
             self.base.initialize().await
         }
 
-        async fn execute(&mut self, args: &[String]) -> PluginResult<()> {
-            self.base.execute(args).await
+        async fn execute(&mut self) -> PluginResult<()> {
+            self.base.execute().await
         }
 
         async fn cleanup(&mut self) -> PluginResult<()> {
@@ -264,10 +268,6 @@ mod tests {
             config: &PluginConfig,
         ) -> PluginResult<()> {
             self.base.parse_plugin_arguments(args, config).await
-        }
-
-        fn is_compatible(&self, system_api_version: u32) -> bool {
-            self.base.is_compatible(system_api_version)
         }
     }
 
@@ -336,7 +336,7 @@ mod tests {
 
         // Test execution
         assert!(!plugin.executed);
-        plugin.execute(&[]).await.unwrap();
+        plugin.execute().await.unwrap();
         assert!(plugin.executed);
 
         // Test cleanup
@@ -350,7 +350,7 @@ mod tests {
         let mut plugin = MockPlugin::new();
 
         // Try to execute without initialization
-        let result = plugin.execute(&[]).await;
+        let result = plugin.execute().await;
         assert!(result.is_err());
 
         match result.unwrap_err() {
@@ -427,7 +427,7 @@ mod tests {
             description: "Test plugin".to_string(),
             author: "Author".to_string(),
             api_version: 20250101,
-            plugin_type: crate::plugin::types::PluginType::Processing,
+            plugin_type: PluginType::Processing,
             functions: vec![],
             required: ScanRequires::NONE,
             auto_active: false,

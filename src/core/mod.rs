@@ -1,6 +1,7 @@
 //! Core services and infrastructure
 
 pub mod cleanup;
+pub mod controller;
 pub mod date_parser;
 pub mod error_handling;
 pub mod logging;

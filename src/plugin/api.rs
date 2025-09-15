@@ -8,11 +8,17 @@
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 
+// Primary plugin trait
+pub use crate::plugin::traits::{ConsumerPlugin, Plugin};
+
 // Core plugin management
 pub use crate::plugin::manager::{PluginManager, PluginManagerConfig};
 
 // Error handling
 pub use crate::plugin::error::{PluginError, PluginResult};
+
+// Argument parsing and configuration
+pub use crate::plugin::args::{PluginArgParser, PluginConfig};
 
 // Data export types for plugin data interchange
 pub use crate::plugin::data_export::{

@@ -21,8 +21,22 @@ pub enum SpinnerError {
 const BRAILLE_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// Check if spinner should be displayed
-pub fn should_show_spinner() -> bool {
-    std::io::IsTerminal::is_terminal(&std::io::stderr()) && !log::log_enabled!(log::Level::Info)
+/// This checks both terminal conditions and plugin requirements internally
+pub async fn should_show_spinner() -> bool {
+    // First check basic terminal conditions
+    let terminal_conditions = std::io::IsTerminal::is_terminal(&std::io::stderr())
+        && !log::log_enabled!(log::Level::Info);
+
+    if !terminal_conditions {
+        return false;
+    }
+
+    // Check if any plugin suppresses progress display
+    let plugin_manager = crate::plugin::api::get_plugin_service().await;
+    let suppresses_progress = plugin_manager.should_suppress_progress().await;
+
+    // Show spinner only if terminal conditions are met AND no plugin suppresses progress
+    !suppresses_progress
 }
 
 /// Simple spinner struct
@@ -52,16 +66,12 @@ impl ProgressSpinner {
 
 /// Run the spinner task
 pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
-    if !should_show_spinner() {
-        return Ok(());
-    }
-
     // Subscribe to events
     let mut notification_manager = crate::notifications::api::get_notification_service().await;
     let mut event_receiver = notification_manager
         .subscribe(
             "progress-spinner".to_string(),
-            EventFilter::All, // Will filter manually for ScanEvent::Progress and SystemEvent::Shutdown
+            EventFilter::All, // Will filter manually for ScanEvent::Started/Progress and SystemEvent::Shutdown
             "main-spinner".to_string(),
         )
         .map_err(|e| SpinnerError::SubscribeFailed {
@@ -71,6 +81,10 @@ pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) 
 
     let mut spinner = ProgressSpinner::new();
     let mut update_interval = interval(Duration::from_millis(100)); // 10Hz
+
+    // Lazy initialization state - wait for ScanStarted before checking plugin suppression
+    let mut is_initialized = false;
+    let mut should_display = false;
 
     loop {
         tokio::select! {
@@ -83,14 +97,30 @@ pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) 
             // Handle events
             event = event_receiver.recv() => {
                 match event {
+                    // Wait for scan to actually start before checking if we should suppress
+                    Some(Event::Scan(ScanEvent { event_type: ScanEventType::Started, .. })) => {
+                        if !is_initialized {
+                            should_display = should_show_spinner().await;
+                            is_initialized = true;
+
+                            // If suppressed, exit quietly
+                            if !should_display {
+                                return Ok(());
+                            }
+                        }
+                        // Don't tick on Started event, just initialize
+                    }
                     Some(Event::Scan(ScanEvent { event_type: ScanEventType::Progress, .. })) => {
-                        spinner.tick();
+                        // Only respond to progress if we're initialized and should display
+                        if is_initialized && should_display {
+                            spinner.tick();
+                        }
                     }
                     Some(Event::System(SystemEvent { event_type: SystemEventType::Shutdown, .. })) => {
                         spinner.finish();
                         return Ok(());
                     }
-                    Some(_) => {} // Ignore other events
+                    Some(_) => {} // Ignore other events (especially before Started)
                     None => {
                         spinner.finish();
                         return Ok(());
@@ -98,9 +128,11 @@ pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) 
                 }
             }
 
-            // Update spinner animation
+            // Update spinner animation (only if active)
             _ = update_interval.tick() => {
-                spinner.tick();
+                if is_initialized && should_display {
+                    spinner.tick();
+                }
             }
         }
     }
@@ -183,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn test_spinner_should_not_run_when_conditions_not_met() {
         // This test checks that spinner respects conditions
-        if should_show_spinner() {
+        if should_show_spinner().await {
             // If conditions are met in test environment, skip this test
             return;
         }

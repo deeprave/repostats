@@ -3,21 +3,6 @@
 use crate::plugin::error::*;
 
 #[test]
-fn test_plugin_not_found_error() {
-    let error = PluginError::PluginNotFound {
-        plugin_name: "test-plugin".to_string(),
-    };
-
-    assert_eq!(error.to_string(), "Plugin not found: test-plugin");
-    assert_eq!(
-        error,
-        PluginError::PluginNotFound {
-            plugin_name: "test-plugin".to_string()
-        }
-    );
-}
-
-#[test]
 fn test_version_incompatible_error() {
     let error = PluginError::VersionIncompatible {
         message: "Plugin requires API version 2025.0.0, but system has 2024.0.0".to_string(),
@@ -93,16 +78,6 @@ fn test_plugin_result_type_alias() {
         }
         _ => panic!("Expected Generic error"),
     }
-}
-
-#[test]
-fn test_error_cloning() {
-    let original = PluginError::PluginNotFound {
-        plugin_name: "test".to_string(),
-    };
-    let cloned = original.clone();
-
-    assert_eq!(original, cloned);
 }
 
 #[test]

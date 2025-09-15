@@ -1,5 +1,5 @@
+use crate::app::event_controller::EventController;
 use crate::core::error_handling::log_error_with_context;
-use crate::core::shutdown::ShutdownCoordinator;
 use crate::notifications::api::{Event, SystemEvent, SystemEventType};
 use crate::scanner::api::ScanError;
 
@@ -33,99 +33,48 @@ async fn main() {
     let command_name = command_name_owned.as_deref().unwrap_or(COMMAND_NAME);
     let pid = std::process::id();
 
-    // Use shutdown coordinator to guard the entire application execution
-    let result =
-        ShutdownCoordinator::guard_with_coordinator(|coordinator, mut shutdown_rx| async move {
-            // Application startup with shutdown checking
-            let scanner_manager = tokio::select! {
-                result = app::startup::startup(command_name) => {
-                    match result {
-                        Ok(scanner_manager) => scanner_manager,
-                        Err(e) => {
-                            log_error_with_context(&e, "Application startup");
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                shutdown_result = shutdown_rx.recv() => {
-                    match shutdown_result {
-                        Ok(_) => std::process::exit(0),
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            log::warn!("Shutdown channel closed during startup; exiting");
-                            std::process::exit(0)
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            log::warn!("Missed shutdown signals during startup; exiting");
-                            std::process::exit(0)
-                        }
-                    }
-                }
-            };
-
-            // System start with shutdown checking
-            let mut shutdown_check = shutdown_rx.resubscribe();
-            tokio::select! {
-                result = system_start(pid) => {
-                    if let Err(e) = result {
-                        log::error!("Failed to start system: {e}");
-                        std::process::exit(1);
-                    }
-                }
-                shutdown_result = shutdown_check.recv() => {
-                    match shutdown_result {
-                        Ok(_) => std::process::exit(0),
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            log::warn!("Shutdown channel closed during system start; exiting");
-                            std::process::exit(0)
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            log::warn!("Missed shutdown signals during system start; exiting");
-                            std::process::exit(0)
-                        }
-                    }
-                }
-            };
-
-            // Spawn spinner task if appropriate (skip if any plugin suppresses progress)
-            let suppress_progress = {
-                let plugin_manager = crate::plugin::api::get_plugin_service().await;
-                plugin_manager
-                    .get_combined_requirements()
-                    .await
-                    .suppresses_progress()
-            };
-            if !suppress_progress && app::spinner::should_show_spinner() {
-                let spinner_shutdown = shutdown_rx.resubscribe();
-                tokio::spawn(async move {
-                    if let Err(e) = app::spinner::run_spinner(spinner_shutdown).await {
-                        log::debug!("Spinner task failed: {}", e);
-                    }
-                });
+    // Use EventController to guard the entire application execution with transparent coordination
+    let result = EventController::guard(|| async {
+        // Application startup
+        let scanner_manager = match app::startup::startup(command_name).await {
+            Ok(scanner_manager) => scanner_manager,
+            Err(e) => {
+                log_error_with_context(&e, "Application startup");
+                std::process::exit(1);
             }
+        };
 
-            // Handle scanner execution if configured
-            let final_result = if let Some(scanner_manager) = scanner_manager {
-                log::info!("{command_name}: ✅ Repository Statistics Tool starting");
+        // System start
+        if let Err(e) = system_start(pid).await {
+            log::error!("Failed to start system: {e}");
+            std::process::exit(1);
+        }
 
-                run_scanner_with_coordination(
-                    scanner_manager,
-                    shutdown_rx,
-                    coordinator.shutdown_requested.clone(),
-                )
-                .await
-            } else {
-                // Early exit
-                return Ok(());
-            };
-
-            // System shutdown
-            if let Err(e) = system_stop(pid).await {
-                log::warn!("Error stopping system: {e}");
+        // Spawn spinner task - it will self-manage based on events and plugin state
+        tokio::spawn(async move {
+            // Spinner will be automatically coordinated by EventController on shutdown
+            if let Err(e) = app::spinner::run_spinner(tokio::sync::broadcast::channel(1).1).await {
+                log::debug!("Spinner task failed: {}", e);
             }
+        });
 
-            final_result
-        })
-        .await;
+        // Handle scanner execution if configured
+        let final_result = if let Some(scanner_manager) = scanner_manager {
+            log::info!("{command_name}: ✅ Repository Statistics Tool starting");
+            run_scanner_simple(scanner_manager).await
+        } else {
+            // Early exit
+            Ok(())
+        };
+
+        // System shutdown
+        if let Err(e) = system_stop(pid).await {
+            log::warn!("Error stopping system: {e}");
+        }
+
+        final_result
+    })
+    .await;
 
     if let Err(e) = result {
         log::error!("Application error: {e}");
@@ -133,11 +82,9 @@ async fn main() {
     }
 }
 
-/// Run scanner with component coordination for plugin shutdown
-async fn run_scanner_with_coordination(
+/// Run scanner with simplified logic - EventController handles all coordination transparently
+async fn run_scanner_simple(
     scanner_manager: std::sync::Arc<scanner::api::ScannerManager>,
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-    shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), ScanError> {
     // Initialize plugin manager
     {
@@ -148,97 +95,21 @@ async fn run_scanner_with_coordination(
         }
     }
 
-    // Clone scanner_manager for the select block
-    let scanner_manager_for_start = scanner_manager.clone();
-
     // Get opaque cleanup handle for coordinated shutdown
-    let cleanup_handle = scanner_manager.cleanup_handle();
+    let cleanup_handle = scanner_manager.clone().cleanup_handle();
 
-    // Run scanner with component coordination
-    tokio::select! {
-        result = start_scanner(scanner_manager_for_start) => {
-            // Normal completion path: wait for plugins then cleanup
-            match result {
-                Ok(()) => {
-                    // Check if shutdown was already requested before resubscription
-                    let should_stop_immediately = shutdown_requested.load(std::sync::atomic::Ordering::Acquire);
+    // Run scanner - EventController automatically handles:
+    // - Signal coordination
+    // - Plugin graceful shutdown
+    // - Plugin completion waiting
+    // - Timeout handling
+    let result = start_scanner(scanner_manager).await;
 
-                    if should_stop_immediately {
-                        // Shutdown already triggered, proceed with graceful stop
-                        log::trace!("Shutdown already requested, proceeding with graceful plugin stop");
-                        let timeout = std::time::Duration::from_secs(30);
+    // Always cleanup scanner resources
+    cleanup_handle.cleanup();
 
-                        // Scope plugin manager access for graceful stop
-                        let plugin_mgr = crate::plugin::api::get_plugin_service().await;
-                        if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
-                            if !summary.all_completed() {
-                                log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
-                            }
-                        }
-                        // Drop lock automatically at end of scope
-                    } else {
-                        // Use shutdown-integrated plugin completion wait to handle signals
-                        let shutdown_rx = shutdown_rx.resubscribe();
-
-                        // Scope plugin manager access for completion wait
-                        let plugin_mgr = crate::plugin::api::get_plugin_service().await;
-                        if let Err(e) = plugin_mgr.await_all_plugins_completion_with_shutdown(shutdown_rx).await {
-                            log::trace!("Plugin completion wait failed: {}", e);
-                        }
-                        // Drop lock automatically at end of scope
-                    }
-                    cleanup_handle.cleanup();
-                    Ok(())
-                }
-                Err(e) => {
-                    // Scanner failed, still need to coordinate shutdown
-                    let timeout = std::time::Duration::from_secs(30);
-
-                    // Scope plugin manager access for graceful stop after scanner failure
-                    let plugin_mgr = crate::plugin::api::get_plugin_service().await;
-                    if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
-                        if !summary.all_completed() {
-                            log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
-                        }
-                    }
-                    // Drop lock automatically at end of scope
-
-                    cleanup_handle.cleanup();
-                    Err(e)
-                }
-            }
-        }
-        shutdown_result = shutdown_rx.recv() => {
-            match shutdown_result {
-                Ok(_) => {
-                    // Signal interruption path: graceful plugin stop then cleanup
-                    let timeout = std::time::Duration::from_secs(30);
-
-                    // Scope plugin manager access for signal-triggered graceful stop
-                    let plugin_mgr = crate::plugin::api::get_plugin_service().await;
-                    if let Ok(summary) = plugin_mgr.graceful_stop_all(timeout).await {
-                        if !summary.all_completed() {
-                            log::trace!("Some plugins failed to stop gracefully: {:?}", summary);
-                        }
-                    }
-                    // Drop lock automatically at end of scope
-
-                    cleanup_handle.cleanup();
-                    Ok(())
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    log::warn!("Shutdown channel closed during execution; performing cleanup");
-                    cleanup_handle.cleanup();
-                    Ok(())
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    log::warn!("Missed shutdown signals during execution; performing cleanup");
-                    cleanup_handle.cleanup();
-                    Ok(())
-                }
-            }
-        }
-    }
+    // EventController will coordinate plugin shutdown automatically
+    result
 }
 
 async fn system_start(pid: u32) -> Result<(), NotificationError> {
@@ -280,109 +151,21 @@ async fn start_scanner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::time::{timeout, Duration};
 
     #[tokio::test]
     async fn test_main_is_async() {
         // Test that main function is now async
-        // This test should pass once we've converted to async
         assert!(true, "Main function is now async");
     }
 
     #[tokio::test]
-    async fn test_shutdown_coordinator_creation() {
-        let (coordinator, _rx) = ShutdownCoordinator::new();
-
-        // Should start with shutdown not requested
-        assert!(!coordinator.is_shutdown_requested());
-    }
-
-    #[tokio::test]
-    async fn test_shutdown_coordinator_trigger() {
-        let (coordinator, mut rx) = ShutdownCoordinator::new();
-
-        // Initially shutdown should not be requested
-        assert!(!coordinator.is_shutdown_requested());
-
-        // Trigger shutdown
-        coordinator.trigger_shutdown();
-
-        // Should now report shutdown requested
-        assert!(coordinator.is_shutdown_requested());
-
-        // Should receive shutdown signal
-        let signal_received = timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(signal_received.is_ok(), "Should receive shutdown signal");
-    }
-
-    #[tokio::test]
-    async fn test_shutdown_coordinator_multiple_subscribers() {
-        let (coordinator, _rx1) = ShutdownCoordinator::new();
-        let mut rx2 = coordinator.subscribe();
-        let mut rx3 = coordinator.subscribe();
-
-        // Trigger shutdown
-        coordinator.trigger_shutdown();
-
-        // All subscribers should receive the signal
-        let signal2 = timeout(Duration::from_millis(100), rx2.recv()).await;
-        let signal3 = timeout(Duration::from_millis(100), rx3.recv()).await;
+    async fn test_event_controller_integration() {
+        // Test that EventController::guard pattern works with simple logic
+        let result: Result<(), ScanError> = EventController::guard(|| async { Ok(()) }).await;
 
         assert!(
-            signal2.is_ok(),
-            "Subscriber 2 should receive shutdown signal"
+            result.is_ok(),
+            "EventController::guard should work with simple logic"
         );
-        assert!(
-            signal3.is_ok(),
-            "Subscriber 3 should receive shutdown signal"
-        );
-        assert!(coordinator.is_shutdown_requested());
-    }
-
-    #[tokio::test]
-    async fn test_shutdown_coordinator_idempotent_trigger() {
-        let (coordinator, mut rx) = ShutdownCoordinator::new();
-
-        // Should start with shutdown not requested
-        assert!(!coordinator.is_shutdown_requested());
-
-        // Trigger shutdown multiple times
-        coordinator.trigger_shutdown();
-        assert!(coordinator.is_shutdown_requested());
-
-        coordinator.trigger_shutdown();
-        assert!(coordinator.is_shutdown_requested());
-
-        coordinator.trigger_shutdown();
-        assert!(coordinator.is_shutdown_requested());
-
-        // Should receive at least one signal (multiple triggers send multiple signals)
-        let signal_received = timeout(Duration::from_millis(100), rx.recv()).await;
-        assert!(signal_received.is_ok(), "Should receive shutdown signal");
-
-        // State should remain consistently true
-        assert!(coordinator.is_shutdown_requested());
-    }
-
-    #[tokio::test]
-    async fn test_shutdown_coordinator_subscribe_after_trigger() {
-        let (coordinator, _rx) = ShutdownCoordinator::new();
-
-        // Trigger shutdown first
-        coordinator.trigger_shutdown();
-        assert!(coordinator.is_shutdown_requested());
-
-        // Subscribe after shutdown was triggered
-        let mut late_subscriber = coordinator.subscribe();
-
-        // Late subscriber should not receive the signal that was already sent
-        let no_signal = timeout(Duration::from_millis(50), late_subscriber.recv()).await;
-        assert!(
-            no_signal.is_err(),
-            "Late subscriber should not receive already-sent signal"
-        );
-
-        // But should still be able to detect shutdown state
-        assert!(coordinator.is_shutdown_requested());
     }
 }

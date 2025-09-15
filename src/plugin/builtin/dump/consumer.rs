@@ -1,5 +1,5 @@
 //! Consumer loop logic for DumpPlugin
-use super::{DumpPlugin, OutputFormat};
+use crate::plugin::builtin::dump::DumpPlugin;
 use crate::plugin::error::PluginResult;
 use crate::plugin::events::SYSTEM_SCAN_ID;
 use crate::plugin::traits::Plugin; // for plugin_info()
@@ -10,6 +10,7 @@ use log::error;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use crate::plugin::builtin::dump::OutputFormat;
 use tokio::sync::oneshot;
 
 impl DumpPlugin {
@@ -123,9 +124,6 @@ impl DumpPlugin {
             }
             OutputFormat::Compact => {
                 super::format::format_compact_typed(typed_msg, show_headers, use_colors)
-            }
-            OutputFormat::Raw => {
-                super::format::format_text_typed(typed_msg, show_headers, use_colors)
             }
             OutputFormat::Text => {
                 super::format::format_pretty_text_typed(typed_msg, show_headers, use_colors)

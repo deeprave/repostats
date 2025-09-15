@@ -10,11 +10,12 @@ use std::fmt;
 pub type PluginResult<T> = std::result::Result<T, PluginError>;
 
 /// Comprehensive error types for plugin system operations
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum PluginError {
     /// Plugin not found in registry
     PluginNotFound { plugin_name: String },
-
+    /// Initialization error
+    PluginInitializationError { plugin_name: String, cause: String },
     /// Plugin API version incompatible with system
     VersionIncompatible { message: String },
 
@@ -46,6 +47,11 @@ pub enum PluginError {
 
     /// Generic plugin error
     Generic { message: String },
+
+    /// Wrapped error from another system
+    Error {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 impl fmt::Display for PluginError {
@@ -58,6 +64,9 @@ impl fmt::Display for PluginError {
                 write!(f, "Version incompatible: {}", message)
             }
             PluginError::LoadError { plugin_name, cause } => {
+                write!(f, "Failed to load plugin '{}': {}", plugin_name, cause)
+            }
+            PluginError::PluginInitializationError { plugin_name, cause } => {
                 write!(f, "Failed to load plugin '{}': {}", plugin_name, cause)
             }
             PluginError::ExecutionError {
@@ -94,11 +103,22 @@ impl fmt::Display for PluginError {
             PluginError::Generic { message } => {
                 write!(f, "{}", message)
             }
+            PluginError::Error { source } => {
+                write!(f, "{}", source)
+            }
         }
     }
 }
 
 impl std::error::Error for PluginError {}
+
+impl From<crate::notifications::error::NotificationError> for PluginError {
+    fn from(error: crate::notifications::error::NotificationError) -> Self {
+        PluginError::Error {
+            source: Box::new(error),
+        }
+    }
+}
 
 impl ContextualError for PluginError {
     fn is_user_actionable(&self) -> bool {
@@ -107,6 +127,7 @@ impl ContextualError for PluginError {
             PluginError::Generic { .. } => true,
             PluginError::VersionIncompatible { .. } => true,
             PluginError::PluginNotFound { .. } => true,
+            PluginError::PluginInitializationError { .. } => true,
 
             // User configuration errors
             PluginError::ConfigurationError { .. } => true,
@@ -115,7 +136,8 @@ impl ContextualError for PluginError {
             // System/internal errors that users cannot directly fix
             PluginError::LoadError { .. }
             | PluginError::ExecutionError { .. }
-            | PluginError::AsyncError { .. } => false,
+            | PluginError::AsyncError { .. }
+            | PluginError::Error { .. } => false,
         }
     }
 

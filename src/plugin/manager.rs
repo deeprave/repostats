@@ -6,12 +6,12 @@
 use crate::app::cli::segmenter::CommandSegment;
 use crate::notifications::api::AsyncNotificationManager;
 use crate::notifications::api::{Event, EventFilter, PluginEventType};
-use crate::plugin::activation::{ActivationResult, PluginActivator};
+use crate::plugin::activation::PluginActivator;
 use crate::plugin::discovery::PluginDiscovery;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::initialization::PluginInitializer;
 use crate::plugin::registry::SharedPluginRegistry;
-use crate::plugin::types::{ActivePluginInfo, PluginInfo};
+use crate::plugin::types::PluginInfo;
 use log;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,9 +87,6 @@ pub struct PluginManager {
     /// Current API version for compatibility checking
     api_version: u32,
 
-    /// Currently active plugins (plugins matched to command segments)
-    active_plugins: ActivePluginInfo,
-
     /// Auto-active plugins (plugins that should be activated automatically)
     auto_active_plugins: Vec<String>,
 
@@ -106,10 +103,10 @@ pub struct PluginManager {
 
     /// Plugin completion tracking
     /// Maps plugin name to completion status
-    pub(crate) plugin_completion: Arc<RwLock<HashMap<String, bool>>>,
+    plugin_completion: Arc<RwLock<HashMap<String, bool>>>,
 
     /// Configuration for timeouts and thresholds
-    pub(crate) config: PluginManagerConfig,
+    config: PluginManagerConfig,
 
     /// Event receiver for continuous plugin event monitoring
     /// Uses Arc<Mutex<>> for safe concurrent access during plugin completion awaiting
@@ -136,10 +133,12 @@ impl PluginManager {
     /// Create a new plugin manager with custom configuration
     pub fn with_config(api_version: u32, config: PluginManagerConfig) -> Self {
         let notification_manager = crate::notifications::api::get_notification_service_arc();
+        // Create registry and set up notification manager
+        let registry = SharedPluginRegistry::new();
+
         Self {
-            registry: SharedPluginRegistry::new(),
+            registry,
             api_version,
-            active_plugins: ActivePluginInfo::new(),
             auto_active_plugins: Vec::new(),
             plugin_configs: HashMap::new(),
             notification_receivers: HashMap::new(),
@@ -213,25 +212,23 @@ impl PluginManager {
         Ok(())
     }
 
+    pub fn notification_manager(&self) -> Arc<Mutex<AsyncNotificationManager>> {
+        self.notification_manager.clone()
+    }
+
     /// Get shared access to the plugin registry
     pub fn registry(&self) -> &SharedPluginRegistry {
         &self.registry
     }
 
+    pub async fn get_active_plugins(&self) -> Vec<String> {
+        let registry = self.registry().inner().read().await;
+        registry.get_plugin_names()
+    }
+
     /// Get current API version
     pub fn api_version(&self) -> u32 {
         self.api_version
-    }
-
-    /// Get color configuration setting
-    fn get_use_colors_setting(&self) -> Option<bool> {
-        if std::env::var("FORCE_COLOR").is_ok() {
-            return Some(true);
-        }
-        if std::env::var("NO_COLOR").is_ok() {
-            return Some(false);
-        }
-        None // defer to auto (TTY) at point of use
     }
 
     // MARK: Helper methods to DRY up registry lookup patterns
@@ -241,7 +238,7 @@ impl PluginManager {
     where
         F: FnOnce(&dyn crate::plugin::traits::Plugin) -> R,
     {
-        let registry = self.registry.inner().read().await;
+        let registry = self.registry().inner().read().await;
         if let Some(plugin) = registry.get_plugin(plugin_name) {
             Some(f(plugin))
         } else {
@@ -316,17 +313,11 @@ impl PluginManager {
             instantiated_plugins.push((discovered.info, plugin));
         }
 
-        // Register plugins with the registry, holding the write lock only during registration
-        {
-            let mut registry = self.registry.inner().write().await;
-            for (_info, plugin) in instantiated_plugins {
-                registry.register_plugin(plugin)?;
-            }
-        } // Write lock is dropped here
-
-        // Deduplicate auto-active plugins
-        auto_active_plugins.sort();
-        auto_active_plugins.dedup();
+        for (_info, plugin) in instantiated_plugins {
+            self.registry
+                .register_plugin_with_notification(plugin)
+                .await?;
+        }
 
         // Store auto-active plugins for later processing
         self.auto_active_plugins = auto_active_plugins;
@@ -344,90 +335,61 @@ impl PluginManager {
     pub async fn activate_plugins(
         &mut self,
         command_segments: &[CommandSegment],
+        use_colors: bool,
     ) -> PluginResult<()> {
         // Get all available plugins with their metadata
-        let registry = self.registry.inner().read().await;
-        let all_plugin_names = registry.get_plugin_names();
+        let plugins = {
+            let registry = self.registry().inner().read().await;
+            let plugin_names = registry.get_plugin_names();
+            let mut plugins = HashMap::new();
 
-        // Collect plugin metadata for the activator
-        let mut plugins_with_functions = Vec::new();
-        let mut plugins_with_info = Vec::new();
-
-        for plugin_name in &all_plugin_names {
-            let functions = self
-                .get_advertised_functions(plugin_name)
-                .await
-                .unwrap_or_default();
-            let info = self.get_plugin_info_by_name(plugin_name).await;
-            plugins_with_functions.push((plugin_name.clone(), functions, info.clone()));
-            plugins_with_info.push((plugin_name.clone(), info));
-        }
-        drop(registry);
+            for plugin_name in plugin_names {
+                if let Some(plugin) = registry.get_plugin(&plugin_name) {
+                    plugins.insert(plugin_name.clone(), plugin.plugin_info());
+                }
+            }
+            plugins
+        };
 
         // Create activator with auto-active plugins
-        let activator = PluginActivator::new(self.auto_active_plugins.clone());
+        let mut activator = PluginActivator::new(plugins);
+        let active_segments = activator.process_segments(command_segments)?;
+        let active_plugins = active_segments.keys().cloned().collect::<Vec<_>>();
+        let plugin_configs = self.plugin_configs.clone();
+        let queue_manager = Arc::new(crate::queue::api::get_queue_service());
 
-        // Process segment matching
-        let ActivationResult {
-            mut plugins_to_activate,
-            mut active_output_plugin,
-        } = activator.process_segments(command_segments, &plugins_with_functions)?;
+        {
+            // Initialize all active plugins
+            let initializer = PluginInitializer::new(self, use_colors);
+            // Mark them active
+            initializer.activate_plugins(&active_plugins).await?;
+            // Initialize them
+            let consumer_count = initializer
+                .initialize_plugins(&active_segments, &plugin_configs, &queue_manager)
+                .await?;
 
-        // Process auto-activation
-        let auto_activated =
-            activator.process_auto_activation(&plugins_with_info, &mut active_output_plugin);
-        plugins_to_activate.extend(auto_activated);
-
-        // Apply Output plugin uniqueness constraint
-        plugins_to_activate = activator.apply_output_constraint(
-            plugins_to_activate,
-            &active_output_plugin,
-            &plugins_with_info,
-        );
-
-        // Initialize all active plugins
-        let mut registry = self.registry.inner().write().await;
-        let initializer = PluginInitializer::new(
-            self.notification_manager.clone(),
-            self.get_use_colors_setting(),
-        );
-
-        let queue = Arc::new(crate::queue::api::get_queue_service());
-
-        // Activate and prepare plugins for initialization
-        for (plugin_name, _) in &plugins_to_activate {
-            self.active_plugins.add(plugin_name);
-            registry.activate_plugin(plugin_name)?;
+            if consumer_count < 1 {
+                Err(PluginError::Generic {
+                    message: "No processing plugins available".to_string(),
+                })
+            } else {
+                // And finally execute active plugins
+                initializer.execute_active_plugins().await?;
+                Ok(())
+            }
         }
-
-        // Initialize plugins using the helper
-        initializer
-            .initialize_plugins(
-                &mut registry,
-                &plugins_to_activate,
-                &self.plugin_configs,
-                &queue,
-            )
-            .await?;
-
-        drop(registry);
-
-        // Ensure fallback Output plugin if needed
-        self.ensure_output_plugin_fallback().await?;
-
-        Ok(())
     }
 
-    /// Get currently active plugins
-    pub fn get_active_plugins(&self) -> Vec<String> {
-        self.active_plugins.get_active_plugins()
+    /// Check if any active plugin suppresses progress display
+    pub async fn should_suppress_progress(&self) -> bool {
+        self.get_combined_requirements().await.suppresses_progress()
     }
 
     /// Get combined requirements from all active plugins
     pub async fn get_combined_requirements(&self) -> crate::scanner::types::ScanRequires {
         use crate::scanner::types::ScanRequires;
 
-        let registry = self.registry.inner().read().await;
+        let registry = self.registry().inner().read().await;
         let mut combined = ScanRequires::NONE;
 
         // Only get requirements from active plugins, not all plugins
@@ -524,7 +486,7 @@ impl PluginManager {
         use crate::notifications::api::EventFilter;
 
         let mut notification_manager = get_notification_service().await;
-        let active_plugin_names = self.active_plugins.get_active_plugins();
+        let active_plugin_names = self.get_active_plugins().await;
 
         for plugin_name in &active_plugin_names {
             let subscriber_id = format!("plugin-{}-notifications", plugin_name);
@@ -612,11 +574,6 @@ impl PluginManager {
         }
     }
 
-    /// Execute the resolved command (when ready)
-    pub fn execute(&self) -> PluginResult<()> {
-        Ok(())
-    }
-
     /// Notify all active plugins about system shutdown
     pub async fn notify_plugins_shutdown(&self) -> PluginResult<()> {
         use crate::notifications::api::get_notification_service;
@@ -626,7 +583,7 @@ impl PluginManager {
         let mut notification_manager = get_notification_service().await;
 
         // Get list of all active plugins
-        let registry = self.registry.inner().read().await;
+        let registry = self.registry().inner().read().await;
         let active_plugin_names: Vec<String> = registry.get_active_plugins();
         drop(registry);
 
@@ -661,7 +618,7 @@ impl PluginManager {
 
     /// List plugins with option to include all plugins or just active ones
     pub async fn list_plugins_with_filter(&self, active_only: bool) -> Vec<PluginInfo> {
-        let registry = self.registry.inner().read().await;
+        let registry = self.registry().inner().read().await;
         let mut plugins = Vec::new();
 
         // Get plugin info for plugins based on filter
@@ -708,7 +665,7 @@ impl PluginManager {
         }
 
         let active_plugin_names = {
-            let registry = self.registry.inner().read().await;
+            let registry = self.registry().inner().read().await;
             registry.get_active_plugins()
         };
 
@@ -823,6 +780,29 @@ impl PluginManager {
                                             "Plugin '{}' marked as completed",
                                             plugin_event.plugin_id
                                         );
+
+                                        // Release completion lock before calling registry
+                                        drop(completion);
+
+                                        // Automatically deregister completed plugin and publish event
+                                        if let Err(e) = self
+                                            .registry
+                                            .deregister_plugin_with_notification(
+                                                &plugin_event.plugin_id,
+                                            )
+                                            .await
+                                        {
+                                            log::warn!(
+                                                "Failed to deactivate completed plugin '{}': {}",
+                                                plugin_event.plugin_id,
+                                                e
+                                            );
+                                        } else {
+                                            log::debug!(
+                                                "Plugin '{}' deactivated after completion",
+                                                plugin_event.plugin_id
+                                            );
+                                        }
                                     }
                                     PluginEventType::KeepAlive => {
                                         // Reset timeout on keep-alive
@@ -938,7 +918,7 @@ impl PluginManager {
         self.shutdown_requested.store(true, Ordering::Release);
 
         let active_plugin_names = {
-            let registry = self.registry.inner().read().await;
+            let registry = self.registry().inner().read().await;
             registry.get_active_plugins()
         };
 
@@ -952,7 +932,7 @@ impl PluginManager {
 
         // Call cleanup on all active plugins (plugins handle their own consumer stopping internally)
         let stop_result = timeout(stop_timeout, async {
-            let mut registry = self.registry.inner().write().await;
+            let mut registry = self.registry().inner().write().await;
 
             for plugin_name in &active_plugin_names {
                 if let Some(plugin) = registry.get_plugin_mut(plugin_name) {
@@ -1051,47 +1031,6 @@ impl PluginManager {
         let completion = self.plugin_completion.read().await;
         completion.len()
     }
-
-    /// Ensure fallback Output plugin is activated when no Output plugins are active
-    /// This provides automatic fallback to the built-in OutputPlugin when external
-    /// Output plugins are not available or have been deactivated
-    pub async fn ensure_output_plugin_fallback(&mut self) -> PluginResult<()> {
-        let registry = self.registry.inner().read().await;
-
-        // Check if any Output plugin is currently active
-        let active_plugins = self.active_plugins.get_active_plugins();
-        let has_active_output_plugin = active_plugins.iter().any(|plugin_name| {
-            if let Some(plugin) = registry.get_plugin(plugin_name) {
-                plugin.plugin_info().plugin_type == crate::plugin::types::PluginType::Output
-            } else {
-                false
-            }
-        });
-
-        // If no Output plugin is active, activate the built-in OutputPlugin
-        if !has_active_output_plugin {
-            let builtin_output_exists = registry.has_plugin("output");
-            drop(registry); // Release read lock before trying to activate
-
-            if builtin_output_exists {
-                log::info!("No Output plugin active, activating built-in OutputPlugin fallback");
-
-                // Activate the built-in output plugin
-                self.registry.activate_plugin("output").await?;
-
-                // Add to active plugins list if not already there
-                if !self.active_plugins.contains("output") {
-                    self.active_plugins.add("output");
-                }
-
-                log::trace!("Built-in OutputPlugin fallback activated successfully");
-            } else {
-                log::warn!("No Output plugin active and built-in OutputPlugin not found");
-            }
-        }
-
-        Ok(())
-    }
 }
 
 /// Summary of plugin stop operation results
@@ -1183,7 +1122,7 @@ mod tests {
             Ok(())
         }
 
-        async fn execute(&mut self, _args: &[String]) -> PluginResult<()> {
+        async fn execute(&mut self) -> PluginResult<()> {
             Ok(())
         }
 

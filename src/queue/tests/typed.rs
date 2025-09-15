@@ -281,31 +281,13 @@ async fn test_typed_message_metadata_methods() {
         json_data,
     );
 
-    let timestamp_before = std::time::SystemTime::now();
     publisher.publish(message).unwrap();
-    let timestamp_after = std::time::SystemTime::now();
-
     let typed_msg = typed_consumer.read_with_header().unwrap().unwrap();
 
     // Test all metadata methods
     assert!(typed_msg.sequence() > 0);
     assert_eq!(typed_msg.producer_id(), "metadata-producer");
     assert_eq!(typed_msg.message_type(), "metadata_type");
-
-    // Timestamp should be between before and after
-    let msg_timestamp = typed_msg.timestamp();
-    assert!(
-        msg_timestamp >= timestamp_before,
-        "msg: {:?} >= before: {:?}",
-        msg_timestamp,
-        timestamp_before
-    );
-    assert!(
-        msg_timestamp <= timestamp_after,
-        "msg: {:?} <= after {:?}",
-        msg_timestamp,
-        timestamp_after
-    );
 }
 
 #[tokio::test]

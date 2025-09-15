@@ -43,31 +43,3 @@ pub enum PluginType {
     Output,
     Notification,
 }
-
-use std::collections::HashSet;
-
-/// Information about active plugins
-#[derive(Debug, Clone)]
-pub struct ActivePluginInfo {
-    active_plugins: HashSet<String>,
-}
-
-impl ActivePluginInfo {
-    pub fn new() -> Self {
-        Self {
-            active_plugins: HashSet::new(),
-        }
-    }
-
-    pub fn add(&mut self, plugin_name: &str) {
-        self.active_plugins.insert(plugin_name.to_string());
-    }
-
-    pub fn contains(&self, plugin_name: &str) -> bool {
-        self.active_plugins.contains(plugin_name)
-    }
-
-    pub fn get_active_plugins(&self) -> Vec<String> {
-        self.active_plugins.iter().cloned().collect()
-    }
-}
