@@ -4,8 +4,20 @@
 //! It splits the command line into global arguments and command-specific argument segments.
 //! This is a pure, self-contained argument parser with no external dependencies or concerns.
 
-use crate::app::startup::StartupError;
+use thiserror::Error;
 
+/// Module-local result type for command segmentation operations
+type Result<T> = std::result::Result<T, CommandSegmentationError>;
+
+/// Errors that can occur during command line segmentation
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum CommandSegmentationError {
+    /// An unexpected argument was found after the global arguments section
+    #[error("Unexpected argument '{arg}' found after global args")]
+    UnexpectedArgumentAfterGlobalArgs { arg: String },
+}
+
+/// Represents a segment of command line arguments for a specific command
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandSegment {
     /// Command name
@@ -14,6 +26,7 @@ pub struct CommandSegment {
     pub args: Vec<String>,
 }
 
+/// Command line segmenter that splits arguments by command boundaries
 #[derive(Debug)]
 pub struct CommandSegmenter {
     known_commands: Vec<String>,
@@ -27,45 +40,69 @@ impl CommandSegmenter {
         }
     }
 
-    /// Check if an argument is a known command
-    fn is_known_command(&self, arg: &str) -> bool {
-        self.known_commands.contains(&arg.to_string())
-    }
-
     /// Segment remaining arguments after global args have been identified
     ///
-    pub fn segment_commands(&self, args: &[String]) -> Result<Vec<CommandSegment>, StartupError> {
+    /// This method takes the original args and the pre-collected global args,
+    /// then processes the remaining arguments for command segmentation.
+    ///
+    /// Example:
+    /// - args: ["repostats", "--verbose", "--config", "file.toml", "scan", "--since", "1week", "status", "--format", "json"]
+    /// - global_args: ["repostats", "--verbose", "--config", "file.toml"]
+    ///   Output:
+    /// - command_segments: [
+    ///   { command: "scan", args: ["--since", "1week"] },
+    ///   { command: "status", args: ["--format", "json"] }
+    ///   ]
+    pub fn segment_commands_only(
+        &self,
+        args: &[String],
+        global_args: &[String],
+    ) -> Result<Vec<CommandSegment>> {
         let mut command_segments = Vec::new();
         let mut current_command: Option<String> = None;
         let mut current_args = Vec::new();
 
-        for arg in args {
+        // Skip the global args and process the remaining arguments
+        let remaining_args = &args[global_args.len()..];
+
+        for arg in remaining_args {
             if self.is_known_command(arg) {
-                // Previusly acccumulated command line
-                if current_command.is_some() {
+                // Save previous command segment if any
+                if let Some(command_name) = current_command.take() {
                     command_segments.push(CommandSegment {
-                        command_name: current_command.unwrap(),
+                        command_name,
                         args: std::mem::take(&mut current_args),
                     });
                 }
-                // New command
-                current_command = Some(arg.to_string());
-                current_args = vec![arg.to_string()];
+
+                // Start new command segment
+                current_command = Some(arg.clone());
             } else if current_command.is_some() {
                 // We're in a command context, add to current args
                 current_args.push(arg.clone());
             } else {
-                // command or arg not known
-                return Err(StartupError::UnexpectedArgument { arg: arg.clone() });
+                // This shouldn't happen if global args were properly identified
+                return Err(
+                    CommandSegmentationError::UnexpectedArgumentAfterGlobalArgs {
+                        arg: arg.clone(),
+                    },
+                );
             }
         }
-        if current_command.is_some() {
-            // wrap up the last command
+
+        // Save final command segment if any
+        if let Some(command_name) = current_command {
             command_segments.push(CommandSegment {
-                command_name: current_command.unwrap(),
-                args: std::mem::take(&mut current_args),
+                command_name,
+                args: current_args,
             });
         }
+
         Ok(command_segments)
+    }
+
+    /// Check if an argument is a known command
+    fn is_known_command(&self, arg: &str) -> bool {
+        self.known_commands.contains(&arg.to_string())
     }
 }

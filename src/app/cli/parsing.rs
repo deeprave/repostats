@@ -131,7 +131,7 @@ impl Args {
                     .help("Configuration file path"),
             )
             .arg(
-                clap::Arg::new("plugin_dirs")
+                clap::Arg::new("plugin-dirs")
                     .short('p')
                     .long("plugin-dirs")
                     .value_name("DIR")
@@ -533,7 +533,7 @@ impl Args {
         if let Some(config_file) = matches.get_one::<PathBuf>("config_file") {
             args.config_file = Some(config_file.clone());
         }
-        if let Some(plugin_dirs) = matches.get_many::<String>("plugin_dirs") {
+        if let Some(plugin_dirs) = matches.get_many::<String>("plugin-dirs") {
             args.plugin_dirs.extend(plugin_dirs.cloned());
         }
         if let Some(plugin_exclusions) = matches.get_many::<String>("plugin_exclusions") {

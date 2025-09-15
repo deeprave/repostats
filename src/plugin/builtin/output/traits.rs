@@ -60,9 +60,9 @@ impl ExportFormat {
         }
     }
 
-    pub fn aliases(&self) -> &'static [&'static str] {
+    pub fn aliases(&self) -> Vec<&str> {
         match self {
-            Self::Text => &[
+            Self::Text => Vec::from([
                 "txt",
                 "log",
                 "out",
@@ -71,17 +71,20 @@ impl ExportFormat {
                 "env",
                 "properties",
                 "rst",
-            ],
-            Self::Json => &["jsn", "geojson", "har", "map", "avsc", "json5", "jsonc"],
-            Self::Csv => &[],
-            Self::Tsv => &["tab"],
-            Self::Xml => &[
+                "out",
+            ]),
+            Self::Json => Vec::from(["jsn", "geojson", "har", "map", "avsc", "json5", "jsonc"]),
+            Self::Csv => Vec::from([]),
+            Self::Tsv => Vec::from(["tab"]),
+            Self::Xml => Vec::from([
                 "xsd", "xlt", "dtd", "xsl", "rss", "atom", "svg", "gml", "project",
-            ],
-            Self::Html => &["htm", "xhtml", "xht", "xhtm", "shtml"],
-            Self::Markdown => &["markdown", "mdown", "mkd", "mdx"],
-            Self::Yaml => &["yml"],
-            Self::Template => &["j2", "html", "tpl", "tmpl", "template", "jinja", "jinja2"],
+            ]),
+            Self::Html => Vec::from(["htm", "xhtml", "xht", "xhtm", "shtml"]),
+            Self::Markdown => Vec::from(["markdown", "mdown", "mkd", "mdx"]),
+            Self::Yaml => Vec::from(["yml"]),
+            Self::Template => {
+                Vec::from(["j2", "html", "tpl", "tmpl", "template", "jinja", "jinja2"])
+            }
         }
     }
 
@@ -100,8 +103,10 @@ impl ExportFormat {
     }
 
     /// Get the common file extensions for this format
-    pub fn file_exts(&self) -> impl Iterator<Item = &str> {
-        std::iter::once(self.file_ext()).chain(self.aliases().iter().copied())
+    pub fn file_exts(&self) -> Vec<&str> {
+        std::iter::once(self.file_ext())
+            .chain(self.aliases().into_iter())
+            .collect()
     }
 
     /// Parse format from string name (handles both CLI format strings and function names)

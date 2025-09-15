@@ -16,7 +16,7 @@ pub enum StartupError {
     /// Plugin operation failed
     PluginFailed { error: PluginError },
     /// Command segmentation failed
-    UnexpectedArgument { arg: String },
+    CommandSegmentationFailed { message: String },
     /// Query parameter validation failed
     QueryValidationFailed { message: String },
     /// Display operation failed
@@ -37,8 +37,8 @@ impl fmt::Display for StartupError {
             StartupError::PluginFailed { error } => {
                 write!(f, "Plugin operation failed: {}", error)
             }
-            StartupError::UnexpectedArgument { arg } => {
-                write!(f, "Unexpected argument: {}", arg)
+            StartupError::CommandSegmentationFailed { message } => {
+                write!(f, "Command segmentation failed: {}", message)
             }
             StartupError::QueryValidationFailed { message } => {
                 write!(f, "Invalid query parameters: {}", message)
@@ -61,7 +61,7 @@ impl ContextualError for StartupError {
             // Clear user-actionable errors that users can fix
             StartupError::ValidationFailed { .. } => true,
             StartupError::QueryValidationFailed { .. } => true,
-            StartupError::UnexpectedArgument { .. } => true,
+            StartupError::CommandSegmentationFailed { .. } => true,
             StartupError::ConfigurationError { .. } => true,
             // Surface user-actionable plugin errors (like unknown args) instead of hiding
             StartupError::PluginFailed { error } if error.is_user_actionable() => true,
@@ -80,7 +80,7 @@ impl ContextualError for StartupError {
                 error.user_message()
             }
             StartupError::QueryValidationFailed { message } => Some(message),
-            StartupError::UnexpectedArgument { arg } => Some(arg),
+            StartupError::CommandSegmentationFailed { message } => Some(message),
             StartupError::ConfigurationError { message } => Some(message),
             StartupError::PluginFailed { error } if error.is_user_actionable() => {
                 error.user_message()
@@ -111,12 +111,22 @@ pub async fn startup(
     use super::cli::initial_args;
     use super::cli::segmenter::CommandSegmenter;
     use crate::core::logging::{init_logging, reconfigure_logging};
+    use crate::core::strings::title_case;
 
+    // Stage 1: Initial parsing for configuration discovery
     let args = initial_args(command_name)?;
+    let _command_title = title_case(command_name);
     let use_color = args
         .color
         .unwrap_or_else(|| std::io::IsTerminal::is_terminal(&std::io::stdout()));
 
+    // Check if --plugins flag was provided (early exit)
+    if args.plugins {
+        log::debug!("--plugins flag detected, will list plugins after discovery");
+        // Continue with minimal setup to get to plugin discovery
+    }
+
+    // 1.1 Initialize logging
     let log_file_str = args
         .log_file
         .as_ref()
@@ -132,16 +142,25 @@ pub async fn startup(
         });
     }
 
+    // Stage 2: Command segmentation and config parsing
     let mut final_args = Args::new();
     let toml_config =
         Args::parse_config_file_with_raw_config(&mut final_args, args.config_file.clone()).await;
 
+    // Determine plugin directories:
+    // 1. CLI args override everything
+    // 2. Config file if no CLI args
+    // 3. Default fallback paths if neither CLI nor config
     let plugin_dirs = if !args.plugin_dirs.is_empty() {
         args.plugin_dirs.clone()
+    } else if !final_args.plugin_dirs.is_empty() {
+        final_args.plugin_dirs.clone()
     } else {
+        // Default fallback paths
         vec![]
     };
 
+    // Stage 2: Reconfigure logging with final values
     let log_level = args.log_level.clone().or(final_args.log_level.clone());
     let log_format = args.log_format.clone().or(final_args.log_format.clone());
     let log_file = log_file_str.clone().or(final_args
@@ -156,12 +175,13 @@ pub async fn startup(
     ) {
         return Err(StartupError::LoggingInitFailed {
             message: format!(
-                "Logging configuration failure: {}. level={:?}, format={:?}, file={:?}, color={}",
+                "Failed to reconfigure logging system: {}. Configuration: level={:?}, format={:?}, file={:?}, color={}",
                 e, log_level, log_format, log_file, use_color
-            ),
+            )
         });
     }
 
+    // Stage 3: Final global args parsing with collected arguments
     Args::parse_from_args(&mut final_args, command_name, &args.global_args, args.color);
 
     // Validate CLI arguments before proceeding
@@ -169,59 +189,92 @@ pub async fn startup(
         return Err(StartupError::ValidationFailed { error: e });
     }
 
+    // Configure plugin manager timeout from CLI args (respects user configuration)
+    log::trace!("Configuring plugin manager timeout from CLI args");
     let timeout_duration = final_args.plugin_timeout_duration();
     let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
+    log::trace!("Acquired plugin manager lock for timeout configuration");
     if let Err(e) = plugin_manager.configure_plugin_timeout(timeout_duration) {
         return Err(StartupError::PluginFailed { error: e });
     }
-    drop(plugin_manager);
+    log::debug!("Configured plugin manager timeout: {:?}", timeout_duration);
+    log::trace!("Plugin manager timeout configuration completed");
+    drop(plugin_manager); // Explicitly release the plugin manager lock before discover_commands
 
-    log::trace!("Started command discovery");
+    // Stage 4: Command discovery and segmentation
+    log::trace!("Starting command discovery phase");
     let commands = discover_commands(&plugin_dirs, &args.plugin_exclusions)
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
     log::trace!(
-        "Command discovery completed, found {} commands",
+        "Command discovery phase completed, found {} commands",
         commands.len()
     );
 
+    // Check if --plugins flag was provided (after plugin discovery, before segmentation)
     if args.plugins {
-        log::trace!("listing discovered plugins");
+        log::debug!("--plugins flag detected, listing all discovered plugins");
         let plugin_manager = crate::plugin::api::get_plugin_service().await;
         let plugins = plugin_manager.list_plugins_with_filter(false).await;
+
         if plugins.is_empty() {
             return Err(StartupError::ConfigurationError {
-                message: "No plugins available".to_string(),
+                message: "No plugins available after discovery".to_string(),
             });
         }
+
         display_plugin_table(plugins, use_color).map_err(|e| StartupError::DisplayFailed {
             message: e.to_string(),
         })?;
+
+        // For --plugins flag, we return success with no scanner manager (indicating early exit)
         return Ok(None);
     }
 
     let segmenter = CommandSegmenter::with_commands(commands);
     let all_args: Vec<String> = std::env::args().collect();
-    let remaining_args = &all_args[args.global_args.len()..];
+    let command_segments = segmenter
+        .segment_commands_only(&all_args, &args.global_args)
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("Unexpected argument") && error_msg.contains("found after global")
+            {
+                // Extract the unknown command from the error message for better UX
+                if let Some(start) = error_msg.find("'") {
+                    if let Some(end) = error_msg.rfind("'") {
+                        if start < end {
+                            let unknown_cmd = &error_msg[start + 1..end];
+                            return StartupError::CommandSegmentationFailed {
+                                message: format!("Unknown command '{}'", unknown_cmd),
+                            };
+                        }
+                    }
+                }
+            }
 
-    log::trace!("Command segment parsing: {:?}", remaining_args);
-    let command_segments = segmenter.segment_commands(remaining_args)?;
+            // Fallback for other segmentation errors
+            StartupError::CommandSegmentationFailed { message: error_msg }
+        })?;
 
-    log::trace!("Plugin configuration and service validation");
-    configure_plugins(&command_segments, toml_config.as_ref(), use_color).await?;
+    // Stage 5: Plugin configuration (validate service dependencies first)
+    log::debug!("Starting plugin configuration and service validation");
+    configure_plugins(&command_segments, toml_config.as_ref()).await?;
 
-    log::trace!("Building repository query");
+    // Stage 6: Build query parameters from TOML config and CLI arguments
     let query_params = build_query_params(&final_args, toml_config.as_ref()).await?;
+
+    // Stage 7: Scanner configuration and system integration
     let normalized_repositories = final_args.normalized_repositories();
+    // Extract checkout settings from CLI arguments
     let checkout_settings = final_args.checkout_settings();
+
     // Extract case sensitivity override from CLI arguments
     let case_sensitivity_override = final_args.resolve_case_sensitivity_override();
 
-    log::trace!(
+    log::debug!(
         "Starting scanner configuration with {} repositories",
         normalized_repositories.len()
     );
-
     let scanner_manager_opt = configure_scanner(
         &normalized_repositories,
         query_params,
@@ -271,7 +324,10 @@ async fn discover_commands(
     log::trace!("discover_commands plugin discovery completed successfully");
 
     let plugins = plugin_manager.list_plugins_with_filter(false).await;
-    log::trace!("discover_commands found {} plugins", plugins.len());
+    log::trace!(
+        "discover_commands found {} plugins after listing",
+        plugins.len()
+    );
 
     // Validate that we found plugins
     if plugins.is_empty() {
@@ -293,7 +349,10 @@ async fn discover_commands(
 
     // Validate that we have commands
     if command_names.is_empty() {
-        let error_msg = format!("Found {} plugins but no matching commands", plugins.len());
+        let error_msg = format!(
+            "Found {} plugins but no commands available (plugins may not implement required functions)",
+            plugins.len()
+        );
         log::error!("{}", error_msg);
         return Err(PluginError::LoadError {
             plugin_name: "plugin_discovery".to_string(),
@@ -312,7 +371,6 @@ async fn discover_commands(
 async fn configure_plugins(
     command_segments: &[super::cli::segmenter::CommandSegment],
     toml_config: Option<&toml::Table>,
-    use_color: bool,
 ) -> StartupResult<()> {
     use log;
 
@@ -323,32 +381,34 @@ async fn configure_plugins(
         });
     }
 
+    // Get plugin manager independently to avoid deadlocks
     let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
+
+    // Step 1: Set plugin configurations from TOML config if available
     if let Some(config) = toml_config {
         if let Err(e) = plugin_manager.set_plugin_configs(config) {
             return Err(StartupError::PluginFailed { error: e });
         }
     }
 
-    log::trace!("Activating plugins {:?}", command_segments);
+    // Step 2: Activate plugins based on command segments
     plugin_manager
-        .activate_plugins(command_segments, use_color)
+        .activate_plugins(command_segments)
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
-    log::trace!("Initialising active plugins");
+    // Step 3: Initialise active plugins with their configurations
     plugin_manager
         .initialize_active_plugins()
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
-    log::trace!("Setup plugin notification subscribes");
+    // Step 4: Setup notification subscribers for plugins and plugin manager
     plugin_manager
         .setup_plugin_notification_subscribers()
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
-    log::trace!("Setup manager notification subscriber");
     plugin_manager
         .setup_system_notification_subscriber()
         .await
@@ -574,6 +634,7 @@ async fn configure_scanner(
     }; // plugin_manager lock is released here
 
     // Step 3: Create scanners for all repositories using batch method with all-or-nothing semantics
+    let _queue_manager = crate::queue::api::get_queue_service();
     match scanner_manager
         .create_scanners(
             &repositories_to_scan,

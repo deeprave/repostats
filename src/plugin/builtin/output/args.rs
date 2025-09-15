@@ -34,6 +34,61 @@ impl Default for OutputConfig {
 }
 
 impl OutputConfig {
+    /// Parse configuration from plugin arguments and CLI parsing
+    /// This follows the same pattern as DumpPlugin - colors are handled by PluginConfig
+    pub fn from_plugin_config_and_args(
+        config: &PluginConfig,
+        args: &std::collections::HashMap<String, String>,
+        flags: &std::collections::HashSet<String>,
+    ) -> PluginResult<Self> {
+        let mut output_config = OutputConfig::default();
+
+        // Parse output destination from args
+        if let Some(output_arg) = args.get("output").or_else(|| args.get("o")) {
+            output_config.destination = if output_arg == "-" || output_arg.is_empty() {
+                OutputDestination::Stdout
+            } else {
+                OutputDestination::File(output_arg.clone())
+            };
+        }
+
+        // Parse format - check format flags first, then explicit format
+        if flags.contains("json") {
+            output_config.format = ExportFormat::Json;
+        } else if flags.contains("csv") {
+            output_config.format = ExportFormat::Csv;
+        } else if flags.contains("xml") {
+            output_config.format = ExportFormat::Xml;
+        } else if flags.contains("html") {
+            output_config.format = ExportFormat::Html;
+        } else if flags.contains("markdown") {
+            output_config.format = ExportFormat::Markdown;
+        } else if let Some(format_str) = args.get("format").or_else(|| args.get("f")) {
+            output_config.format = ExportFormat::from_str(format_str);
+        } else {
+            // Auto-detect format from file extension if writing to file
+            if let OutputDestination::File(ref path) = output_config.destination {
+                let detected = ExportFormat::from_file_path(path);
+                output_config.format = if matches!(detected, ExportFormat::Text) {
+                    ExportFormat::Json
+                } else {
+                    detected
+                };
+            }
+        }
+
+        // Use colors from PluginConfig - startup code already handled TTY detection
+        // Disable colors for file output regardless of config
+        output_config.use_colors =
+            if matches!(output_config.destination, OutputDestination::File(_)) {
+                false
+            } else {
+                config.use_colors.unwrap_or(false)
+            };
+
+        Ok(output_config)
+    }
+
     /// Check if this configuration suppresses progress output
     /// Progress is suppressed when writing to stdout (including '-')
     /// because progress would interfere with the data output
@@ -55,13 +110,27 @@ impl OutputConfig {
 }
 
 impl OutputPlugin {
+    /// Extract function name from the args array (first arg with --function= prefix)
+    /// Returns (function_name, remaining_args)
+    fn extract_function_name(args: &[String]) -> (String, Vec<String>) {
+        if let Some(first_arg) = args.first() {
+            if let Some(function_name) = first_arg.strip_prefix("--function=") {
+                return (function_name.to_string(), args[1..].to_vec());
+            }
+        }
+        // Fallback to plugin name if no function specified
+        ("output".to_string(), args.to_vec())
+    }
+
     pub(super) async fn args_parse(
         &mut self,
         args: &[String],
         config: &PluginConfig,
     ) -> PluginResult<()> {
+        // Extract the unction name from args (passed by plugin activation)
+        let (function_name, actual_args) = Self::extract_function_name(args);
+
         // Detect format based on function name
-        let function_name = args[0].clone();
         let detected_format = ExportFormat::from_str(&function_name);
 
         let info = self.plugin_info();
@@ -72,9 +141,10 @@ impl OutputPlugin {
             config.use_colors,
         )
         .arg(
-            Arg::new("outfile")
+            Arg::new("output")
                 .short('o')
-                .long("outfile")
+                .long("output")
+                .alias("outfile")
                 .value_name("FILE")
                 .help("Write output to FILE (use '-' for stdout)")
                 .value_parser(clap::value_parser!(String)),
@@ -140,10 +210,10 @@ impl OutputPlugin {
                 .help("Use TSV (Tab-Separated Values) output format"),
         );
 
-        let matches = parser.parse(&args)?;
+        let matches = parser.parse(&actual_args)?;
 
         // Parse output destination - check command line args first, then config
-        if let Some(output_path) = matches.get_one::<String>("outfile") {
+        if let Some(output_path) = matches.get_one::<String>("output") {
             self.output_destination = if output_path == "-" {
                 Some("-".to_string())
             } else {
@@ -151,16 +221,22 @@ impl OutputPlugin {
             };
         } else {
             // Check config for output setting
-            let config_outfile = config.get_string("outfile", "");
-            if !config_outfile.is_empty() {
-                self.output_destination = if config_outfile == "-" {
+            let config_output = config.get_string("output", "");
+            if !config_output.is_empty() {
+                self.output_destination = if config_output == "-" {
                     Some("-".to_string())
                 } else {
-                    Some(config_outfile)
+                    Some(config_output)
                 };
             }
         }
 
+        // Parse format with correct priority order:
+        // 1. Template path (highest priority)
+        // 2. Explicit format flags/options (user override)
+        // 3. Function name detection (automatic)
+        // 4. File extension detection (fallback)
+        // 5. Console format (final fallback)
         let format = if let Some(template_path) = matches.get_one::<PathBuf>("template-path") {
             // Template path provided - force template format and store path
             self.template_path = Some(template_path.to_string_lossy().to_string());

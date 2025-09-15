@@ -8,7 +8,6 @@ use crate::plugin::args::PluginConfig;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::registry::PluginRegistry;
 use crate::queue::api::QueueManager;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -17,14 +16,14 @@ pub struct PluginInitializer {
     /// Notification manager for plugins
     notification_manager: Arc<Mutex<AsyncNotificationManager>>,
     /// Whether to use colors in output
-    use_colors: bool,
+    use_colors: Option<bool>,
 }
 
 impl PluginInitializer {
     /// Create a new PluginInitializer
     pub fn new(
         notification_manager: Arc<Mutex<AsyncNotificationManager>>,
-        use_colors: bool,
+        use_colors: Option<bool>,
     ) -> Self {
         Self {
             notification_manager,
@@ -39,16 +38,13 @@ impl PluginInitializer {
         plugin_name: &str,
         args: &[String],
         plugin_toml_config: Option<&toml::Table>,
-        queue_manager: &Arc<QueueManager>,
-    ) -> PluginResult<bool> {
+        queue: &Arc<QueueManager>,
+    ) -> PluginResult<()> {
         // Create plugin config
         let plugin_config = if let Some(toml_table) = plugin_toml_config {
             PluginConfig::from_toml(self.use_colors, toml_table)
         } else {
-            PluginConfig {
-                use_colors: self.use_colors,
-                ..PluginConfig::default()
-            }
+            PluginConfig::default()
         };
 
         // Get the plugin from registry
@@ -72,16 +68,16 @@ impl PluginInitializer {
                 cause: format!("Failed to initialize plugin: {}", e),
             })?;
 
-        plugin.parse_plugin_arguments(&args, &plugin_config).await?;
+        // Parse plugin arguments
+        plugin.parse_plugin_arguments(args, &plugin_config).await?;
 
         // Inject consumer if this is a ConsumerPlugin
         if let Some(consumer_plugin) = plugin.as_mut().as_consumer_plugin() {
-            self.inject_consumer(consumer_plugin, plugin_name, queue_manager)
+            self.inject_consumer(consumer_plugin, plugin_name, queue)
                 .await?;
-            Ok(true)
-        } else {
-            Ok(false)
         }
+
+        Ok(())
     }
 
     /// Inject a consumer into a ConsumerPlugin
@@ -123,23 +119,18 @@ impl PluginInitializer {
     pub async fn initialize_plugins(
         &self,
         registry: &mut PluginRegistry,
-        plugins: &HashMap<String, Vec<String>>, // (plugin_name, args)
-        plugin_configs: &HashMap<String, toml::Table>,
-        queue_manager: &Arc<QueueManager>,
-    ) -> PluginResult<i32> {
-        let mut consumer_count = 0;
+        plugins: &[(String, Vec<String>)], // (plugin_name, args)
+        plugin_configs: &std::collections::HashMap<String, toml::Table>,
+        queue: &Arc<QueueManager>,
+    ) -> PluginResult<()> {
         for (plugin_name, args) in plugins {
             let plugin_config = plugin_configs.get(plugin_name);
 
-            if self
-                .initialize_plugin(registry, plugin_name, args, plugin_config, queue_manager)
-                .await?
-            {
-                consumer_count += 1;
-            }
+            self.initialize_plugin(registry, plugin_name, args, plugin_config, queue)
+                .await?;
         }
 
-        Ok(consumer_count)
+        Ok(())
     }
 }
 
@@ -224,12 +215,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_plugin_initializer_creation() {
+        let notification_manager = Arc::new(Mutex::new(AsyncNotificationManager::new()));
+        let initializer = PluginInitializer::new(notification_manager, Some(false));
+
+        assert!(initializer.use_colors == Some(false));
+    }
+
+    #[tokio::test]
     async fn test_initialize_plugin_not_found() {
         let notification_manager = Arc::new(Mutex::new(AsyncNotificationManager::new()));
-        let initializer = PluginInitializer::new(notification_manager, false);
+        let initializer = PluginInitializer::new(notification_manager, None);
 
         let mut registry = PluginRegistry::new();
-        let queue = Arc::new(QueueManager::new());
+        let queue = Arc::new(crate::queue::api::QueueManager::new());
 
         let result = initializer
             .initialize_plugin(&mut registry, "nonexistent", &[], None, &queue)
@@ -247,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn test_initialize_multiple_plugins() {
         let notification_manager = Arc::new(Mutex::new(AsyncNotificationManager::new()));
-        let initializer = PluginInitializer::new(notification_manager.clone(), false);
+        let initializer = PluginInitializer::new(notification_manager.clone(), None);
 
         let mut registry = PluginRegistry::new();
 
@@ -262,11 +261,12 @@ mod tests {
         registry.activate_plugin("plugin1").unwrap();
         registry.activate_plugin("plugin2").unwrap();
 
-        let queue = Arc::new(QueueManager::new());
-        let mut plugins = HashMap::new();
-        plugins.insert("plugin1".to_string(), vec![]);
-        plugins.insert("plugin2".to_string(), vec!["--arg".to_string()]);
-        let configs = HashMap::new();
+        let queue = Arc::new(crate::queue::api::QueueManager::new());
+        let plugins = vec![
+            ("plugin1".to_string(), vec![]),
+            ("plugin2".to_string(), vec!["--arg".to_string()]),
+        ];
+        let configs = std::collections::HashMap::new();
 
         let result = initializer
             .initialize_plugins(&mut registry, &plugins, &configs, &queue)

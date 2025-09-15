@@ -14,8 +14,7 @@ pub type PluginResult<T> = std::result::Result<T, PluginError>;
 pub enum PluginError {
     /// Plugin not found in registry
     PluginNotFound { plugin_name: String },
-    /// Initialization error
-    PluginInitializationError { plugin_name: String, cause: String },
+
     /// Plugin API version incompatible with system
     VersionIncompatible { message: String },
 
@@ -59,9 +58,6 @@ impl fmt::Display for PluginError {
                 write!(f, "Version incompatible: {}", message)
             }
             PluginError::LoadError { plugin_name, cause } => {
-                write!(f, "Failed to load plugin '{}': {}", plugin_name, cause)
-            }
-            PluginError::PluginInitializationError { plugin_name, cause } => {
                 write!(f, "Failed to load plugin '{}': {}", plugin_name, cause)
             }
             PluginError::ExecutionError {
@@ -111,7 +107,6 @@ impl ContextualError for PluginError {
             PluginError::Generic { .. } => true,
             PluginError::VersionIncompatible { .. } => true,
             PluginError::PluginNotFound { .. } => true,
-            PluginError::PluginInitializationError { .. } => true,
 
             // User configuration errors
             PluginError::ConfigurationError { .. } => true,

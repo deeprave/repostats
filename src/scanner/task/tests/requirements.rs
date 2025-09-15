@@ -26,14 +26,17 @@ fn test_history_requirements() {
                                       // History should not automatically include other requirements
     assert!(!reqs.requires_file_changes());
     assert!(!reqs.requires_file_content());
+    assert!(!reqs.requires_repository_info());
 }
 
 #[test]
 fn test_combined_requirements() {
-    let combined = ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
+    let combined =
+        ScanRequires::REPOSITORY_INFO | ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
     let (_temp_dir, scanner) = create_test_scanner_task(combined);
     // Should include all specified requirements and their dependencies
     let reqs = scanner.requirements();
+    assert!(reqs.requires_repository_info());
     assert!(reqs.requires_file_content());
     assert!(reqs.requires_file_changes()); // dependency of FILE_CONTENT
     assert!(reqs.requires_commits()); // dependency of multiple
@@ -44,6 +47,19 @@ fn test_combined_requirements() {
 fn test_no_requirements() {
     let (_temp_dir, scanner) = create_test_scanner_task(ScanRequires::NONE);
     let reqs = scanner.requirements();
+    assert!(!reqs.requires_repository_info());
+    assert!(!reqs.requires_commits());
+    assert!(!reqs.requires_file_changes());
+    assert!(!reqs.requires_file_content());
+    assert!(!reqs.requires_history());
+}
+
+#[test]
+fn test_repository_info_only() {
+    let (_temp_dir, scanner) = create_test_scanner_task(ScanRequires::REPOSITORY_INFO);
+    let reqs = scanner.requirements();
+    assert!(reqs.requires_repository_info());
+    // REPOSITORY_INFO has no automatic dependencies
     assert!(!reqs.requires_commits());
     assert!(!reqs.requires_file_changes());
     assert!(!reqs.requires_file_content());
@@ -56,6 +72,7 @@ fn test_commits_only() {
     let reqs = scanner.requirements();
     assert!(reqs.requires_commits());
     // COMMITS has no automatic dependencies
+    assert!(!reqs.requires_repository_info());
     assert!(!reqs.requires_file_changes());
     assert!(!reqs.requires_file_content());
     assert!(!reqs.requires_history());
@@ -69,6 +86,7 @@ fn test_file_changes_includes_commits() {
     assert!(reqs.requires_commits()); // dependency
                                       // Should not include higher-level requirements
     assert!(!reqs.requires_file_content());
+    assert!(!reqs.requires_repository_info());
     assert!(!reqs.requires_history());
 }
 
@@ -98,11 +116,14 @@ fn test_conditional_data_collection_logic() {
     assert!(history_requirements.requires_history());
     assert!(history_requirements.requires_commits()); // dependency
     assert!(!history_requirements.requires_file_changes());
+    assert!(!history_requirements.requires_repository_info());
 
     // Combined requirements - should collect all requested data types
-    let combined = ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
+    let combined =
+        ScanRequires::REPOSITORY_INFO | ScanRequires::FILE_CONTENT | ScanRequires::HISTORY;
     let (_temp_dir, scanner_all) = create_test_scanner_task(combined);
     let all_reqs = scanner_all.requirements();
+    assert!(all_reqs.requires_repository_info());
     assert!(all_reqs.requires_file_content());
     assert!(all_reqs.requires_file_changes()); // dependency
     assert!(all_reqs.requires_commits()); // dependency
@@ -132,4 +153,10 @@ fn test_automatic_dependency_inclusion() {
     assert!(ScanRequires::HISTORY.requires_commits()); // dependency
     assert!(!ScanRequires::HISTORY.requires_file_changes());
     assert!(!ScanRequires::HISTORY.requires_file_content());
+
+    // REPOSITORY_INFO should be self-contained
+    assert!(ScanRequires::REPOSITORY_INFO.requires_repository_info());
+    assert!(!ScanRequires::REPOSITORY_INFO.requires_commits());
+    assert!(!ScanRequires::REPOSITORY_INFO.requires_file_changes());
+    assert!(!ScanRequires::REPOSITORY_INFO.requires_file_content());
 }

@@ -509,6 +509,8 @@ impl Plugin for OutputPlugin {
         args: &[String],
         config: &crate::plugin::args::PluginConfig,
     ) -> PluginResult<()> {
+        // Use the new args_parse method that follows the dump plugin pattern
+        // This automatically handles --help via PluginArgParser
         self.args_parse(args, config).await
     }
 }

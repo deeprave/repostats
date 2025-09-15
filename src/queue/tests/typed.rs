@@ -283,8 +283,9 @@ async fn test_typed_message_metadata_methods() {
 
     let timestamp_before = std::time::SystemTime::now();
     publisher.publish(message).unwrap();
-    let typed_msg = typed_consumer.read_with_header().unwrap().unwrap();
     let timestamp_after = std::time::SystemTime::now();
+
+    let typed_msg = typed_consumer.read_with_header().unwrap().unwrap();
 
     // Test all metadata methods
     assert!(typed_msg.sequence() > 0);

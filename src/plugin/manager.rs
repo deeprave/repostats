@@ -6,7 +6,7 @@
 use crate::app::cli::segmenter::CommandSegment;
 use crate::notifications::api::AsyncNotificationManager;
 use crate::notifications::api::{Event, EventFilter, PluginEventType};
-use crate::plugin::activation::PluginActivator;
+use crate::plugin::activation::{ActivationResult, PluginActivator};
 use crate::plugin::discovery::PluginDiscovery;
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::initialization::PluginInitializer;
@@ -223,6 +223,17 @@ impl PluginManager {
         self.api_version
     }
 
+    /// Get color configuration setting
+    fn get_use_colors_setting(&self) -> Option<bool> {
+        if std::env::var("FORCE_COLOR").is_ok() {
+            return Some(true);
+        }
+        if std::env::var("NO_COLOR").is_ok() {
+            return Some(false);
+        }
+        None // defer to auto (TTY) at point of use
+    }
+
     // MARK: Helper methods to DRY up registry lookup patterns
 
     /// Helper: Execute a closure on a plugin if found in either registry
@@ -333,30 +344,55 @@ impl PluginManager {
     pub async fn activate_plugins(
         &mut self,
         command_segments: &[CommandSegment],
-        use_colors: bool,
     ) -> PluginResult<()> {
         // Get all available plugins with their metadata
         let registry = self.registry.inner().read().await;
-        let mut plugins = HashMap::new();
+        let all_plugin_names = registry.get_plugin_names();
 
-        for plugin_name in registry.get_plugin_names() {
-            if let Some(plugin) = registry.get_plugin(&plugin_name) {
-                plugins.insert(plugin_name.clone(), plugin.plugin_info());
-            }
+        // Collect plugin metadata for the activator
+        let mut plugins_with_functions = Vec::new();
+        let mut plugins_with_info = Vec::new();
+
+        for plugin_name in &all_plugin_names {
+            let functions = self
+                .get_advertised_functions(plugin_name)
+                .await
+                .unwrap_or_default();
+            let info = self.get_plugin_info_by_name(plugin_name).await;
+            plugins_with_functions.push((plugin_name.clone(), functions, info.clone()));
+            plugins_with_info.push((plugin_name.clone(), info));
         }
         drop(registry);
 
         // Create activator with auto-active plugins
-        let mut activator = PluginActivator::new(plugins);
+        let activator = PluginActivator::new(self.auto_active_plugins.clone());
 
         // Process segment matching
-        let plugins_to_activate = activator.process_segments(command_segments)?;
+        let ActivationResult {
+            mut plugins_to_activate,
+            mut active_output_plugin,
+        } = activator.process_segments(command_segments, &plugins_with_functions)?;
+
+        // Process auto-activation
+        let auto_activated =
+            activator.process_auto_activation(&plugins_with_info, &mut active_output_plugin);
+        plugins_to_activate.extend(auto_activated);
+
+        // Apply Output plugin uniqueness constraint
+        plugins_to_activate = activator.apply_output_constraint(
+            plugins_to_activate,
+            &active_output_plugin,
+            &plugins_with_info,
+        );
 
         // Initialize all active plugins
         let mut registry = self.registry.inner().write().await;
-        let initializer = PluginInitializer::new(self.notification_manager.clone(), use_colors);
+        let initializer = PluginInitializer::new(
+            self.notification_manager.clone(),
+            self.get_use_colors_setting(),
+        );
 
-        let queue_manager = Arc::new(crate::queue::api::get_queue_service());
+        let queue = Arc::new(crate::queue::api::get_queue_service());
 
         // Activate and prepare plugins for initialization
         for (plugin_name, _) in &plugins_to_activate {
@@ -365,23 +401,21 @@ impl PluginManager {
         }
 
         // Initialize plugins using the helper
-        let consumer_plugins = initializer
+        initializer
             .initialize_plugins(
                 &mut registry,
                 &plugins_to_activate,
                 &self.plugin_configs,
-                &queue_manager,
+                &queue,
             )
             .await?;
+
         drop(registry);
 
-        if consumer_plugins < 1 {
-            Err(PluginError::Generic {
-                message: "No processing plugins available".to_string(),
-            })
-        } else {
-            Ok(())
-        }
+        // Ensure fallback Output plugin if needed
+        self.ensure_output_plugin_fallback().await?;
+
+        Ok(())
     }
 
     /// Get currently active plugins
@@ -1016,6 +1050,47 @@ impl PluginManager {
     pub async fn get_pending_completion_count(&self) -> usize {
         let completion = self.plugin_completion.read().await;
         completion.len()
+    }
+
+    /// Ensure fallback Output plugin is activated when no Output plugins are active
+    /// This provides automatic fallback to the built-in OutputPlugin when external
+    /// Output plugins are not available or have been deactivated
+    pub async fn ensure_output_plugin_fallback(&mut self) -> PluginResult<()> {
+        let registry = self.registry.inner().read().await;
+
+        // Check if any Output plugin is currently active
+        let active_plugins = self.active_plugins.get_active_plugins();
+        let has_active_output_plugin = active_plugins.iter().any(|plugin_name| {
+            if let Some(plugin) = registry.get_plugin(plugin_name) {
+                plugin.plugin_info().plugin_type == crate::plugin::types::PluginType::Output
+            } else {
+                false
+            }
+        });
+
+        // If no Output plugin is active, activate the built-in OutputPlugin
+        if !has_active_output_plugin {
+            let builtin_output_exists = registry.has_plugin("output");
+            drop(registry); // Release read lock before trying to activate
+
+            if builtin_output_exists {
+                log::info!("No Output plugin active, activating built-in OutputPlugin fallback");
+
+                // Activate the built-in output plugin
+                self.registry.activate_plugin("output").await?;
+
+                // Add to active plugins list if not already there
+                if !self.active_plugins.contains("output") {
+                    self.active_plugins.add("output");
+                }
+
+                log::trace!("Built-in OutputPlugin fallback activated successfully");
+            } else {
+                log::warn!("No Output plugin active and built-in OutputPlugin not found");
+            }
+        }
+
+        Ok(())
     }
 }
 

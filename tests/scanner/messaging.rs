@@ -136,7 +136,7 @@ async fn test_commit_traversal_and_message_creation() {
             scanner_id,
             current_path.to_string(),
             repo,
-            repostats::scanner::api::ScanRequires::COMMITS | repostats::scanner::api::ScanRequires::FILE_CHANGES,
+            repostats::scanner::api::ScanRequires::REPOSITORY_INFO | repostats::scanner::api::ScanRequires::COMMITS | repostats::scanner::api::ScanRequires::FILE_CHANGES,
             test_publisher,
             None,
             None,
