@@ -15,11 +15,6 @@ use std::sync::Weak;
 /// to the global queue. Messages are assigned monotonic sequence numbers
 /// to ensure ordering guarantees across all publishers.
 ///
-/// # Memory Management
-///
-/// The publisher automatically checks for memory pressure after each
-/// publish operation and triggers garbage collection if needed.
-///
 /// # Example
 ///
 /// ```rust,no_run
@@ -73,9 +68,6 @@ impl QueuePublisher {
 
         // Publish to the global queue
         let sequence = queue.publish(message)?;
-
-        // Check memory pressure after publishing and trigger garbage collection if needed
-        let _memory_pressure_handled = manager.check_memory_pressure()?;
 
         Ok(sequence)
     }

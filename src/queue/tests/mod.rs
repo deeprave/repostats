@@ -5,11 +5,11 @@
 
 mod concurrent;
 mod consumer;
+mod core_functionality;
 mod edge_cases;
 mod grouping;
 mod integration;
 mod lifecycle;
 mod manager;
-mod memory;
 mod publisher;
 mod typed;

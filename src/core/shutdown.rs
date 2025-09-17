@@ -145,7 +145,7 @@ fn setup_signal_handlers(shutdown_tx: broadcast::Sender<()>, shutdown_requested:
                     requested.store(true, Ordering::Release);
                     let _ = tx.send(());
                     if prev >= 1 {
-                        log::warn!("Ctrl-C received; exiting");
+                        log::debug!("Terminated");
                         std::process::exit(130);
                     }
                 }

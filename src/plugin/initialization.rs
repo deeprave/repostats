@@ -148,24 +148,8 @@ impl<'a> PluginInitializer<'a> {
     }
 
     pub async fn execute_plugin(&self, plugin_name: &str) -> PluginResult<()> {
-        // Get the plugin from registry
-        let mut plugin = {
-            let mut registry = self.manager.registry().inner().write().await;
-            registry.borrow_plugin(plugin_name)?
-        };
-
-        let result = {
-            // Execute outside of any lock
-            let result = plugin.execute().await;
-            // Always return the plugin (even if execute errored)
-            let mut registry = self.manager.registry().inner().write().await;
-            registry.return_plugin(plugin)?;
-            result
-        };
-
-        // Propagate the execute() result
-        result?;
-        Ok(())
+        // Execute the plugin using the execution token pattern
+        self.manager.registry().execute_plugin(plugin_name).await
     }
 
     /// Execute multiple plugins

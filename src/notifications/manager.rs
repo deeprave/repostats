@@ -46,13 +46,11 @@ impl EventSender {
     }
 }
 
-#[allow(dead_code)]
 pub enum EventReceiver {
     Bounded(Receiver<Event>),
     Unbounded(UnboundedReceiver<Event>),
 }
 
-#[allow(dead_code)]
 impl EventReceiver {
     pub async fn recv(&mut self) -> Option<Event> {
         match self {

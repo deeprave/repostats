@@ -36,15 +36,9 @@ mod tests {
         let ack_result = consumer.acknowledge_batch(&[]).unwrap();
         assert_eq!(ack_result, 0, "Acknowledging empty batch should return 0");
 
-        // Test statistics on empty queue
-        let memory_stats = manager.memory_stats().unwrap();
-        assert_eq!(memory_stats.total_messages, 0);
-
-        let lag_stats = manager.get_lag_statistics().unwrap();
-        assert_eq!(lag_stats.total_consumers, 1); // Consumer is registered
-        assert_eq!(lag_stats.max_lag, 0);
-        assert_eq!(lag_stats.min_lag, 0);
-        assert_eq!(lag_stats.avg_lag, 0.0);
+        // Verify queue statistics
+        assert_eq!(manager.total_message_count().unwrap(), 0);
+        assert_eq!(manager.active_consumer_count().unwrap(), 1); // Consumer is registered
 
         println!("✓ Empty queue edge cases handled correctly");
     }
@@ -75,16 +69,8 @@ mod tests {
         let read_message = consumer.read().unwrap().unwrap();
         assert_eq!(read_message.data, large_data);
 
-        // Memory stats should reflect the large message
-        let memory_stats = manager.memory_stats().unwrap();
-        assert!(
-            memory_stats.total_bytes > 1024 * 1024,
-            "Memory usage should reflect large message"
-        );
-
         println!("✓ Extremely large messages handled correctly");
         println!("  Message size: {} bytes", large_data.len());
-        println!("  Total memory usage: {} bytes", memory_stats.total_bytes);
     }
 
     #[test]
@@ -119,12 +105,8 @@ mod tests {
             "Should read all flooded messages"
         );
 
-        let memory_stats = manager.memory_stats().unwrap();
         println!("✓ Message flood handled correctly");
-        println!(
-            "  Messages: {}, Memory: {} bytes",
-            message_count, memory_stats.total_bytes
-        );
+        println!("  Messages: {}", message_count);
     }
 
     #[test]
@@ -356,9 +338,8 @@ mod tests {
             "All consumers should be cleaned up"
         );
 
-        let memory_stats = manager.memory_stats().unwrap();
         assert!(
-            memory_stats.total_bytes > 0,
+            manager.total_message_count().unwrap() > 0,
             "Should still have messages in queue"
         );
 
@@ -368,60 +349,38 @@ mod tests {
     }
 
     #[test]
-    fn test_garbage_collection_edge_cases() {
+    fn test_basic_queue_size_tracking() {
         let manager = Arc::new(QueueManager::new());
         let publisher = manager
-            .create_publisher("gc-edge-producer".to_string())
+            .create_publisher("size-test-producer".to_string())
+            .unwrap();
+        let consumer = manager
+            .create_consumer("size-test-consumer".to_string())
             .unwrap();
 
-        // Test garbage collection on empty queue
-        let collected_empty = manager.collect_garbage().unwrap();
-        assert_eq!(
-            collected_empty, 0,
-            "Garbage collection on empty queue should collect 0"
-        );
+        // Initial queue should be empty
+        assert_eq!(manager.total_message_count().unwrap(), 0);
 
         // Publish messages
-        for i in 0..10 {
+        for i in 0..5 {
             let msg = Message::new(
-                "gc-edge-producer".to_string(),
-                "gc_test".to_string(),
-                format!("gc-msg-{}", i),
+                "size-test-producer".to_string(),
+                "size_test".to_string(),
+                format!("msg-{}", i),
             );
             publisher.publish(msg).unwrap();
         }
 
-        // Test garbage collection with no consumers (should not collect anything)
-        let collected_no_consumers = manager.collect_garbage().unwrap();
-        assert_eq!(
-            collected_no_consumers, 0,
-            "GC with no consumers should collect nothing"
-        );
+        assert_eq!(manager.total_message_count().unwrap(), 5);
 
-        // Create consumer and read some messages
-        let consumer = manager.create_consumer("gc-consumer".to_string()).unwrap();
-        for _ in 0..5 {
+        // Read some messages
+        for _ in 0..3 {
             consumer.read().unwrap();
         }
 
-        // Now garbage collection should clean up read messages
-        let collected_with_consumer = manager.collect_garbage().unwrap();
-        assert!(
-            collected_with_consumer > 0,
-            "GC should collect read messages"
-        );
+        // Queue should still show all messages (no garbage collection)
+        assert_eq!(manager.total_message_count().unwrap(), 5);
 
-        // Drop consumer and test orphaned consumer cleanup
-        drop(consumer);
-
-        // Force another garbage collection
-        let collected_after_drop = manager.collect_garbage().unwrap();
-        // May or may not collect more depending on implementation
-
-        println!("✓ Garbage collection edge cases handled correctly");
-        println!(
-            "  Empty queue: {}, No consumers: {}, With consumer: {}, After drop: {}",
-            collected_empty, collected_no_consumers, collected_with_consumer, collected_after_drop
-        );
+        println!("✓ Basic queue size tracking works correctly");
     }
 }

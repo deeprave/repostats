@@ -67,10 +67,8 @@ async fn main() {
             Ok(())
         };
 
-        // System shutdown
-        if let Err(e) = system_stop(pid).await {
-            log::warn!("Error stopping system: {e}");
-        }
+        // EventController will handle coordinated shutdown - do NOT broadcast shutdown event here
+        // The coordination will happen in EventController::guard after the application completes
 
         final_result
     })
@@ -142,7 +140,7 @@ async fn start_scanner(
     // Start scanning all configured repositories
     let result = scanner_manager.start_scanning().await;
     match &result {
-        Ok(()) => debug!("All repository scanning completed successfully"),
+        Ok(()) => log::trace!("All repository scanning completed successfully"),
         Err(e) => debug!("Repository scanning failed: {e}"),
     }
     result

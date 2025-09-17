@@ -97,31 +97,23 @@ impl PluginDiscovery {
         let mut plugins = Vec::new();
 
         // 1. Discover builtin plugins first - create on demand
-        log::debug!("Discovering builtin plugins");
         let builtin_discovery = BuiltinPluginDiscovery::new();
         let builtin_plugins = builtin_discovery.discover_builtin_plugins().await?;
-        log::debug!("Found {} builtin plugins", builtin_plugins.len());
+        log::trace!("Found {} builtin plugins", builtin_plugins.len());
         plugins.extend(builtin_plugins);
 
         // 2. Discover external plugins second (allows override of builtins) - create on demand
-        log::debug!(
+        log::trace!(
             "Discovering external plugins from paths: {:?}",
             self.search_paths
         );
         let external_discovery = ExternalPluginDiscovery::new();
         let external_plugins = external_discovery.discover_external_plugins(self).await?;
-        log::debug!("Found {} external plugins", external_plugins.len());
+        log::trace!("Found {} external plugins", external_plugins.len());
         plugins.extend(external_plugins);
 
         // 3. Apply exclusions
-        log::debug!("Applying exclusions: {:?}", self.excluded_plugins);
-        let before_exclusions = plugins.len();
         plugins.retain(|plugin| !self.excluded_plugins.contains(&plugin.info.name));
-        log::debug!(
-            "After exclusions: {} plugins (was {})",
-            plugins.len(),
-            before_exclusions
-        );
 
         Ok(plugins)
     }

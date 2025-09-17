@@ -125,12 +125,8 @@ mod tests {
         // Verify operational state
         assert_eq!(manager.active_consumer_count().unwrap(), 1);
 
-        // Test memory and lag statistics
-        let memory_stats = manager.memory_stats().expect("Should get memory stats");
-        let lag_stats = manager.get_lag_statistics().expect("Should get lag stats");
-
-        assert!(memory_stats.total_bytes >= 0);
-        assert_eq!(lag_stats.total_consumers, 1);
+        // Verify the queue is operational
+        assert_eq!(manager.queue_count(), 1);
 
         // Test shutdown
         manager.shutdown().await;
@@ -232,13 +228,6 @@ mod tests {
         // Test queue management operations
         assert_eq!(manager.active_consumer_count().unwrap(), 1);
         assert_eq!(manager.total_message_count().unwrap(), 0);
-
-        // Test memory and statistics still work
-        let memory_stats = manager.memory_stats().expect("Should get memory stats");
-        assert!(memory_stats.total_messages >= 0);
-
-        let lag_stats = manager.get_lag_statistics().expect("Should get lag stats");
-        assert_eq!(lag_stats.total_consumers, 1);
 
         // Test shutdown completes successfully
         manager.shutdown().await;

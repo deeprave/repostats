@@ -59,8 +59,6 @@ static PLUGIN_SERVICE: LazyLock<Arc<Mutex<PluginManager>>> = LazyLock::new(|| {
 /// # }
 /// ```
 pub async fn get_plugin_service() -> tokio::sync::MutexGuard<'static, PluginManager> {
-    log::trace!("Acquiring plugin service lock");
     let guard = PLUGIN_SERVICE.lock().await;
-    log::trace!("Acquired plugin service lock");
     guard
 }

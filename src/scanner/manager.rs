@@ -655,7 +655,7 @@ impl ScannerManager {
                 .await
             {
                 Ok(scanner) => {
-                    log::info!(
+                    log::debug!(
                         "Successfully created scanner for repository '{}' (#{}/{})",
                         repo_path_str,
                         index + 1,
@@ -740,11 +740,6 @@ impl ScannerManager {
                 ),
             });
         }
-
-        log::info!(
-            "Successfully created {} scanners for all repositories",
-            created_scanners.len()
-        );
 
         Ok(created_scanners)
     }

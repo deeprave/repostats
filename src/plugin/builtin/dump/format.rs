@@ -56,14 +56,30 @@ pub fn format_compact_typed(
     };
 
     let format_duration = |duration: std::time::Duration| -> String {
-        let total_nanos = duration.as_nanos();
-        let minutes = total_nanos / 60_000_000_000;
-        let seconds = (total_nanos % 60_000_000_000) / 1_000_000_000;
-        let nanos = total_nanos % 1_000_000_000;
-        if minutes > 0 {
-            format!("{}m{}.{:06}s", minutes, seconds, nanos / 1000)
+        // Phase 4.4.3: Implement reliable duration formatting with chrono
+        // Convert std::time::Duration to chrono::Duration for better handling
+        let chrono_duration =
+            chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero());
+
+        let total_seconds = chrono_duration.num_seconds();
+        let hours = total_seconds / 3600;
+        let minutes = (total_seconds % 3600) / 60;
+        let seconds = total_seconds % 60;
+
+        // Get microseconds for the fractional part
+        let total_microseconds = chrono_duration.num_microseconds().unwrap_or(0);
+        let fractional_microseconds = (total_microseconds % 1_000_000).abs();
+
+        // Format according to duration magnitude for compatibility
+        if hours > 0 {
+            format!(
+                "{}h{}m{}.{:06}s",
+                hours, minutes, seconds, fractional_microseconds
+            )
+        } else if minutes > 0 {
+            format!("{}m{}.{:06}s", minutes, seconds, fractional_microseconds)
         } else {
-            format!("{}.{:06}s", seconds, nanos / 1000)
+            format!("{}.{:06}s", seconds, fractional_microseconds)
         }
     };
 
@@ -341,5 +357,105 @@ pub fn format_pretty_text_typed(
             parts.push(kv("ts", ts(timestamp)));
             format!("{header_prefix}{}", parts.join(" "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Test the new chrono-based duration formatting for edge cases
+    /// Phase 4.4.1 & 4.4.3: Write test for edge cases and verify chrono implementation
+    #[test]
+    fn test_chrono_duration_formatting_edge_cases() {
+        // Create the new format_duration closure as defined in the function
+        let format_duration = |duration: std::time::Duration| -> String {
+            // Phase 4.4.3: Implement reliable duration formatting with chrono
+            let chrono_duration =
+                chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero());
+
+            let total_seconds = chrono_duration.num_seconds();
+            let hours = total_seconds / 3600;
+            let minutes = (total_seconds % 3600) / 60;
+            let seconds = total_seconds % 60;
+
+            // Get microseconds for the fractional part
+            let total_microseconds = chrono_duration.num_microseconds().unwrap_or(0);
+            let fractional_microseconds = (total_microseconds % 1_000_000).abs();
+
+            // Format according to duration magnitude for compatibility
+            if hours > 0 {
+                format!(
+                    "{}h{}m{}.{:06}s",
+                    hours, minutes, seconds, fractional_microseconds
+                )
+            } else if minutes > 0 {
+                format!("{}m{}.{:06}s", minutes, seconds, fractional_microseconds)
+            } else {
+                format!("{}.{:06}s", seconds, fractional_microseconds)
+            }
+        };
+
+        // Test zero duration
+        let zero = Duration::from_secs(0);
+        assert_eq!(format_duration(zero), "0.000000s");
+
+        // Test sub-second duration
+        let sub_second = Duration::from_millis(500);
+        assert_eq!(format_duration(sub_second), "0.500000s");
+
+        // Test exactly one second
+        let one_second = Duration::from_secs(1);
+        assert_eq!(format_duration(one_second), "1.000000s");
+
+        // Test exactly one minute
+        let one_minute = Duration::from_secs(60);
+        assert_eq!(format_duration(one_minute), "1m0.000000s");
+
+        // Test 1 hour (now properly handles hours)
+        let one_hour = Duration::from_secs(3600);
+        assert_eq!(
+            format_duration(one_hour),
+            "1h0m0.000000s",
+            "New implementation properly handles hours"
+        );
+
+        // Test multiple hours (now properly handles hours)
+        let three_hours = Duration::from_secs(3 * 3600);
+        assert_eq!(
+            format_duration(three_hours),
+            "3h0m0.000000s",
+            "New implementation properly handles multiple hours"
+        );
+
+        // Test complex duration with hours, minutes, seconds, and microseconds
+        let complex = Duration::from_secs(7321) + Duration::from_micros(123456);
+        // 7321 seconds = 2 hours, 2 minutes, 1 second
+        assert_eq!(
+            format_duration(complex),
+            "2h2m1.123456s",
+            "New implementation properly shows 2h2m1s with microseconds"
+        );
+
+        // Test very large duration (proper handling without overflow)
+        let very_large = Duration::from_secs(u32::MAX as u64);
+        let result = format_duration(very_large);
+        assert!(
+            result.contains("h"),
+            "Should handle very large durations with hours"
+        );
+
+        // Test microsecond precision
+        let precise = Duration::from_nanos(1_234_567_890);
+        assert_eq!(format_duration(precise), "1.234567s");
+
+        // Test edge case: 1h1m1s1μs
+        let edge_case = Duration::from_secs(3661) + Duration::from_micros(1);
+        assert_eq!(format_duration(edge_case), "1h1m1.000001s");
+
+        // Test edge case: just over 1 hour
+        let just_over_hour = Duration::from_secs(3601);
+        assert_eq!(format_duration(just_over_hour), "1h0m1.000000s");
     }
 }

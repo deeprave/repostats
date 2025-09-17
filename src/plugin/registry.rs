@@ -16,6 +16,8 @@ pub struct PluginRegistry {
     plugins: HashMap<String, Box<dyn Plugin>>,
     /// Set of plugin names that are currently active
     active_plugins: HashSet<String>,
+    /// Set of plugin names that are currently executing (execution token pattern)
+    executing: HashSet<String>,
 }
 
 impl std::fmt::Debug for PluginRegistry {
@@ -33,6 +35,7 @@ impl PluginRegistry {
         Self {
             plugins: HashMap::new(),
             active_plugins: HashSet::new(),
+            executing: HashSet::new(),
         }
     }
 
@@ -164,29 +167,42 @@ impl PluginRegistry {
     pub fn clear(&mut self) {
         self.plugins.clear();
         self.active_plugins.clear();
+        self.executing.clear();
     }
 
-    pub fn borrow_plugin(&mut self, name: &str) -> PluginResult<Box<dyn Plugin>> {
-        self.plugins
-            .remove(name)
-            .ok_or_else(|| PluginError::PluginNotFound {
-                plugin_name: name.to_string(),
-            })
-    }
-
-    pub fn return_plugin(&mut self, plugin: Box<dyn Plugin>) -> PluginResult<()> {
-        use std::collections::hash_map::Entry;
-
-        let plugin_name = &plugin.plugin_info().name;
-        match self.plugins.entry(plugin_name.to_string()) {
-            Entry::Vacant(slot) => {
-                slot.insert(plugin);
-                Ok(())
-            }
-            Entry::Occupied(_) => Err(PluginError::Generic {
-                message: format!("Plugin '{}' is already registered", plugin_name),
-            }),
+    /// Execute a plugin with execution token pattern to prevent concurrent execution
+    pub async fn execute_plugin(&mut self, name: &str) -> PluginResult<()> {
+        // Check if already executing
+        if self.executing.contains(name) {
+            return Err(PluginError::Generic {
+                message: format!("Plugin '{}' is currently executing", name),
+            });
         }
+
+        // Mark as executing
+        self.executing.insert(name.to_string());
+
+        // Get mutable access and execute
+        let result = match self.plugins.get_mut(name) {
+            Some(plugin) => plugin.execute().await,
+            None => {
+                // Remove from executing set if plugin not found
+                self.executing.remove(name);
+                return Err(PluginError::PluginNotFound {
+                    plugin_name: name.to_string(),
+                });
+            }
+        };
+
+        // Clear execution flag
+        self.executing.remove(name);
+
+        result
+    }
+
+    /// Check if a plugin is currently executing
+    pub fn is_plugin_executing(&self, name: &str) -> bool {
+        self.executing.contains(name)
     }
 }
 
@@ -346,20 +362,49 @@ impl SharedPluginRegistry {
         registry.clear_active_plugins();
     }
 
-    pub async fn borrow_plugin(
-        &self,
-        name: &str,
-    ) -> crate::plugin::error::PluginResult<Box<dyn crate::plugin::traits::Plugin>> {
-        let mut registry = self.inner.write().await;
-        registry.borrow_plugin(name)
+    /// Execute a plugin with execution token pattern to prevent concurrent execution
+    pub async fn execute_plugin(&self, name: &str) -> PluginResult<()> {
+        // First, try to acquire execution token
+        {
+            let mut registry = self.inner.write().await;
+            // Check if already executing
+            if registry.executing.contains(name) {
+                return Err(PluginError::Generic {
+                    message: format!("Plugin '{}' is currently executing", name),
+                });
+            }
+            // Mark as executing
+            registry.executing.insert(name.to_string());
+        }
+
+        // Now execute the plugin with a separate write lock
+        let result = {
+            let mut registry = self.inner.write().await;
+            match registry.plugins.get_mut(name) {
+                Some(plugin) => plugin.execute().await,
+                None => {
+                    // Remove from executing set if plugin not found
+                    registry.executing.remove(name);
+                    return Err(PluginError::PluginNotFound {
+                        plugin_name: name.to_string(),
+                    });
+                }
+            }
+        };
+
+        // Clear execution flag
+        {
+            let mut registry = self.inner.write().await;
+            registry.executing.remove(name);
+        }
+
+        result
     }
 
-    pub async fn return_plugin(
-        &self,
-        plugin: Box<dyn crate::plugin::traits::Plugin>,
-    ) -> crate::plugin::error::PluginResult<()> {
-        let mut registry = self.inner.write().await;
-        registry.return_plugin(plugin)
+    /// Check if a plugin is currently executing
+    pub async fn is_plugin_executing(&self, name: &str) -> bool {
+        let registry = self.inner.read().await;
+        registry.is_plugin_executing(name)
     }
 }
 
@@ -506,6 +551,63 @@ mod tests {
         async fn inject_consumer(&mut self, _consumer: QueueConsumer) -> PluginResult<()> {
             self.consuming = true;
             Ok(())
+        }
+    }
+
+    // Mock slow plugin for testing execution tokens
+    #[derive(Debug)]
+    struct MockSlowPlugin {
+        base: MockPlugin,
+        delay_ms: u64,
+    }
+
+    impl MockSlowPlugin {
+        fn new(name: &str, delay_ms: u64) -> Self {
+            Self {
+                base: MockPlugin::new(name),
+                delay_ms,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for MockSlowPlugin {
+        fn plugin_info(&self) -> PluginInfo {
+            self.base.plugin_info()
+        }
+
+        fn plugin_type(&self) -> PluginType {
+            self.base.plugin_type()
+        }
+
+        fn advertised_functions(&self) -> Vec<String> {
+            self.base.advertised_functions()
+        }
+
+        fn set_notification_manager(&mut self, manager: Arc<Mutex<AsyncNotificationManager>>) {
+            self.base.set_notification_manager(manager);
+        }
+
+        async fn initialize(&mut self) -> PluginResult<()> {
+            self.base.initialize().await
+        }
+
+        async fn execute(&mut self) -> PluginResult<()> {
+            // Add delay to simulate slow execution
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            self.base.execute().await
+        }
+
+        async fn cleanup(&mut self) -> PluginResult<()> {
+            self.base.cleanup().await
+        }
+
+        async fn parse_plugin_arguments(
+            &mut self,
+            args: &[String],
+            config: &PluginConfig,
+        ) -> PluginResult<()> {
+            self.base.parse_plugin_arguments(args, config).await
         }
     }
 
@@ -899,5 +1001,107 @@ mod tests {
             }
             _ => panic!("Expected Generic error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_execution_token_prevents_concurrent_execution() {
+        use std::sync::Arc;
+
+        let shared_registry = Arc::new(SharedPluginRegistry::new());
+
+        // Register a test plugin with delayed execution
+        {
+            let mut registry = shared_registry.inner().write().await;
+            registry
+                .register_plugin(Box::new(MockSlowPlugin::new("execution-test", 100)))
+                .unwrap();
+        }
+
+        // Test simple sequential execution first to ensure basic functionality works
+        let result = shared_registry.execute_plugin("execution-test").await;
+        assert!(result.is_ok(), "Sequential execution should work");
+
+        // Now test concurrent execution prevention
+        // First, mark plugin as executing by acquiring execution token manually
+        {
+            let mut registry = shared_registry.inner().write().await;
+            registry.executing.insert("execution-test".to_string());
+        }
+
+        // Try to execute while marked as executing - should fail
+        let execution_result = shared_registry.execute_plugin("execution-test").await;
+        assert!(
+            execution_result.is_err(),
+            "Execution should fail when plugin already executing"
+        );
+
+        // Verify the error message
+        match execution_result.unwrap_err() {
+            PluginError::Generic { message } => {
+                assert!(message.contains("currently executing"));
+            }
+            _ => panic!("Expected Generic error for concurrent execution"),
+        }
+
+        // Clean up execution state
+        {
+            let mut registry = shared_registry.inner().write().await;
+            registry.executing.remove("execution-test");
+        }
+
+        // Verify execution works again after cleanup
+        let result = shared_registry.execute_plugin("execution-test").await;
+        assert!(result.is_ok(), "Execution should work after cleanup")
+    }
+
+    #[tokio::test]
+    async fn test_multiple_concurrent_executions_properly_blocked() {
+        use std::sync::Arc;
+        use tokio::task;
+
+        let shared_registry = Arc::new(SharedPluginRegistry::new());
+
+        // Register multiple plugins
+        {
+            let mut registry = shared_registry.inner().write().await;
+            for i in 0..3 {
+                registry
+                    .register_plugin(Box::new(MockSlowPlugin::new(&format!("plugin-{}", i), 20)))
+                    .unwrap();
+            }
+        }
+
+        // Try to execute the same plugin from multiple tasks concurrently
+        let mut tasks = Vec::new();
+        for i in 0..5 {
+            let registry = Arc::clone(&shared_registry);
+            let task = task::spawn(async move {
+                let result = registry.execute_plugin("plugin-0").await;
+                (i, result.is_ok())
+            });
+            tasks.push(task);
+        }
+
+        // Collect results
+        let mut success_count = 0;
+        let mut failure_count = 0;
+
+        for task in tasks {
+            let (_task_id, success) = task.await.unwrap();
+            if success {
+                success_count += 1;
+            } else {
+                failure_count += 1;
+            }
+        }
+
+        // Only ONE task should succeed in execution, others should fail
+        assert_eq!(success_count, 1, "Only one execution should succeed");
+        assert_eq!(
+            failure_count, 4,
+            "Four executions should fail due to execution token"
+        );
+
+        // This demonstrates that the execution token pattern prevents concurrent execution
     }
 }

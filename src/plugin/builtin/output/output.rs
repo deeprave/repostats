@@ -55,7 +55,7 @@ impl FileWriter {
                 std::fs::create_dir_all(parent).map_err(|e| PluginError::IoError {
                     operation: "create parent directory".to_string(),
                     path: parent.to_string_lossy().to_string(),
-                    cause: e.to_string(),
+                    source: Some(Box::new(e)),
                 })?;
             }
         }
@@ -69,7 +69,7 @@ impl FileWriter {
             .map_err(|e| PluginError::IoError {
                 operation: "create output file".to_string(),
                 path: path.to_string(),
-                cause: e.to_string(),
+                source: Some(Box::new(e)),
             })?;
 
         Ok(Self {
@@ -123,13 +123,13 @@ impl OutputManager {
             .map_err(|e| PluginError::IoError {
                 operation: "write output".to_string(),
                 path: self.get_destination_description(),
-                cause: e.to_string(),
+                source: Some(Box::new(e)),
             })?;
 
         writer.finalize().map_err(|e| PluginError::IoError {
             operation: "finalize output".to_string(),
             path: self.get_destination_description(),
-            cause: e.to_string(),
+            source: Some(Box::new(e)),
         })?;
 
         Ok(())
@@ -166,7 +166,7 @@ impl OutputManager {
                         return Err(PluginError::IoError {
                             operation: "validate output destination".to_string(),
                             path: path.clone(),
-                            cause: "Parent directory is read-only".to_string(),
+                            source: None,
                         });
                     }
                 }
@@ -182,7 +182,7 @@ impl OutputManager {
                     return Err(PluginError::IoError {
                         operation: "validate output destination".to_string(),
                         path: path.clone(),
-                        cause: e.to_string(),
+                        source: Some(Box::new(e)),
                     });
                 }
 

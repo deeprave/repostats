@@ -8,10 +8,8 @@
 
 use crate::core::sync::{handle_mutex_poison, handle_rwlock_read};
 use crate::queue::error::{QueueError, QueueResult};
-use crate::queue::message::{Message, MessageHeader};
-use crate::queue::types::MemoryStats;
+use crate::queue::message::Message;
 use std::collections::{HashMap, VecDeque};
-use std::mem;
 use std::sync::{Arc, RwLock};
 
 /// Internal queue entry with sequence number and Arc-wrapped message
@@ -290,59 +288,6 @@ impl MultiConsumerQueue {
         Ok(positions
             .get(&consumer_id)
             .map(|pos| pos.last_read_timestamp))
-    }
-
-    /// Calculate memory usage statistics for this queue
-    pub fn memory_stats(&self) -> QueueResult<MemoryStats> {
-        let messages =
-            handle_mutex_poison(self.messages.read(), |msg| QueueError::OperationFailed {
-                message: format!("Failed to read messages for memory stats: {}", msg),
-            })?;
-        let consumer_positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
-            QueueError::OperationFailed {
-                message: format!(
-                    "Failed to read consumer positions for memory stats: {}",
-                    msg
-                ),
-            }
-        })?;
-
-        let message_count = messages.len();
-
-        // Calculate message data size
-        let message_data_bytes: usize = messages
-            .iter()
-            .map(|entry| self.calculate_message_size(&entry.message))
-            .sum();
-
-        // Calculate Arc overhead (approximate)
-        let arc_overhead = message_count * mem::size_of::<Arc<Message>>();
-
-        // Calculate queue entry overhead
-        let entry_overhead = message_count * mem::size_of::<QueueEntry>();
-
-        // Calculate consumer position overhead
-        let consumer_overhead = consumer_positions.len() * mem::size_of::<ConsumerPosition>();
-
-        let overhead_bytes = arc_overhead + entry_overhead + consumer_overhead;
-
-        Ok(MemoryStats {
-            total_messages: message_count,
-            total_bytes: message_data_bytes + overhead_bytes,
-            message_data_bytes,
-            overhead_bytes,
-        })
-    }
-
-    /// Calculate the approximate memory size of a Message
-    fn calculate_message_size(&self, message: &Message) -> usize {
-        let header_size = mem::size_of::<MessageHeader>()
-            + message.header.producer_id.len()
-            + message.header.message_type.len();
-
-        let data_size = message.data.len();
-
-        header_size + data_size + mem::size_of::<u64>() // timestamp
     }
 
     /// Perform garbage collection based on consumer positions

@@ -44,9 +44,7 @@ static NOTIFICATION_SERVICE: LazyLock<Arc<Mutex<AsyncNotificationManager>>> = La
 /// ```
 pub async fn get_notification_service() -> tokio::sync::MutexGuard<'static, AsyncNotificationManager>
 {
-    log::trace!("Acquiring notification service lock");
     let guard = NOTIFICATION_SERVICE.lock().await;
-    log::trace!("Acquired notification service lock");
     guard
 }
 

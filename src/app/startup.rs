@@ -1,10 +1,16 @@
 use crate::app::cli::display::display_plugin_table;
+use crate::core::controller::ControllerConfig;
 use crate::core::error_handling::ContextualError;
 use crate::core::validation::ValidationError;
 use crate::plugin::error::PluginError;
 use log;
 use std::fmt;
+use std::sync::{LazyLock, Mutex};
 use toml;
+
+/// Global controller configuration initialized during startup
+pub static CONTROLLER_CONFIG: LazyLock<Mutex<ControllerConfig>> =
+    LazyLock::new(|| Mutex::new(ControllerConfig::default()));
 
 /// Startup operation error types
 #[derive(Debug)]
@@ -233,7 +239,7 @@ pub async fn startup(
     // Return the configured scanner manager for main.rs to use, or None if no valid scanners
     match scanner_manager_opt {
         Some(scanner_manager) => {
-            log::debug!("System startup completed successfully");
+            log::trace!("System startup completed successfully");
             Ok(Some(scanner_manager))
         }
         None => {
@@ -268,7 +274,6 @@ async fn discover_commands(
             log::warn!("Plugin discovery failed during plugin_manager.discover_plugins()");
             e
         })?;
-    log::trace!("discover_commands plugin discovery completed successfully");
 
     let plugins = plugin_manager.list_plugins_with_filter(false).await;
     log::trace!("discover_commands found {} plugins", plugins.len());
@@ -354,7 +359,7 @@ async fn configure_plugins(
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
-    log::debug!("Plugins loaded successfully");
+    log::trace!("Plugins loaded successfully");
     Ok(())
 }
 
@@ -583,7 +588,7 @@ async fn configure_scanner(
         .await
     {
         Ok(scanners) => {
-            log::debug!(
+            log::trace!(
                 "Successfully created {} scanners for all repositories",
                 scanners.len()
             );

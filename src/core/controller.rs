@@ -4,15 +4,32 @@
 //! across different subsystems (plugins, scanner, etc.) without holding locks.
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::broadcast;
 
+/// Controller timeout configuration
+#[derive(Debug, Clone)]
+pub struct ControllerConfig {
+    pub completion_timeout: Duration,
+    pub shutdown_timeout: Duration,
+}
+
+impl Default for ControllerConfig {
+    fn default() -> Self {
+        Self {
+            completion_timeout: Duration::from_secs(60),
+            shutdown_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
 /// Controller registration information for dynamic discovery
 pub struct ControllerInfo {
     pub name: &'static str,
-    pub factory: fn() -> Arc<dyn Controller>,
+    pub factory: fn() -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>,
 }
 
 // Register ControllerInfo with inventory for dynamic discovery
@@ -25,7 +42,7 @@ macro_rules! controller {
         inventory::submit! {
             $crate::core::controller::ControllerInfo {
                 name: $name,
-                factory: || Arc::new(<$controller_type>::new()),
+                factory: || Box::pin(async { <$controller_type>::new().await.map(|c| Box::new(c) as Box<dyn $crate::core::controller::Controller>) }),
             }
         }
     };
@@ -50,6 +67,13 @@ pub enum SystemError {
 
     #[error("Failed to publish system event '{event_type}'")]
     EventPublishFailed { event_type: String },
+
+    #[error("Plugin subsystem error")]
+    PluginError {
+        #[from]
+        #[source]
+        source: crate::plugin::error::PluginError,
+    },
 }
 
 /// Simple result type for system coordination operations
@@ -59,11 +83,30 @@ pub type SystemResult<T> = Result<T, SystemError>;
 #[async_trait]
 pub trait Controller: Send + Sync {
     /// Gracefully stop this subsystem
-    async fn graceful_system_stop(&self) -> SystemResult<()>;
+    async fn graceful_system_stop(&mut self) -> SystemResult<()>;
 
     /// Wait for subsystem completion or handle shutdown signal
+    ///
+    /// # Broadcast Receiver Behaviour
+    ///
+    /// The `shutdown_rx` parameter uses tokio's broadcast channel, which has important semantic differences
+    /// from other channel types:
+    ///
+    /// - **Message Delivery**: Broadcast receivers can miss messages if they're not actively listening
+    ///   when a message is sent. This is different from mpsc channels where messages are queued.
+    /// - **Late Subscription**: If a receiver subscribes after a message has been broadcast, it will
+    ///   miss that message entirely.
+    /// - **Receiver Independence**: Each receiver gets its own copy of broadcast messages, but only
+    ///   if they're listening at the time of broadcast.
+    /// - **RecvError::Lagged**: Receivers can fall behind if messages are sent faster than consumed,
+    ///   resulting in `RecvError::Lagged` which indicates missed messages.
+    ///
+    /// For shutdown coordination, this means:
+    /// - Controllers must be actively listening on `shutdown_rx` before shutdown signals are sent
+    /// - Missing a shutdown signal could result in the controller never terminating gracefully
+    /// - Implementations should handle `RecvError::Lagged` as equivalent to receiving shutdown
     async fn await_system_completion_with_shutdown(
-        &self,
+        &mut self,
         shutdown_rx: broadcast::Receiver<()>,
     ) -> SystemResult<()>;
 }
@@ -84,13 +127,13 @@ mod tests {
     }
 
     impl MockController {
-        fn new() -> Self {
-            Self {
+        async fn new() -> SystemResult<Self> {
+            Ok(Self {
                 stop_called: Arc::new(Mutex::new(false)),
                 await_called: Arc::new(Mutex::new(false)),
                 should_fail: false,
                 fail_message: String::new(),
-            }
+            })
         }
 
         fn failing(message: &str) -> Self {
@@ -105,7 +148,7 @@ mod tests {
 
     #[async_trait]
     impl Controller for MockController {
-        async fn graceful_system_stop(&self) -> SystemResult<()> {
+        async fn graceful_system_stop(&mut self) -> SystemResult<()> {
             let mut called = self.stop_called.lock().await;
             *called = true;
 
@@ -120,7 +163,7 @@ mod tests {
         }
 
         async fn await_system_completion_with_shutdown(
-            &self,
+            &mut self,
             _shutdown_rx: broadcast::Receiver<()>,
         ) -> SystemResult<()> {
             let mut called = self.await_called.lock().await;
@@ -139,7 +182,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_controller_trait_graceful_stop_success() {
-        let controller = MockController::new();
+        let mut controller = MockController::new()
+            .await
+            .expect("Should create controller");
         let result = controller.graceful_system_stop().await;
 
         assert!(result.is_ok());
@@ -148,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_controller_trait_graceful_stop_failure() {
-        let controller = MockController::failing("test failure");
+        let mut controller = MockController::failing("test failure");
         let result = controller.graceful_system_stop().await;
 
         assert!(result.is_err());
@@ -163,7 +208,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_controller_trait_await_completion_success() {
-        let controller = MockController::new();
+        let mut controller = MockController::new()
+            .await
+            .expect("Should create controller");
         let (_tx, rx) = broadcast::channel(1);
 
         let result = controller.await_system_completion_with_shutdown(rx).await;
@@ -174,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_controller_trait_await_completion_failure() {
-        let controller = MockController::failing("completion timeout");
+        let mut controller = MockController::failing("completion timeout");
         let (_tx, rx) = broadcast::channel(1);
 
         let result = controller.await_system_completion_with_shutdown(rx).await;
@@ -192,7 +239,11 @@ mod tests {
     #[tokio::test]
     async fn test_controller_trait_as_dyn_object() {
         // Test that the trait can be used as a dynamic object
-        let controller: Arc<dyn Controller> = Arc::new(MockController::new());
+        let mut controller: Box<dyn Controller> = Box::new(
+            MockController::new()
+                .await
+                .expect("Should create controller"),
+        );
 
         let result = controller.graceful_system_stop().await;
         assert!(result.is_ok());
@@ -205,14 +256,22 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_controllers_in_collection() {
         // Test that multiple controllers can be managed together
-        let controllers: Vec<Arc<dyn Controller>> = vec![
-            Arc::new(MockController::new()),
-            Arc::new(MockController::new()),
-            Arc::new(MockController::failing("controller 3 failed")),
+        let mut controllers: Vec<Box<dyn Controller>> = vec![
+            Box::new(
+                MockController::new()
+                    .await
+                    .expect("Should create controller"),
+            ),
+            Box::new(
+                MockController::new()
+                    .await
+                    .expect("Should create controller"),
+            ),
+            Box::new(MockController::failing("controller 3 failed")),
         ];
 
         let mut results = Vec::new();
-        for controller in &controllers {
+        for controller in &mut controllers {
             results.push(controller.graceful_system_stop().await);
         }
 
@@ -223,7 +282,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_controller_with_shutdown_signal() {
-        let controller = MockController::new();
+        let mut controller = MockController::new()
+            .await
+            .expect("Should create controller");
         let (tx, rx) = broadcast::channel(1);
 
         // Spawn task to send shutdown signal
@@ -240,7 +301,6 @@ mod tests {
     // Tests for inventory-based controller discovery
     mod inventory_tests {
         use super::*;
-        use std::any::Any;
 
         // Test ControllerInfo struct for dynamic registration
         #[tokio::test]
@@ -248,13 +308,19 @@ mod tests {
             // Test that ControllerInfo can be created with name and factory
             let info = ControllerInfo {
                 name: "test-controller",
-                factory: || Arc::new(MockController::new()),
+                factory: || {
+                    Box::pin(async {
+                        MockController::new()
+                            .await
+                            .map(|c| Box::new(c) as Box<dyn Controller>)
+                    })
+                },
             };
 
             assert_eq!(info.name, "test-controller");
 
             // Test factory creates working controller
-            let controller = (info.factory)();
+            let mut controller = (info.factory)().await.expect("Factory should succeed");
             // Test that the controller actually works (can't check type_id on trait objects)
             assert!(controller.graceful_system_stop().await.is_ok());
         }
@@ -320,21 +386,39 @@ mod tests {
         // Test controller factory function signature
         #[tokio::test]
         async fn test_controller_factory_signature() {
-            // Test that factory functions return Arc<dyn Controller>
-            let factory: fn() -> Arc<dyn Controller> = || Arc::new(MockController::new());
+            // Test that factory functions return Future<SystemResult<Box<dyn Controller>>>
+            fn factory() -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>
+            {
+                Box::pin(async {
+                    Ok(Box::new(MockController::failing("async test")) as Box<dyn Controller>)
+                })
+            }
 
-            let controller = factory();
+            let mut controller = factory().await.expect("Factory should succeed");
             // Test that the returned controller actually works
-            assert!(controller.graceful_system_stop().await.is_ok());
+            assert!(controller.graceful_system_stop().await.is_err()); // This one should fail as designed
         }
 
         // Test multiple controller types can be registered
         #[tokio::test]
         async fn test_multiple_controller_registration() {
-            // Test registering different types of controllers
-            let plugin_factory: fn() -> Arc<dyn Controller> = || Arc::new(MockController::new());
-            let scanner_factory: fn() -> Arc<dyn Controller> =
-                || Arc::new(MockController::failing("scanner"));
+            fn plugin_factory(
+            ) -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>
+            {
+                Box::pin(async {
+                    MockController::new()
+                        .await
+                        .map(|c| Box::new(c) as Box<dyn Controller>)
+                })
+            }
+
+            fn scanner_factory(
+            ) -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>
+            {
+                Box::pin(async {
+                    Ok(Box::new(MockController::failing("scanner")) as Box<dyn Controller>)
+                })
+            }
 
             let plugin_info = ControllerInfo {
                 name: "plugin",
@@ -347,8 +431,12 @@ mod tests {
             };
 
             // Should be able to create different controller types
-            let plugin_controller = (plugin_info.factory)();
-            let scanner_controller = (scanner_info.factory)();
+            let mut plugin_controller = (plugin_info.factory)()
+                .await
+                .expect("Plugin factory should succeed");
+            let mut scanner_controller = (scanner_info.factory)()
+                .await
+                .expect("Scanner factory should succeed");
 
             // Test that both controllers work as expected
             assert!(plugin_controller.graceful_system_stop().await.is_ok());
@@ -359,16 +447,31 @@ mod tests {
         #[tokio::test]
         async fn test_discovered_controller_error_collection() {
             // Test that errors from multiple controllers are collected properly
-            let failing_factory: fn() -> Arc<dyn Controller> =
-                || Arc::new(MockController::failing("test error"));
-            let working_factory: fn() -> Arc<dyn Controller> = || Arc::new(MockController::new());
+            let failing_factory = || {
+                Box::pin(async {
+                    Ok::<Box<dyn Controller>, SystemError>(Box::new(MockController::failing(
+                        "test error",
+                    ))
+                        as Box<dyn Controller>)
+                })
+            };
+            let working_factory = || {
+                Box::pin(async {
+                    MockController::new()
+                        .await
+                        .map(|c| Box::new(c) as Box<dyn Controller>)
+                })
+            };
 
-            let controllers: Vec<Arc<dyn Controller>> =
-                vec![failing_factory(), working_factory(), failing_factory()];
+            let mut controllers: Vec<Box<dyn Controller>> = vec![
+                failing_factory().await.expect("Factory should succeed"),
+                working_factory().await.expect("Factory should succeed"),
+                failing_factory().await.expect("Factory should succeed"),
+            ];
 
             // Test that all controllers are attempted even when some fail
             let mut results = Vec::new();
-            for controller in &controllers {
+            for controller in &mut controllers {
                 results.push(controller.graceful_system_stop().await);
             }
 

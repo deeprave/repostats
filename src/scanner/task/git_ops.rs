@@ -667,7 +667,7 @@ impl ScannerTask {
         {
             match self.create_checkout_for_commit(&commit_info).await {
                 Ok(dir) => {
-                    log::debug!(
+                    log::trace!(
                         "Initialized checkout root for target commit {} at {}",
                         commit_info.hash,
                         dir.display()
@@ -788,19 +788,17 @@ impl ScannerTask {
 
             match parents.len() {
                 0 => {
-                    // Initial commit - treat all files as added
-                    log::debug!("Processing initial commit: {}", commit_id_hex);
+                    log::trace!("Processing commit: {}", commit_id_hex);
                     Self::analyze_initial_commit_files(&repo, &commit)
                 }
                 1 => {
-                    // Regular commit - analyze diff data
-                    log::debug!("Processing regular commit: {}", commit_id_hex);
+                    log::trace!("Processing commit: {}", commit_id_hex);
                     Self::analyze_commit_diff_data(&repo, &commit)
                 }
                 _ => {
                     // Merge commit - analyze diff data
-                    log::debug!(
-                        "Processing merge commit: {} with {} parents",
+                    log::trace!(
+                        "Processing merge commit: {} ({} parents)",
                         commit_id_hex,
                         parents.len()
                     );
@@ -834,7 +832,7 @@ impl ScannerTask {
 
         // Inspect tree to understand the actual content structure
         let tree_entry_count = tree.iter().count();
-        log::debug!("Initial commit tree has {} entries", tree_entry_count);
+        log::trace!("Initial commit tree has {} entries", tree_entry_count);
 
         // Use tree inspection to provide more intelligent file analysis
         // while maintaining compatibility with existing tests
@@ -896,22 +894,15 @@ impl ScannerTask {
                 }
             }
 
-            log::debug!(
-                "Analyzed {} real files from initial commit tree",
-                files_analyzed
-            );
+            log::trace!("Analyzed {} files from commit tree", files_analyzed);
         }
 
-        log::debug!(
-            "Initial commit analysis complete: {} files processed",
-            diff_files.len()
-        );
+        log::trace!("Commit analysis: processed {} files", diff_files.len());
 
-        // Return actual files found - empty list for truly empty initial commits
         if diff_files.is_empty() {
-            log::debug!("No files found in initial commit - returning empty list");
+            log::trace!("No files found in commit");
         } else {
-            log::debug!("Found {} files in initial commit", diff_files.len());
+            log::trace!("Found {} files in commit", diff_files.len());
         }
 
         Ok(diff_files)
@@ -922,7 +913,7 @@ impl ScannerTask {
         repo: &gix::Repository,
         commit: &gix::Commit<'_>,
     ) -> ScanResult<Vec<DiffFileInfo>> {
-        log::debug!(
+        log::trace!(
             "Analyzing diff data for commit {}",
             commit.id().to_hex_with_len(8)
         );
@@ -1396,7 +1387,7 @@ impl ScannerTask {
                     ),
                 })?;
 
-            log::debug!(
+            log::trace!(
                 "Successfully extracted {} files for commit {} to checkout directory: {}",
                 files_extracted,
                 commit_info.hash,
@@ -1419,7 +1410,7 @@ impl ScannerTask {
         target_dir: &std::path::Path,
         progress_callback: Option<&dyn Fn(usize, usize)>,
     ) -> ScanResult<usize> {
-        log::debug!(
+        log::trace!(
             "extract_commit_files_to_directory: Extracting files from revision '{}' to '{}'",
             commit_sha,
             target_dir.display()
@@ -1599,7 +1590,7 @@ impl ScannerTask {
     pub async fn resolve_revision(&self, revision: Option<&str>) -> ScanResult<String> {
         let revision_str = revision.unwrap_or("HEAD");
 
-        log::debug!(
+        log::trace!(
             "resolve_revision: Resolving revision '{}' to commit SHA",
             revision_str
         );
@@ -1632,7 +1623,7 @@ impl ScannerTask {
 
         let commit_sha = commit.id().to_string();
 
-        log::debug!(
+        log::trace!(
             "resolve_revision: Successfully resolved '{}' to commit SHA '{}'",
             revision_str,
             commit_sha

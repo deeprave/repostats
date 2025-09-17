@@ -128,30 +128,17 @@ mod tests {
             }
         }
 
-        // Verify system statistics
-        let memory_stats = manager.memory_stats().unwrap();
-        // Don't assert on memory since garbage collection may have occurred
-
-        // Note: consumers may have been dropped by now, affecting lag stats
-        // In a real-world scenario, consumers would be kept alive
-        // For this integration test, we've already verified the core functionality
-
         println!("✓ Full producer-consumer workflow integration test passed");
         println!("  Published: {} messages from 3 producers", total_published);
         println!(
             "  Consumed: {} messages by 3 consumers",
             total_published * 3
         );
-        println!("  Memory usage: {} bytes", memory_stats.total_bytes);
     }
 
     #[tokio::test]
-    #[ignore = "slow"]
-    async fn test_concurrent_integration_with_backpressure() {
+    async fn test_concurrent_integration_basic() {
         let manager = Arc::new(QueueManager::new());
-
-        // Set a low memory threshold to trigger backpressure
-        manager.set_memory_threshold_bytes(5000).unwrap();
 
         let mut tasks = JoinSet::new();
 
@@ -166,15 +153,11 @@ mod tests {
 
                 let mut published = 0;
 
-                for i in 0..50 {
+                for i in 0..20 {
                     let msg = Message::new(
                         format!("concurrent-producer-{}", producer_id),
-                        "bulk_data".to_string(),
-                        format!(
-                            "Large data payload for message {} from producer {}",
-                            i, producer_id
-                        )
-                        .repeat(10),
+                        "data".to_string(),
+                        format!("message-{}-{}", producer_id, i),
                     );
 
                     match producer.publish(msg) {
@@ -185,18 +168,6 @@ mod tests {
                                 producer_id, i, e
                             );
                             break;
-                        }
-                    }
-
-                    // Check memory pressure periodically
-                    if i % 10 == 0 {
-                        if let Ok(pressure) = manager_clone.check_memory_pressure() {
-                            if pressure {
-                                println!(
-                                    "Producer {} detected memory pressure at message {}",
-                                    producer_id, i
-                                );
-                            }
                         }
                     }
 
@@ -221,7 +192,7 @@ mod tests {
                 let start_time = std::time::Instant::now();
 
                 // Consumer reads with timeout to avoid hanging
-                while start_time.elapsed() < Duration::from_secs(5) {
+                while start_time.elapsed() < Duration::from_secs(3) {
                     match consumer.read() {
                         Ok(Some(_message)) => {
                             consumed += 1;
@@ -251,7 +222,7 @@ mod tests {
             let (id, count) = result.unwrap();
 
             // Distinguish between producer and consumer results
-            if count > 100 {
+            if count > 30 {
                 // Likely a consumer (reads more than publishes due to sharing)
                 consumer_totals += count;
                 println!("Consumer {} processed {} messages", id, count);
@@ -266,25 +237,11 @@ mod tests {
         assert!(producer_totals > 0, "Should have published some messages");
         assert!(consumer_totals > 0, "Should have consumed some messages");
 
-        // Check final system state
-        let final_memory = manager.memory_usage_bytes();
-        let lag_stats = manager.get_lag_statistics().unwrap();
-
-        println!("✓ Concurrent integration with backpressure test completed");
+        println!("✓ Concurrent integration test completed");
         println!(
             "  Total published: {}, Total consumed: {}",
             producer_totals, consumer_totals
         );
-        println!("  Final memory usage: {} bytes", final_memory);
-        println!(
-            "  Consumer lag stats: max={}, min={}, avg={:.1}",
-            lag_stats.max_lag, lag_stats.min_lag, lag_stats.avg_lag
-        );
-
-        // System should still be functional
-        // Note: Memory may be higher due to large message payloads and concurrent access
-        // The important thing is that backpressure was triggered (which we saw in the logs)
-        assert!(final_memory > 0, "Should have some memory usage");
     }
 
     #[tokio::test]
@@ -318,15 +275,11 @@ mod tests {
         assert_eq!(consumed, 5, "Should consume all lifecycle messages");
 
         // Verify the queue manager is functional after event integration
-        let stats = manager.memory_stats().unwrap();
-        assert!(stats.total_bytes > 0); // Should have some memory usage
-
         let active_consumers = manager.active_consumer_count().unwrap();
         assert_eq!(active_consumers, 1, "Should have one active consumer");
 
         println!("✓ Lifecycle integration with events test passed");
         println!("  Processed: {} lifecycle messages", consumed);
         println!("  Active consumers: {}", active_consumers);
-        println!("  Memory usage: {} bytes", stats.total_bytes);
     }
 }

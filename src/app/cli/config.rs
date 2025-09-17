@@ -217,6 +217,11 @@ impl Args {
             args.no_merge_commits = !merge;
         }
 
+        // Handle timeout configurations
+        if let Some(plugin_timeout) = config.get("plugin-timeout").and_then(|v| v.as_integer()) {
+            args.plugin_timeout = Some(plugin_timeout as u64);
+        }
+
         Ok(())
     }
 

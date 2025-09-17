@@ -50,6 +50,5 @@ static QUEUE_SERVICE: LazyLock<Arc<QueueManager>> = LazyLock::new(|| {
 /// # }
 /// ```
 pub fn get_queue_service() -> Arc<QueueManager> {
-    log::trace!("Getting queue service");
     Arc::clone(&QUEUE_SERVICE)
 }

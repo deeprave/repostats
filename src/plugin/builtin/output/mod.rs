@@ -129,7 +129,7 @@ impl Plugin for OutputPlugin {
     }
 
     async fn execute(&mut self) -> PluginResult<()> {
-        log::debug!("OutputPlugin starting - creating and spawning OutputEventHandler");
+        log::trace!("OutputPlugin starting - creating and spawning OutputEventHandler");
 
         // Get the injected notification manager (cloning for the event handler)
         let notification_manager =
@@ -167,7 +167,7 @@ impl Plugin for OutputPlugin {
         // Spawn the event handler task
         tokio::spawn(handler.run_event_loop(receiver));
 
-        log::debug!("OutputPlugin spawned OutputEventHandler task and returning");
+        log::trace!("OutputPlugin spawned OutputEventHandler task and returning");
         Ok(())
     }
 

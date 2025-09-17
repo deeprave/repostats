@@ -223,7 +223,7 @@ impl PluginManager {
 
     pub async fn get_active_plugins(&self) -> Vec<String> {
         let registry = self.registry().inner().read().await;
-        registry.get_plugin_names()
+        registry.get_active_plugins()
     }
 
     /// Get current API version
@@ -282,7 +282,7 @@ impl PluginManager {
         log::trace!("Starting plugin discovery");
         let discovered_plugins = discovery.discover_plugins().await?;
         log::debug!(
-            "Plugin discovery completed, {} plugins available",
+            "Plugin discovery completed, {} plugins found",
             discovered_plugins.len()
         );
 
@@ -560,7 +560,7 @@ impl PluginManager {
                             }
                         }
                     }
-                    log::info!("PluginManager: System event listener task terminated");
+                    log::debug!("PluginManager: System event listener task terminated");
                 });
 
                 Ok(())
@@ -1227,6 +1227,67 @@ mod tests {
         let active_plugins = manager.list_plugins_with_filter(true).await;
         assert_eq!(active_plugins.len(), 1);
         assert_eq!(active_plugins[0].name, "test-plugin");
+    }
+
+    #[tokio::test]
+    async fn test_get_active_plugins_returns_only_active_plugins() {
+        // Phase 4.3.1: Write test verifying method returns only active plugins
+        let manager = PluginManager::new(crate::core::version::get_api_version());
+
+        // Register two plugins but only activate one
+        {
+            let mut registry = manager.registry().inner().write().await;
+            registry
+                .register_plugin(Box::new(MockPlugin::new("active-plugin")))
+                .unwrap();
+            registry
+                .register_plugin(Box::new(MockPlugin::new("inactive-plugin")))
+                .unwrap();
+        }
+
+        // Before activation, get_active_plugins() should return empty list
+        let active_plugins_before = manager.get_active_plugins().await;
+        assert!(
+            active_plugins_before.is_empty(),
+            "Expected no active plugins before activation, but got: {:?}",
+            active_plugins_before
+        );
+
+        // Activate only one plugin
+        manager
+            .registry()
+            .activate_plugin("active-plugin")
+            .await
+            .unwrap();
+
+        // After activation, get_active_plugins() should return only the activated plugin
+        let active_plugins_after = manager.get_active_plugins().await;
+        assert_eq!(
+            active_plugins_after.len(),
+            1,
+            "Expected exactly 1 active plugin, but got: {:?}",
+            active_plugins_after
+        );
+        assert_eq!(
+            active_plugins_after[0], "active-plugin",
+            "Expected 'active-plugin' to be active, but got: {:?}",
+            active_plugins_after
+        );
+
+        // Verify that the inactive plugin is not in the active list
+        assert!(
+            !active_plugins_after.contains(&"inactive-plugin".to_string()),
+            "inactive-plugin should not be in active plugins list: {:?}",
+            active_plugins_after
+        );
+
+        // For comparison: verify list_plugins_with_filter works correctly
+        let active_via_filter = manager.list_plugins_with_filter(true).await;
+        assert_eq!(active_via_filter.len(), 1);
+        assert_eq!(active_via_filter[0].name, "active-plugin");
+
+        let all_plugins = manager.list_plugins_with_filter(false).await;
+        assert_eq!(all_plugins.len(), 2); // Both plugins should be listed
     }
 
     #[test]

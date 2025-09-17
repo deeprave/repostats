@@ -24,4 +24,6 @@ pub(crate) mod types;
 pub mod api;
 
 #[cfg(test)]
+mod error_tests;
+#[cfg(test)]
 mod tests;

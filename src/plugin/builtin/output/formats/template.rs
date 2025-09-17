@@ -95,7 +95,7 @@ impl TemplateFormatter {
         let content = std::fs::read_to_string(path).map_err(|e| PluginError::IoError {
             operation: "read template".to_string(),
             path: path.to_string(),
-            cause: e.to_string(),
+            source: Some(Box::new(e)),
         })?;
 
         Self::with_template(content)
@@ -136,22 +136,16 @@ impl TemplateFormatter {
             .map_err(|e| PluginError::IoError {
                 operation: "fetch template".to_string(),
                 path: url.to_string(),
-                cause: format!("Network request failed: {}", e),
+                source: Some(Box::new(e)),
             })?;
 
         // Check if response is successful
         if !response.status().is_success() {
             return Err(PluginError::IoError {
-                operation: "fetch template".to_string(),
+                operation: format!("fetch template (HTTP {})", response.status().as_u16())
+                    .to_string(),
                 path: url.to_string(),
-                cause: format!(
-                    "HTTP {} - {}",
-                    response.status().as_u16(),
-                    response
-                        .status()
-                        .canonical_reason()
-                        .unwrap_or("Unknown error")
-                ),
+                source: None,
             });
         }
 
@@ -159,7 +153,7 @@ impl TemplateFormatter {
         let content = response.text().await.map_err(|e| PluginError::IoError {
             operation: "read template response".to_string(),
             path: url.to_string(),
-            cause: format!("Failed to read response body: {}", e),
+            source: Some(Box::new(e)),
         })?;
 
         Self::with_template(content)

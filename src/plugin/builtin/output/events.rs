@@ -16,7 +16,7 @@ use std::sync::{
     Arc,
 };
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 /// Event handler for OutputPlugin that runs in a separate task
 pub struct OutputEventHandler {
@@ -30,6 +30,10 @@ pub struct OutputEventHandler {
     received_data: Arc<Mutex<HashMap<(String, String), Arc<PluginDataExport>>>>,
     /// Flag indicating if we're currently processing/exporting data
     is_processing_data: Arc<AtomicBool>,
+    /// Worker task handle for monitoring failures
+    worker_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Shutdown signal sender for graceful worker shutdown
+    shutdown_sender: broadcast::Sender<()>,
 }
 
 impl OutputEventHandler {
@@ -39,12 +43,15 @@ impl OutputEventHandler {
         notification_manager: Arc<Mutex<AsyncNotificationManager>>,
         received_data: Arc<Mutex<HashMap<(String, String), Arc<PluginDataExport>>>>,
     ) -> Self {
+        let (shutdown_sender, _) = broadcast::channel(1);
         Self {
             plugin_name,
             notification_manager,
             plugin_registry: None,
             received_data,
             is_processing_data: Arc::new(AtomicBool::new(false)),
+            worker_handle: None,
+            shutdown_sender,
         }
     }
 
@@ -63,24 +70,52 @@ impl OutputEventHandler {
         let mut running = true;
         let mut can_exit = false;
 
-        // Spawn the simple worker task (placeholder for RS-49)
+        // Spawn the simple worker task and capture handle for monitoring
         let worker_received_data = self.received_data.clone();
         let worker_processing_flag = self.is_processing_data.clone();
         let worker_plugin_name = self.plugin_name.clone();
         let worker_notification_manager = self.notification_manager.clone();
+        let worker_shutdown_sender = self.shutdown_sender.clone();
 
-        tokio::spawn(async move {
+        let worker_handle = tokio::spawn(async move {
             Self::run_simple_worker(
                 worker_received_data,
                 worker_processing_flag,
                 worker_plugin_name,
                 worker_notification_manager,
+                worker_shutdown_sender,
             )
             .await
         });
 
+        // Store the handle for monitoring
+        self.worker_handle = Some(worker_handle);
+
         while running {
             tokio::select! {
+                // Monitor worker task for failures
+                worker_result = async {
+                    match &mut self.worker_handle {
+                        Some(handle) if !handle.is_finished() => {
+                            handle.await
+                        }
+                        _ => std::future::pending().await, // Never resolves if no handle or already finished
+                    }
+                } => {
+                    match worker_result {
+                        Ok(()) => {
+                            log::warn!("OutputPlugin worker task completed unexpectedly");
+                        }
+                        Err(e) => {
+                            log::error!("OutputPlugin worker task failed: {:?}", e);
+                            if e.is_panic() {
+                                log::error!("Worker task panicked - OutputPlugin may be in inconsistent state");
+                            }
+                        }
+                    }
+                    // Worker failed, continue running but mark it as unavailable
+                    self.worker_handle = None;
+                }
                 // Handle incoming events
                 Some(event) = receiver.recv() => {
                     match event {
@@ -128,6 +163,9 @@ impl OutputEventHandler {
                 }
             }
         }
+
+        // Signal worker to shut down gracefully
+        let _ = self.shutdown_sender.send(());
 
         log::debug!("OutputPlugin event loop completed");
         Ok(())
@@ -193,7 +231,6 @@ impl OutputEventHandler {
                 Ok(false) // Continue running
             }
             _ => {
-                log::debug!("OutputPlugin ignoring plugin event: {:?}", event.event_type);
                 Ok(false) // Continue running
             }
         }
@@ -221,7 +258,7 @@ impl OutputEventHandler {
                 Ok(true) // Exit immediately
             }
             _ => {
-                log::debug!("OutputPlugin handling system event: {:?}", event.event_type);
+                log::trace!("OutputPlugin handling system event: {:?}", event.event_type);
                 Ok(false) // Continue running
             }
         }
@@ -286,9 +323,11 @@ impl OutputEventHandler {
         log::debug!("Data export metadata: {:?}", data_export.metadata);
 
         // TODO: Implement actual format detection and export logic
-        println!(
-            "OUTPUT: Plugin {} exported data for scan {}",
-            plugin_id, scan_id
+        log::info!(
+            "Data export completed: plugin='{}' scan='{}' timestamp={:?}",
+            plugin_id,
+            scan_id,
+            data_export.timestamp
         );
 
         Ok(())
@@ -338,54 +377,85 @@ impl OutputEventHandler {
         is_processing_data: Arc<AtomicBool>,
         plugin_name: String,
         notification_manager: Arc<Mutex<AsyncNotificationManager>>,
+        shutdown_sender: broadcast::Sender<()>,
     ) {
+        let mut shutdown_receiver = shutdown_sender.subscribe();
+        let mut processing_shutdown_receiver = shutdown_sender.subscribe();
+        let mut wait_shutdown_receiver = shutdown_sender.subscribe();
         loop {
-            // Check for data to process
-            let work_item = {
-                let mut data_map = received_data.lock().await;
-                // Pop the first entry if available
-                if let Some(key) = data_map.keys().next().cloned() {
-                    let data = data_map.remove(&key);
-                    Some((key, data))
-                } else {
-                    None
+            tokio::select! {
+                // Check for shutdown signal
+                _ = shutdown_receiver.recv() => {
+                    log::debug!("Worker received shutdown signal");
+                    break;
                 }
-            };
+                // Check for data to process
+                _ = async {
+                    let work_item = {
+                        let mut data_map = received_data.lock().await;
+                        // Pop the first entry if available
+                        if let Some(key) = data_map.keys().next().cloned() {
+                            let data = data_map.remove(&key);
+                            Some((key, data))
+                        } else {
+                            None
+                        }
+                    };
 
-            if let Some(((plugin_id, scan_id), Some(_data_export))) = work_item {
-                // Set processing flag
-                is_processing_data.store(true, Ordering::SeqCst);
+                    if let Some(((plugin_id, scan_id), Some(_data_export))) = work_item {
+                        // Set processing flag
+                        is_processing_data.store(true, Ordering::SeqCst);
 
-                // Simulate processing with 25 second sleep
-                log::debug!(
-                    "Worker simulating processing for plugin {} scan {}",
-                    plugin_id,
-                    scan_id
-                );
-                tokio::time::sleep(Duration::from_secs(25)).await;
+                        // Simulate processing with 25 second sleep - but be interruptible
+                        log::debug!(
+                            "Worker simulating processing for plugin {} scan {}",
+                            plugin_id,
+                            scan_id
+                        );
 
-                // Publish DataComplete event BEFORE clearing flag to avoid race condition
-                let mut manager = notification_manager.lock().await;
-                use crate::notifications::api::PluginEvent;
-                use crate::notifications::event::{Event, PluginEventType};
+                        tokio::select! {
+                            _ = processing_shutdown_receiver.recv() => {
+                                log::debug!("Worker interrupted during processing");
+                                is_processing_data.store(false, Ordering::SeqCst);
+                                return;
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(25)) => {
+                                // Processing completed normally
+                            }
+                        }
 
-                let event = Event::Plugin(PluginEvent::with_message(
-                    PluginEventType::DataComplete,
-                    plugin_name.clone(),
-                    scan_id,
-                    format!("Completed processing data from {}", plugin_id),
-                ));
+                        // Publish DataComplete event BEFORE clearing flag to avoid race condition
+                        let mut manager = notification_manager.lock().await;
+                        use crate::notifications::api::PluginEvent;
+                        use crate::notifications::event::{Event, PluginEventType};
 
-                if let Err(e) = manager.publish(event).await {
-                    log::warn!("Failed to publish DataComplete event: {:?}", e);
-                }
-                drop(manager); // Release lock before clearing flag
+                        let event = Event::Plugin(PluginEvent::with_message(
+                            PluginEventType::DataComplete,
+                            plugin_name.clone(),
+                            scan_id,
+                            format!("Completed processing data from {}", plugin_id),
+                        ));
 
-                // Clear processing flag AFTER publishing event
-                is_processing_data.store(false, Ordering::SeqCst);
-            } else {
-                // No data available, wait a bit before checking again
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                        if let Err(e) = manager.publish(event).await {
+                            log::warn!("Failed to publish DataComplete event: {:?}", e);
+                        }
+                        drop(manager); // Release lock before clearing flag
+
+                        // Clear processing flag AFTER publishing event
+                        is_processing_data.store(false, Ordering::SeqCst);
+                    } else {
+                        // No data available, wait a bit before checking again
+                        tokio::select! {
+                            _ = wait_shutdown_receiver.recv() => {
+                                log::debug!("Worker interrupted during wait");
+                                return;
+                            }
+                            _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                                // Continue to next iteration
+                            }
+                        }
+                    }
+                } => {}
             }
         }
     }
