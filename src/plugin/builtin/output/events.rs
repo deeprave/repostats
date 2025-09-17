@@ -34,6 +34,8 @@ pub struct OutputEventHandler {
     worker_handle: Option<tokio::task::JoinHandle<()>>,
     /// Shutdown signal sender for graceful worker shutdown
     shutdown_sender: broadcast::Sender<()>,
+    /// Flag indicating if shutdown signal has been sent
+    shutdown_sent: Arc<AtomicBool>,
 }
 
 impl OutputEventHandler {
@@ -52,6 +54,7 @@ impl OutputEventHandler {
             is_processing_data: Arc::new(AtomicBool::new(false)),
             worker_handle: None,
             shutdown_sender,
+            shutdown_sent: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -165,7 +168,9 @@ impl OutputEventHandler {
         }
 
         // Signal worker to shut down gracefully
-        let _ = self.shutdown_sender.send(());
+        if !self.shutdown_sent.swap(true, Ordering::SeqCst) {
+            let _ = self.shutdown_sender.send(());
+        }
 
         log::debug!("OutputPlugin event loop completed");
         Ok(())
@@ -457,6 +462,15 @@ impl OutputEventHandler {
                     }
                 } => {}
             }
+        }
+    }
+}
+
+impl Drop for OutputEventHandler {
+    fn drop(&mut self) {
+        // Send shutdown signal if it hasn't been sent yet
+        if !self.shutdown_sent.swap(true, Ordering::SeqCst) {
+            let _ = self.shutdown_sender.send(());
         }
     }
 }
