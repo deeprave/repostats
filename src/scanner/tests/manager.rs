@@ -3,14 +3,44 @@
 //! Comprehensive test suite for the scanner manager functionality including
 //! repository validation, scanner creation, and path redaction.
 
-use crate::core::query::QueryParams;
 use crate::notifications::api::ScanEventType;
 use crate::scanner::manager::ScannerManager;
-use crate::scanner::task::ScannerTask;
 use crate::scanner::tests::helpers::{collect_scan_messages, scan_and_capture_messages};
 use crate::scanner::types::{ScanMessage, ScanStats};
-use serial_test::serial;
+use std::path::Path;
+use std::process::Command;
 use std::time::SystemTime;
+
+fn run_git(repo_path: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .expect("Failed to spawn git command");
+
+    assert!(
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_test_git_repo(repo_path: &Path) {
+    run_git(repo_path, &["init"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "commit.gpgsign", "false"]);
+}
+
+fn commit_all(repo_path: &Path, message: &str) {
+    run_git(repo_path, &["add", "."]);
+    run_git(
+        repo_path,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+    );
+}
 
 #[tokio::test]
 async fn test_scanner_manager_creation() {
@@ -728,74 +758,37 @@ async fn test_content_reconstruction_api() {
 async fn test_merge_commit_filtering() {
     // GREEN: Test that merge commit filtering works correctly with QueryParams
     use crate::core::query::QueryParams;
-    // Helper function already defined at module level
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
 
     // Initialize repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create initial commit on main branch
     std::fs::write(repo_path.join("main.txt"), "main content").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Initial commit");
 
     // Create feature branch and add commit
-    Command::new("git")
-        .args(["checkout", "-b", "feature"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    run_git(repo_path, &["checkout", "-b", "feature"]);
     std::fs::write(repo_path.join("feature.txt"), "feature content").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Feature commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Feature commit");
 
     // Merge back to main with a merge commit
-    Command::new("git")
-        .args(["checkout", "main"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["merge", "feature", "--no-ff", "-m", "Merge feature branch"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    run_git(repo_path, &["checkout", "main"]);
+    run_git(
+        repo_path,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "merge",
+            "feature",
+            "--no-ff",
+            "-m",
+            "Merge feature branch",
+        ],
+    );
 
     // Create scanner for the test repository
     let manager = ScannerManager::create().await;

@@ -50,7 +50,7 @@ impl PluginRegistry {
             })
         } else {
             self.plugins.insert(plugin_name.to_string(), plugin);
-            log::trace!("Registered plugin '{}'", plugin_name.to_string());
+            log::trace!("Registered plugin '{}'", plugin_name);
             Ok(())
         }
     }

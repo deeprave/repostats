@@ -3,8 +3,8 @@
 //! Tests for extracting commit files to directories - Git operations moved from CheckoutManager
 
 use super::super::*;
+use crate::scanner::task::tests::helpers::{commit_all, init_test_git_repo, run_git};
 use serial_test::serial;
-use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -15,21 +15,7 @@ async fn test_extract_commit_files_to_directory() {
     let repo_path = temp_dir.path();
 
     // Initialise Git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create test files with known content
     std::fs::write(
@@ -46,21 +32,12 @@ async fn test_extract_commit_files_to_directory() {
     std::fs::write(repo_path.join("config.toml"), "[package]\nname = \"test\"").unwrap();
 
     // Add and commit files
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit with test files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Initial commit with test files");
 
     // Get commit hash
-    let commit_output = Command::new("git")
+    let commit_output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     let commit_sha = std::str::from_utf8(&commit_output.stdout)
@@ -72,7 +49,7 @@ async fn test_extract_commit_files_to_directory() {
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .build();
@@ -201,21 +178,7 @@ async fn test_extract_files_creates_full_checkout_paths() {
     let repo_path = temp_dir.path();
 
     // Create a test repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create test files in subdirectories
     std::fs::write(repo_path.join("README.md"), "# Test").unwrap();
@@ -224,21 +187,12 @@ async fn test_extract_files_creates_full_checkout_paths() {
     std::fs::create_dir_all(repo_path.join("docs")).unwrap();
     std::fs::write(repo_path.join("docs/guide.md"), "# Guide").unwrap();
 
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add test files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add test files");
 
     // Get commit hash
-    let commit_output = Command::new("git")
+    let commit_output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     let commit_sha = std::str::from_utf8(&commit_output.stdout).unwrap().trim();
@@ -247,7 +201,7 @@ async fn test_extract_files_creates_full_checkout_paths() {
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .build();
@@ -301,60 +255,24 @@ async fn test_resolve_revision_method() {
     let repo_path = temp_dir.path();
 
     // Create a test repository with multiple commits and a tag
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create first commit
     std::fs::write(repo_path.join("file1.txt"), "content1").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "First commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "First commit");
 
     // Create a tag
-    Command::new("git")
-        .args(["tag", "v1.0"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    run_git(repo_path, &["tag", "v1.0"]);
 
     // Create second commit
     std::fs::write(repo_path.join("file2.txt"), "content2").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Second commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Second commit");
 
     // Create ScannerTask
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .build();

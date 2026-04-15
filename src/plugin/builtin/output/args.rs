@@ -40,18 +40,6 @@ impl OutputConfig {
     pub fn suppresses_progress(&self) -> bool {
         matches!(self.destination, OutputDestination::Stdout)
     }
-
-    /// Check if output destination is a terminal (for progress display logic)
-    /// Only relevant when destination is stdout/'-'
-    pub fn is_terminal_output(&self) -> bool {
-        matches!(self.destination, OutputDestination::Stdout)
-            && std::io::IsTerminal::is_terminal(&std::io::stdout())
-    }
-
-    /// Get the file extension for the configured format
-    pub fn get_file_extension(&self) -> Option<&'static str> {
-        Some(self.format.file_ext())
-    }
 }
 
 impl OutputPlugin {
@@ -140,7 +128,7 @@ impl OutputPlugin {
                 .help("Use TSV (Tab-Separated Values) output format"),
         );
 
-        let matches = parser.parse(&args)?;
+        let matches = parser.parse(args)?;
 
         // Parse output destination - check command line args first, then config
         if let Some(output_path) = matches.get_one::<String>("outfile") {
@@ -205,6 +193,7 @@ impl OutputPlugin {
 
         // Store the detected format in the plugin instance for future use
         self.detected_format = Some(format);
+        self.use_colors = config.use_colors;
 
         Ok(())
     }

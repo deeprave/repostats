@@ -174,7 +174,6 @@ pub fn palette_to_clap(enabled: bool) -> clap::builder::Styles {
         .error(style(StyleRole::Error, false))
 }
 
-/// Apply palette to table header (basic usage).
 // (Pruned auxiliary helpers; will reintroduce minimal ones as needed later.)
 
 #[cfg(test)]

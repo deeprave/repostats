@@ -44,6 +44,12 @@ pub struct ProgressSpinner {
     frame_index: usize,
 }
 
+impl Default for ProgressSpinner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProgressSpinner {
     pub fn new() -> Self {
         Self { frame_index: 0 }
@@ -168,7 +174,7 @@ mod tests {
     #[ignore = "Integration test that requires exclusive access to global notification service"]
     async fn test_spinner_lifecycle_integration() {
         // Don't clear subscribers to avoid race conditions with other tests
-        let notification_manager = get_notification_service().await;
+        let _notification_manager = get_notification_service().await;
 
         // Create shutdown channel
         let (_shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);

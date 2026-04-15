@@ -186,9 +186,7 @@ impl Args {
 
     /// Extract checkout settings from CLI arguments
     pub fn checkout_settings(&self) -> Option<CheckoutSettings> {
-        if self.checkout_dir.is_none() {
-            return None;
-        }
+        self.checkout_dir.as_ref()?;
 
         Some(CheckoutSettings {
             checkout_template: self.checkout_dir.clone(),

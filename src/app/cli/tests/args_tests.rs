@@ -880,9 +880,11 @@ fn test_checkout_args_default_values() {
 
 #[test]
 fn test_validate_single_repository_with_checkout_success() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.checkout_dir = Some("/tmp/checkout".to_string());
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        checkout_dir: Some("/tmp/checkout".to_string()),
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -893,11 +895,13 @@ fn test_validate_single_repository_with_checkout_success() {
 
 #[test]
 fn test_validate_multiple_repositories_without_checkout_success() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        ..Args::default()
+    };
     // No checkout flags set
 
     let result = args.validate();
@@ -909,12 +913,14 @@ fn test_validate_multiple_repositories_without_checkout_success() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_dir_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_dir = Some("/tmp/checkout".to_string());
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_dir: Some("/tmp/checkout".to_string()),
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -931,12 +937,14 @@ fn test_validate_multiple_repositories_with_checkout_dir_error() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_keep_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_keep = true;
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_keep: true,
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -947,12 +955,14 @@ fn test_validate_multiple_repositories_with_checkout_keep_error() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_force_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_force = true;
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_force: true,
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -963,12 +973,14 @@ fn test_validate_multiple_repositories_with_checkout_force_error() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_rev_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_rev = Some("main".to_string());
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_rev: Some("main".to_string()),
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -990,9 +1002,11 @@ fn test_validate_empty_repository_list_success() {
 
 #[test]
 fn test_validate_checkout_flags_without_dir_error() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.checkout_keep = true;
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        checkout_keep: true,
+        ..Args::default()
+    };
     // checkout_dir is None
 
     let result = args.validate();
@@ -1006,9 +1020,11 @@ fn test_validate_checkout_flags_without_dir_error() {
 
 #[test]
 fn test_validate_max_commits_zero_error() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.max_commits = Some(0);
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        max_commits: Some(0),
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(result.is_err(), "--max-commits 0 should fail validation");
@@ -1018,9 +1034,11 @@ fn test_validate_max_commits_zero_error() {
 
 #[test]
 fn test_validate_max_commits_positive_success() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.max_commits = Some(100);
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        max_commits: Some(100),
+        ..Args::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -1036,10 +1054,12 @@ mod integration_tests {
     #[test]
     fn test_end_to_end_cli_validation_integration() {
         // Test that Args parsing + validation works together
-        let mut args = Args::default();
+        let mut args = Args {
+            repository: vec!["https://github.com/user/repo.git".into()],
+            ..Args::default()
+        };
 
         // Valid case: single repo, no checkout flags
-        args.repository = vec!["https://github.com/user/repo.git".into()];
         assert!(args.validate().is_ok(), "Valid args should pass validation");
 
         // Invalid case: checkout flags with multiple repos (caught by validation)
@@ -1066,18 +1086,22 @@ mod integration_tests {
         // Note: Empty repository list is now valid (defaults to current directory)
 
         // Case 1: Checkout flags without checkout-dir
-        let mut args_incomplete = Args::default();
-        args_incomplete.repository = vec!["/repo".into()];
-        args_incomplete.checkout_keep = true; // Missing checkout_dir
+        let args_incomplete = Args {
+            repository: vec!["/repo".into()],
+            checkout_keep: true, // Missing checkout_dir
+            ..Args::default()
+        };
         assert!(
             args_incomplete.validate().is_err(),
             "Incomplete checkout config should fail"
         );
 
         // Case 2: Invalid max commits
-        let mut args_bad_commits = Args::default();
-        args_bad_commits.repository = vec!["/repo".into()];
-        args_bad_commits.max_commits = Some(0);
+        let args_bad_commits = Args {
+            repository: vec!["/repo".into()],
+            max_commits: Some(0),
+            ..Args::default()
+        };
         assert!(
             args_bad_commits.validate().is_err(),
             "Zero max commits should fail"
@@ -1089,29 +1113,35 @@ mod integration_tests {
         // Test various valid configurations that should work end-to-end
 
         // Case 1: Remote repository URLs (should pass validation)
-        let mut args_url = Args::default();
-        args_url.repository = vec!["https://github.com/user/repo.git".into()];
+        let args_url = Args {
+            repository: vec!["https://github.com/user/repo.git".into()],
+            ..Args::default()
+        };
         assert!(
             args_url.validate().is_ok(),
             "Remote repository URL should be valid"
         );
 
         // Case 2: Git SSH URL with checkout
-        let mut args_ssh_checkout = Args::default();
-        args_ssh_checkout.repository = vec!["git@github.com:user/repo.git".into()];
-        args_ssh_checkout.checkout_dir = Some("/tmp/{commit-id}".to_string());
-        args_ssh_checkout.checkout_keep = true;
+        let args_ssh_checkout = Args {
+            repository: vec!["git@github.com:user/repo.git".into()],
+            checkout_dir: Some("/tmp/{commit-id}".to_string()),
+            checkout_keep: true,
+            ..Args::default()
+        };
         assert!(
             args_ssh_checkout.validate().is_ok(),
             "SSH repo with checkout should be valid"
         );
 
         // Case 3: Multiple remote repos without checkout
-        let mut args_multi_url = Args::default();
-        args_multi_url.repository = vec![
-            "https://github.com/user/repo1.git".into(),
-            "https://github.com/user/repo2.git".into(),
-        ];
+        let args_multi_url = Args {
+            repository: vec![
+                "https://github.com/user/repo1.git".into(),
+                "https://github.com/user/repo2.git".into(),
+            ],
+            ..Args::default()
+        };
         assert!(
             args_multi_url.validate().is_ok(),
             "Multiple remote repos should be valid"
@@ -1136,16 +1166,20 @@ mod integration_tests {
         fs::create_dir(&git_dir).expect("Failed to create .git directory");
 
         // Test with valid Git repository
-        let mut args_valid_git = Args::default();
-        args_valid_git.repository = vec![temp_dir.path().to_path_buf()];
+        let args_valid_git = Args {
+            repository: vec![temp_dir.path().to_path_buf()],
+            ..Args::default()
+        };
         assert!(
             args_valid_git.validate().is_ok(),
             "Valid Git repository should pass validation"
         );
 
         // Test with non-existent path
-        let mut args_nonexistent = Args::default();
-        args_nonexistent.repository = vec!["/this/path/does/not/exist".into()];
+        let args_nonexistent = Args {
+            repository: vec!["/this/path/does/not/exist".into()],
+            ..Args::default()
+        };
         let result = args_nonexistent.validate();
         assert!(
             result.is_err(),
@@ -1155,8 +1189,10 @@ mod integration_tests {
 
         // Test with existing directory but not a Git repository
         let non_git_dir = TempDir::new().expect("Failed to create temp directory");
-        let mut args_not_git = Args::default();
-        args_not_git.repository = vec![non_git_dir.path().to_path_buf()];
+        let args_not_git = Args {
+            repository: vec![non_git_dir.path().to_path_buf()],
+            ..Args::default()
+        };
         let result_not_git = args_not_git.validate();
         assert!(
             result_not_git.is_err(),
@@ -1171,18 +1207,22 @@ mod integration_tests {
     #[test]
     fn test_validate_checkout_template_variables() {
         // Test valid checkout template
-        let mut args_valid = Args::default();
-        args_valid.repository = vec!["https://github.com/user/repo.git".into()];
-        args_valid.checkout_dir = Some("/tmp/{repo}/{commit-id}".to_string());
+        let args_valid = Args {
+            repository: vec!["https://github.com/user/repo.git".into()],
+            checkout_dir: Some("/tmp/{repo}/{commit-id}".to_string()),
+            ..Args::default()
+        };
         assert!(
             args_valid.validate().is_ok(),
             "Valid checkout template should pass"
         );
 
         // Test invalid checkout template with unknown variable
-        let mut args_invalid = Args::default();
-        args_invalid.repository = vec!["https://github.com/user/repo.git".into()];
-        args_invalid.checkout_dir = Some("/tmp/{unknown-var}".to_string());
+        let args_invalid = Args {
+            repository: vec!["https://github.com/user/repo.git".into()],
+            checkout_dir: Some("/tmp/{unknown-var}".to_string()),
+            ..Args::default()
+        };
         let result = args_invalid.validate();
         assert!(
             result.is_err(),
@@ -1195,10 +1235,13 @@ mod integration_tests {
         assert!(error_msg.details().contains("unknown-var"));
 
         // Test checkout template with all valid variables
-        let mut args_all_vars = Args::default();
-        args_all_vars.repository = vec!["https://github.com/user/repo.git".into()];
-        args_all_vars.checkout_dir =
-            Some("{tmpdir}/{repo}/{pid}-{scanner-id}-{commit-id}-{sha256}-{branch}".to_string());
+        let args_all_vars = Args {
+            repository: vec!["https://github.com/user/repo.git".into()],
+            checkout_dir: Some(
+                "{tmpdir}/{repo}/{pid}-{scanner-id}-{commit-id}-{sha256}-{branch}".to_string(),
+            ),
+            ..Args::default()
+        };
         assert!(
             args_all_vars.validate().is_ok(),
             "Template with all variables should pass"
@@ -1210,8 +1253,10 @@ mod integration_tests {
         use std::path::PathBuf;
 
         // Test empty string in repository vector
-        let mut args = Args::default();
-        args.repository = vec![PathBuf::from("")];
+        let args = Args {
+            repository: vec![PathBuf::from("")],
+            ..Args::default()
+        };
         let result = args.validate();
         assert!(
             result.is_err(),
@@ -1223,8 +1268,10 @@ mod integration_tests {
             .contains("Repository at index 0 cannot be empty"));
 
         // Test whitespace-only string in repository vector
-        let mut args_ws = Args::default();
-        args_ws.repository = vec![PathBuf::from("  \t\n  ")];
+        let args_ws = Args {
+            repository: vec![PathBuf::from("  \t\n  ")],
+            ..Args::default()
+        };
         let result_ws = args_ws.validate();
         assert!(
             result_ws.is_err(),
@@ -1236,12 +1283,14 @@ mod integration_tests {
             .contains("Repository at index 0 cannot be empty"));
 
         // Test mixed valid and invalid repositories
-        let mut args_mixed = Args::default();
-        args_mixed.repository = vec![
-            PathBuf::from("https://github.com/user/repo.git"),
-            PathBuf::from(""),
-            PathBuf::from("https://github.com/user/repo2.git"),
-        ];
+        let args_mixed = Args {
+            repository: vec![
+                PathBuf::from("https://github.com/user/repo.git"),
+                PathBuf::from(""),
+                PathBuf::from("https://github.com/user/repo2.git"),
+            ],
+            ..Args::default()
+        };
         let result_mixed = args_mixed.validate();
         assert!(
             result_mixed.is_err(),
@@ -1283,13 +1332,17 @@ mod integration_tests {
     #[test]
     fn test_resolve_case_sensitivity_override() {
         // Test --macfs-case resolves to Some(false) for case-sensitive
-        let mut args = Args::default();
-        args.macfs_case = Some(true);
+        let args = Args {
+            macfs_case: Some(true),
+            ..Args::default()
+        };
         assert_eq!(args.resolve_case_sensitivity_override(), Some(false));
 
         // Test --no-macfs-case resolves to Some(true) for case-insensitive
-        let mut args2 = Args::default();
-        args2.no_macfs_case = Some(true);
+        let args2 = Args {
+            no_macfs_case: Some(true),
+            ..Args::default()
+        };
         assert_eq!(args2.resolve_case_sensitivity_override(), Some(true));
 
         // Test no flags resolves to None for platform heuristic

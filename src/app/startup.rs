@@ -270,9 +270,8 @@ async fn discover_commands(
     plugin_manager
         .discover_plugins(plugin_dirs, exclusions)
         .await
-        .map_err(|e| {
+        .inspect_err(|_| {
             log::warn!("Plugin discovery failed during plugin_manager.discover_plugins()");
-            e
         })?;
 
     let plugins = plugin_manager.list_plugins_with_filter(false).await;
@@ -293,7 +292,7 @@ async fn discover_commands(
 
     let command_names: Vec<String> = plugins
         .iter()
-        .flat_map(|plugin| plugin.functions.iter().map(|func| func.clone()))
+        .flat_map(|plugin| plugin.functions.iter().cloned())
         .collect();
 
     // Validate that we have commands

@@ -65,7 +65,7 @@ impl<'a> PluginInitializer<'a> {
                     cause: format!("Failed to initialize plugin: {}", e),
                 })?;
 
-            plugin.parse_plugin_arguments(&args, &plugin_config).await?;
+            plugin.parse_plugin_arguments(args, &plugin_config).await?;
 
             // Inject consumer if this is a ConsumerPlugin
             if let Some(consumer_plugin) = plugin.as_mut().as_consumer_plugin() {

@@ -4,10 +4,10 @@
 
 use super::super::ScannerTask;
 use crate::core::query::QueryParams;
+use crate::scanner::task::tests::helpers::{commit_all, init_test_git_repo, run_git};
 use crate::scanner::tests::helpers::collect_scan_messages;
 use crate::scanner::types::{ScanMessage, ScanRequires};
 use serial_test::serial;
-use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -17,45 +17,23 @@ async fn test_commit_traversal_with_max_commits() {
     let repo_path = temp_dir.path();
 
     // Initialize git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create multiple commits
     for i in 1..=5 {
         std::fs::write(
-            repo_path.join(&format!("file{}.txt", i)),
+            repo_path.join(format!("file{}.txt", i)),
             format!("content {}", i),
         )
         .unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", &format!("Commit {}", i)])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        let message = format!("Commit {}", i);
+        commit_all(repo_path, &message);
     }
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::COMMITS)
@@ -111,69 +89,35 @@ async fn test_commit_traversal_with_git_ref() {
     let repo_path = temp_dir.path();
 
     // Initialize git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create initial commits on default branch
     for i in 1..=3 {
         std::fs::write(
-            repo_path.join(&format!("main{}.txt", i)),
+            repo_path.join(format!("main{}.txt", i)),
             format!("main content {}", i),
         )
         .unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", &format!("Main commit {}", i)])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        let message = format!("Main commit {}", i);
+        commit_all(repo_path, &message);
     }
 
     // Create a test branch
-    Command::new("git")
-        .args(["checkout", "-b", "test-branch"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    run_git(repo_path, &["checkout", "-b", "test-branch"]);
     for i in 1..=2 {
         std::fs::write(
-            repo_path.join(&format!("test{}.txt", i)),
+            repo_path.join(format!("test{}.txt", i)),
             format!("test content {}", i),
         )
         .unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", &format!("Test branch commit {}", i)])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        let message = format!("Test branch commit {}", i);
+        commit_all(repo_path, &message);
     }
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::COMMITS)
@@ -240,24 +184,10 @@ async fn test_commit_traversal_ordering() {
     let repo_path = temp_dir.path();
 
     // Initialize git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create commits with identifiable messages
-    let commit_messages = vec![
+    let commit_messages = [
         "First commit",
         "Second commit",
         "Third commit",
@@ -266,20 +196,11 @@ async fn test_commit_traversal_ordering() {
 
     for (i, message) in commit_messages.iter().enumerate() {
         std::fs::write(
-            repo_path.join(&format!("file{}.txt", i + 1)),
+            repo_path.join(format!("file{}.txt", i + 1)),
             format!("content {}", i + 1),
         )
         .unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        commit_all(repo_path, message);
 
         // Small delay to ensure commit times are different
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -288,7 +209,7 @@ async fn test_commit_traversal_ordering() {
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::COMMITS)
@@ -353,27 +274,13 @@ async fn test_empty_repository_traversal() {
     let repo_path = temp_dir.path();
 
     // Initialize empty git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Don't create any commits - leave repository empty
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::COMMITS)

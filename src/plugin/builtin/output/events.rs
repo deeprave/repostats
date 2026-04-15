@@ -7,6 +7,8 @@ use crate::notifications::api::{
     AsyncNotificationManager, Event, EventReceiver, PluginEvent, PluginEventType, SystemEvent,
     SystemEventType,
 };
+use crate::plugin::builtin::output::args::OutputConfig;
+use crate::plugin::builtin::output::manager::OutputManager;
 use crate::plugin::data_export::PluginDataExport;
 use crate::plugin::error::PluginResult;
 use crate::plugin::registry::SharedPluginRegistry;
@@ -18,16 +20,20 @@ use std::sync::{
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
 
+type ReceivedDataMap = Arc<Mutex<HashMap<(String, String), Arc<PluginDataExport>>>>;
+
 /// Event handler for OutputPlugin that runs in a separate task
 pub struct OutputEventHandler {
     /// Plugin name for identification
     plugin_name: String,
     /// Notification manager for publishing events and keep-alive signals
     notification_manager: Arc<Mutex<AsyncNotificationManager>>,
+    /// Concrete export configuration for render/write operations.
+    output_config: OutputConfig,
     /// Plugin registry for checking active plugins (lazy-loaded to avoid deadlock)
     plugin_registry: Option<SharedPluginRegistry>,
     /// Received data exports indexed by (plugin_id, scan_id)
-    received_data: Arc<Mutex<HashMap<(String, String), Arc<PluginDataExport>>>>,
+    received_data: ReceivedDataMap,
     /// Flag indicating if we're currently processing/exporting data
     is_processing_data: Arc<AtomicBool>,
     /// Worker task handle for monitoring failures
@@ -43,12 +49,14 @@ impl OutputEventHandler {
     pub fn new(
         plugin_name: String,
         notification_manager: Arc<Mutex<AsyncNotificationManager>>,
-        received_data: Arc<Mutex<HashMap<(String, String), Arc<PluginDataExport>>>>,
+        output_config: OutputConfig,
+        received_data: ReceivedDataMap,
     ) -> Self {
         let (shutdown_sender, _) = broadcast::channel(1);
         Self {
             plugin_name,
             notification_manager,
+            output_config,
             plugin_registry: None,
             received_data,
             is_processing_data: Arc::new(AtomicBool::new(false)),
@@ -323,15 +331,17 @@ impl OutputEventHandler {
         self.send_keepalive_signal(&format!("Exporting data from {}", plugin_id))
             .await?;
 
-        // For now, just log the export - actual format implementation comes later
+        let output_manager = OutputManager::new(self.output_config.clone());
+        output_manager.export(data_export).await?;
+
         log::debug!("Data export timestamp: {:?}", data_export.timestamp);
         log::debug!("Data export metadata: {:?}", data_export.metadata);
 
-        // TODO: Implement actual format detection and export logic
         log::info!(
-            "Data export completed: plugin='{}' scan='{}' timestamp={:?}",
+            "Data export completed: plugin='{}' scan='{}' format='{}' timestamp={:?}",
             plugin_id,
             scan_id,
+            self.output_config.format.name(),
             data_export.timestamp
         );
 
@@ -378,7 +388,7 @@ impl OutputEventHandler {
 
     /// Simple worker task (placeholder for RS-49 full implementation)
     async fn run_simple_worker(
-        received_data: Arc<Mutex<HashMap<(String, String), Arc<PluginDataExport>>>>,
+        received_data: ReceivedDataMap,
         is_processing_data: Arc<AtomicBool>,
         plugin_name: String,
         notification_manager: Arc<Mutex<AsyncNotificationManager>>,
@@ -422,7 +432,6 @@ impl OutputEventHandler {
                             _ = processing_shutdown_receiver.recv() => {
                                 log::debug!("Worker interrupted during processing");
                                 is_processing_data.store(false, Ordering::SeqCst);
-                                return;
                             }
                             _ = tokio::time::sleep(Duration::from_secs(25)) => {
                                 // Processing completed normally

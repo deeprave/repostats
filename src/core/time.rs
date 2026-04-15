@@ -39,11 +39,7 @@ pub struct MockTimeProvider {
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 impl MockTimeProvider {
-    fn default() -> Self {
-        Self::new()
-    }
     pub fn new_with_time(instant: Instant, system_time: SystemTime) -> Self {
         Self {
             current_instant: Arc::new(Mutex::new(instant)),
@@ -87,6 +83,13 @@ impl MockTimeProvider {
 }
 
 #[cfg(test)]
+impl Default for MockTimeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl TimeProvider for MockTimeProvider {
     fn now(&self) -> Instant {
         *self.current_instant.lock().unwrap()
@@ -104,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_system_time_provider() {
-        let provider = SystemTimeProvider::default();
+        let provider = SystemTimeProvider;
 
         let instant1 = provider.now();
         let system1 = provider.system_time();

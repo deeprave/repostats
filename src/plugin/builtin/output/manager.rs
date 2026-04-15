@@ -1,7 +1,11 @@
 //! Output destination handling for OutputPlugin
 
 use crate::plugin::builtin::output::args::OutputConfig;
-use crate::plugin::builtin::output::traits::{OutputDestination, OutputWriter};
+use crate::plugin::builtin::output::formats::{get_formatter, template::TemplateFormatter};
+use crate::plugin::builtin::output::traits::{
+    ExportFormat, OutputDestination, OutputFormatter, OutputWriter,
+};
+use crate::plugin::data_export::PluginDataExport;
 use crate::plugin::error::{PluginError, PluginResult};
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
@@ -40,7 +44,6 @@ impl OutputWriter for StdoutWriter {
 /// File output writer with buffering
 pub struct FileWriter {
     writer: BufWriter<std::fs::File>,
-    path: String,
 }
 
 impl FileWriter {
@@ -74,7 +77,6 @@ impl FileWriter {
 
         Ok(Self {
             writer: BufWriter::new(file),
-            path: path.to_string(),
         })
     }
 }
@@ -114,6 +116,15 @@ impl OutputManager {
         }
     }
 
+    async fn create_formatter(&self) -> PluginResult<Box<dyn OutputFormatter>> {
+        match (&self.config.format, self.config.template_path.as_deref()) {
+            (ExportFormat::Template, Some(source)) => {
+                Ok(Box::new(TemplateFormatter::from_source(source).await?))
+            }
+            (format, _) => Ok(get_formatter(format.clone())),
+        }
+    }
+
     /// Write formatted content to the configured destination
     pub fn write_output(&self, content: &str) -> PluginResult<()> {
         let mut writer = self.create_writer()?;
@@ -135,59 +146,27 @@ impl OutputManager {
         Ok(())
     }
 
+    /// Render and write a plugin export using the configured formatter and destination.
+    pub async fn export(&self, data: &PluginDataExport) -> PluginResult<()> {
+        let formatter = self.create_formatter().await?;
+        let format_name = formatter.format_type().name();
+        let content = formatter.format(data, self.config.use_colors)?;
+        self.write_output(&content)?;
+
+        log::debug!(
+            "Rendered output using '{}' formatter to {}",
+            format_name,
+            self.get_destination_description()
+        );
+
+        Ok(())
+    }
+
     /// Get a description of the output destination for error messages
     fn get_destination_description(&self) -> String {
         match &self.config.destination {
             OutputDestination::Stdout => "stdout".to_string(),
             OutputDestination::File(path) => path.clone(),
-        }
-    }
-
-    /// Get the output configuration
-    pub fn config(&self) -> &OutputConfig {
-        &self.config
-    }
-
-    /// Validate that the output destination is writable
-    pub fn validate_destination(&self) -> PluginResult<()> {
-        match &self.config.destination {
-            OutputDestination::Stdout => Ok(()), // stdout is always available
-            OutputDestination::File(path) => {
-                let file_path = Path::new(path);
-
-                // Check if we can write to the parent directory
-                if let Some(parent) = file_path.parent() {
-                    if parent.exists()
-                        && parent
-                            .metadata()
-                            .map(|m| m.permissions().readonly())
-                            .unwrap_or(false)
-                    {
-                        return Err(PluginError::IoError {
-                            operation: "validate output destination".to_string(),
-                            path: path.clone(),
-                            source: None,
-                        });
-                    }
-                }
-
-                // Try to create a test file to verify we can write
-                if let Err(e) = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(file_path)
-                    .and_then(|_| std::fs::remove_file(file_path).or(Ok(())))
-                {
-                    return Err(PluginError::IoError {
-                        operation: "validate output destination".to_string(),
-                        path: path.clone(),
-                        source: Some(Box::new(e)),
-                    });
-                }
-
-                Ok(())
-            }
         }
     }
 }

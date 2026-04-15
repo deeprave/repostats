@@ -306,12 +306,10 @@ impl ScannerManager {
         if let Some(idx) = path.find(':') {
             // Check for scp-like pattern (user@host:path)
             if path[..idx].contains('@') && !path[..idx].contains('/') {
-                let mut parts = path.splitn(2, ':');
-                let user_host = parts.next().unwrap();
-                let repo_path = parts.next().unwrap();
+                let (user_host, repo_path) = path.split_once(':').unwrap();
 
                 // Remove authentication info (user@)
-                let host = user_host.split('@').last().unwrap().to_lowercase();
+                let host = user_host.split('@').next_back().unwrap().to_lowercase();
 
                 // Remove .git extension if present
                 let repo_path = repo_path.trim_end_matches(".git");
@@ -487,7 +485,7 @@ impl ScannerManager {
         // Create checkout manager first if needed, so we can inject it
         let checkout_manager = if needs_checkout {
             // Create the checkout manager using existing logic
-            let checkout_manager = if let Some(ref settings) = checkout_settings {
+            let checkout_manager = if let Some(settings) = checkout_settings {
                 // Use provided template or a concise default: <tmp>/checkout/<scanner>/<commit>
                 // (Removed long 'repostats-checkout-<hash>' segment for brevity.)
                 let default_template = format!(
@@ -499,7 +497,7 @@ impl ScannerManager {
                     settings
                         .checkout_template
                         .clone()
-                        .unwrap_or_else(|| default_template),
+                        .unwrap_or(default_template),
                     settings.keep_checkouts,
                     settings.force_overwrite,
                 )
@@ -989,6 +987,12 @@ impl ScannerManager {
     /// without needing to know about internal management structure.
     pub fn cleanup_handle(self: Arc<Self>) -> Arc<dyn Cleanup> {
         self
+    }
+}
+
+impl Default for ScannerManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -7,15 +7,16 @@
 pub mod args;
 pub mod events;
 pub mod formats;
-pub mod output;
+pub mod manager;
 pub mod traits;
 
 use crate::builtin;
 use crate::notifications::api::{AsyncNotificationManager, EventFilter};
 use crate::plugin::api::Plugin;
 use crate::plugin::api::PluginConfig;
+use crate::plugin::builtin::output::args::OutputConfig;
 use crate::plugin::builtin::output::events::OutputEventHandler;
-use crate::plugin::builtin::output::traits::ExportFormat;
+use crate::plugin::builtin::output::traits::{ExportFormat, OutputDestination};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::types::{PluginInfo, PluginType};
 use crate::scanner::types::ScanRequires;
@@ -36,6 +37,8 @@ pub struct OutputPlugin {
     template_path: Option<String>,
     /// Detected output format based on function invocation
     detected_format: Option<ExportFormat>,
+    /// Whether formatter output should include terminal colors.
+    use_colors: bool,
     /// Injected notification manager
     notification_manager: Option<Arc<Mutex<AsyncNotificationManager>>>,
 }
@@ -48,6 +51,7 @@ impl OutputPlugin {
             output_destination: None,
             template_path: None,
             detected_format: None,
+            use_colors: false,
             notification_manager: None,
         }
     }
@@ -70,11 +74,17 @@ impl OutputPlugin {
         }
     }
 
-    /// Check if output destination is stdout or '-'
-    fn is_stdout_output(&self) -> bool {
-        match &self.output_destination {
-            Some(dest) => dest == "-" || dest.is_empty(),
-            None => false, // No destination specified = no output configured yet = no progress suppression
+    fn output_config(&self) -> OutputConfig {
+        let destination = match self.output_destination.as_deref() {
+            Some("-" | "") | None => OutputDestination::Stdout,
+            Some(path) => OutputDestination::File(path.to_string()),
+        };
+
+        OutputConfig {
+            destination,
+            format: self.detected_format.clone().unwrap_or(ExportFormat::Text),
+            use_colors: self.use_colors,
+            template_path: self.template_path.clone(),
         }
     }
 }
@@ -100,8 +110,7 @@ impl Plugin for OutputPlugin {
     }
 
     fn requirements(&self) -> ScanRequires {
-        // Only suppress progress if actually outputting to stdout
-        if self.is_stdout_output() {
+        if self.output_config().suppresses_progress() {
             ScanRequires::SUPPRESS_PROGRESS
         } else {
             ScanRequires::NONE
@@ -161,6 +170,7 @@ impl Plugin for OutputPlugin {
         let handler = OutputEventHandler::new(
             self.plugin_info().name.clone(),
             notification_manager,
+            self.output_config(),
             Arc::new(Mutex::new(HashMap::new())), // received_data - Arc needed for worker task
         );
 

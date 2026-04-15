@@ -68,17 +68,15 @@ impl PluginActivator {
                 }
             }
             // or if it is auto-activated
-            if plugin_info.auto_active {
-                if !plugins_to_activate.contains_key(plugin_name) {
-                    if plugin_info.plugin_type == PluginType::Output {
-                        // last Output wins; if chosen via auto-activation, use a sensible default arg list
-                        let plugin_name = plugin_name.to_string();
-                        active_output_plugin = Some(plugin_name.clone());
-                        active_output_args = Some(vec![plugin_name]);
-                    } else {
-                        // only insert if not already matched; don't overwrite matched args
-                        plugins_to_activate.insert(plugin_name.to_string(), vec![]);
-                    }
+            if plugin_info.auto_active && !plugins_to_activate.contains_key(plugin_name) {
+                if plugin_info.plugin_type == PluginType::Output {
+                    // last Output wins; if chosen via auto-activation, use a sensible default arg list
+                    let plugin_name = plugin_name.to_string();
+                    active_output_plugin = Some(plugin_name.clone());
+                    active_output_args = Some(vec![plugin_name]);
+                } else {
+                    // only insert if not already matched; don't overwrite matched args
+                    plugins_to_activate.insert(plugin_name.to_string(), vec![]);
                 }
             }
         }
@@ -86,10 +84,9 @@ impl PluginActivator {
         // Only activate the last active Output plugin, preserving its args if we have them
         if let Some(output_plugin) = &active_output_plugin {
             let plugin_name = output_plugin.to_string();
-            if !plugins_to_activate.contains_key(&plugin_name) {
-                let plugin_args = active_output_args.unwrap_or_else(|| vec![plugin_name.clone()]);
-                plugins_to_activate.insert(plugin_name, plugin_args);
-            }
+            plugins_to_activate
+                .entry(plugin_name.clone())
+                .or_insert_with(|| active_output_args.unwrap_or_else(|| vec![plugin_name.clone()]));
         }
 
         let mut unmatched_iter = segments_to_process

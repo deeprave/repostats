@@ -69,7 +69,7 @@ impl MarkdownFormatter {
         markdown.push('\n');
 
         // Add separator row
-        markdown.push_str("|");
+        markdown.push('|');
         for _ in 0..max_cols {
             markdown.push_str(" --- |");
         }

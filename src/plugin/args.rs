@@ -8,21 +8,12 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::collections::HashMap;
 
 /// Configuration context passed to plugins during initialization
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PluginConfig {
     /// Forced color setting: Some(true)=force on, Some(false)=force off, None=auto (TTY based)
     pub use_colors: bool,
     /// Plugin-specific TOML configuration
     pub toml_config: HashMap<String, toml::Value>,
-}
-
-impl Default for PluginConfig {
-    fn default() -> Self {
-        Self {
-            use_colors: false,
-            toml_config: HashMap::new(),
-        }
-    }
 }
 
 impl PluginConfig {

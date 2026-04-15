@@ -70,19 +70,19 @@ impl DumpPlugin {
                 .long("json")
                 .action(clap::ArgAction::SetTrue)
                 .help("Output in JSON format")
-                .conflicts_with_all(&["text", "compact"]),
+                .conflicts_with_all(["text", "compact"]),
             Arg::new("text")
                 .short('T')
                 .long("text")
                 .action(clap::ArgAction::SetTrue)
                 .help("Output in human-readable text format (default)")
-                .conflicts_with_all(&["json", "compact"]),
+                .conflicts_with_all(["json", "compact"]),
             Arg::new("compact")
                 .short('C')
                 .long("compact")
                 .action(clap::ArgAction::SetTrue)
                 .help("Output in compact single-line format")
-                .conflicts_with_all(&["json", "text"]),
+                .conflicts_with_all(["json", "text"]),
         ]
     }
 

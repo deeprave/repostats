@@ -268,3 +268,9 @@ impl QueueManager {
             .await;
     }
 }
+
+impl Default for QueueManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

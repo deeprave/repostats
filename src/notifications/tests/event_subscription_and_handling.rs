@@ -5,8 +5,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::notifications::api::{
-    get_notification_service, AsyncNotificationManager, Event, EventFilter, PluginEvent,
-    PluginEventType,
+    AsyncNotificationManager, Event, EventFilter, PluginEvent, PluginEventType,
 };
 use crate::plugin::data_export::{DataPayload, PluginDataExport};
 

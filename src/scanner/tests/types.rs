@@ -18,8 +18,8 @@ fn test_repository_data_builder_basic() {
 
     assert_eq!(repo_data.path, "/path/to/repo");
     assert_eq!(repo_data.git_dir, "/path/to/repo/.git");
-    assert_eq!(repo_data.is_bare, false);
-    assert_eq!(repo_data.is_shallow, false);
+    assert!(!repo_data.is_bare);
+    assert!(!repo_data.is_shallow);
 }
 
 #[test]

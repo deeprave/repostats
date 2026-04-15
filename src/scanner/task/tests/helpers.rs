@@ -6,10 +6,45 @@ use super::super::*;
 // Removed unused imports: QueryParams, collect_scan_messages, count_commit_messages
 use crate::notifications::api::AsyncNotificationManager;
 use crate::scanner::types::ScanRequires;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex as TokioMutex;
+
+/// Run a git command in a test repository and assert that it succeeds.
+pub fn run_git(repo_path: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .expect("Failed to spawn git command");
+
+    assert!(
+        output.status.success(),
+        "git {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Initialize a non-bare git repository for scanner tests with signing disabled.
+pub fn init_test_git_repo(repo_path: &Path) {
+    run_git(repo_path, &["init"]);
+    run_git(repo_path, &["config", "user.name", "Test User"]);
+    run_git(repo_path, &["config", "user.email", "test@example.com"]);
+    run_git(repo_path, &["config", "commit.gpgsign", "false"]);
+}
+
+/// Stage all changes and create an unsigned test commit.
+pub fn commit_all(repo_path: &Path, message: &str) {
+    run_git(repo_path, &["add", "."]);
+    run_git(
+        repo_path,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+    );
+}
 
 /// Helper to create a test git repository
 pub fn create_test_repo() -> (TempDir, gix::Repository) {
@@ -51,39 +86,11 @@ pub fn create_test_repository() -> (TempDir, gix::Repository) {
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
 
-    // Initialize git repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .expect("Failed to init repository");
-
-    // Configure git user
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .expect("Failed to set user.name");
-
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(&repo_path)
-        .output()
-        .expect("Failed to set user.email");
+    init_test_git_repo(repo_path);
 
     // Create initial commit
     std::fs::write(repo_path.join("file1.txt"), "initial content").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .expect("Failed to add files");
-
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(&repo_path)
-        .output()
-        .expect("Failed to commit");
+    commit_all(repo_path, "Initial commit");
 
     let repo = gix::open(repo_path).expect("Failed to open repository");
     (temp_dir, repo)
