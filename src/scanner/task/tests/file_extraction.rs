@@ -47,7 +47,7 @@ async fn test_extract_commit_files_to_directory() {
 
     // Create ScannerTask
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -199,7 +199,7 @@ async fn test_extract_files_creates_full_checkout_paths() {
 
     // Create ScannerTask and extract files
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -270,7 +270,7 @@ async fn test_resolve_revision_method() {
 
     // Create ScannerTask
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,

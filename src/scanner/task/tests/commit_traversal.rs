@@ -31,7 +31,7 @@ async fn test_commit_traversal_with_max_commits() {
     }
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -115,7 +115,7 @@ async fn test_commit_traversal_with_git_ref() {
     }
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -207,7 +207,7 @@ async fn test_commit_traversal_ordering() {
     }
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -278,7 +278,7 @@ async fn test_empty_repository_traversal() {
 
     // Don't create any commits - leave repository empty
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,

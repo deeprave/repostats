@@ -96,8 +96,9 @@ Alternative considered:
 Rollback strategy:
 - Revert the storage type back to `gix::Repository` and restore the old accessor shape. This is low-risk because the change is concentrated in scanner internals.
 
-## Open Questions
+## Outcome Notes
 
-- Should `ScannerTask` expose a closure-based repository helper or a simpler “get thread-local repository” helper?
-- Should `ScannerManager::validate_repository()` continue returning a thread-local `gix::Repository`, or should it return a small validation result struct that includes both normalized path and repository information before conversion?
-- Are there any scanner-side call sites outside `git_ops.rs` that should be moved behind the same repository boundary helper for consistency?
+Implemented outcome:
+- `ScannerTask` now stores `gix::ThreadSafeRepository` and exposes a simpler thread-local repository accessor.
+- `ScannerManager::validate_repository()` continues returning a thread-local `gix::Repository`, with conversion happening at shared-state storage time.
+- Scanner git operation entry points and cleanup paths were moved behind the same repository materialization boundary.

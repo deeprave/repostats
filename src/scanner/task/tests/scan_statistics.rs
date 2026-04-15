@@ -22,7 +22,7 @@ async fn test_scan_statistics_timing_measurement() {
     commit_all(repo_path, "Test commit");
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -94,7 +94,7 @@ async fn test_scan_statistics_file_totals() {
     commit_all(repo_path, "Add another file");
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -156,7 +156,7 @@ async fn test_scan_statistics_empty_repository() {
     init_test_git_repo(repo_path);
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,

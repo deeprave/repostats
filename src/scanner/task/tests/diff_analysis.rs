@@ -33,7 +33,7 @@ async fn test_real_commit_diff_analysis() {
     commit_all(repo_path, "Add initial project files");
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -111,7 +111,7 @@ async fn test_commit_diff_statistics() {
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo_clone,
@@ -186,7 +186,7 @@ async fn test_file_change_types() {
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -251,7 +251,7 @@ async fn test_file_paths_for_renames() {
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -331,7 +331,7 @@ async fn test_line_level_statistics_per_file() {
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -410,7 +410,7 @@ async fn test_binary_vs_text_file_detection() {
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,
@@ -502,7 +502,7 @@ async fn test_comprehensive_change_type_coverage() {
     commit_all(repo_path, "Initial commit");
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo.clone(),
@@ -630,7 +630,7 @@ async fn test_real_file_paths_not_placeholder() {
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo_path.to_string_lossy().to_string(),
         repo,

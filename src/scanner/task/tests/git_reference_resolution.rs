@@ -14,7 +14,7 @@ use tempfile::TempDir;
 async fn test_enhanced_git_reference_resolution() {
     let (_temp_dir, repo) = create_test_repository();
 
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo.path().to_string_lossy().to_string(),
         repo.clone(),
@@ -67,7 +67,7 @@ async fn test_enhanced_git_reference_resolution() {
 async fn test_git_reference_validation() {
     let (_temp_dir, repo) = create_test_repository();
 
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo.path().to_string_lossy().to_string(),
         repo,
@@ -180,7 +180,7 @@ async fn test_complex_git_reference_patterns() {
         .unwrap();
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo.path().to_string_lossy().to_string(),
         repo,

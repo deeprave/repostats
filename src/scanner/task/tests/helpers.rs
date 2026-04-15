@@ -68,16 +68,15 @@ pub fn create_test_scanner_task(requirements: ScanRequires) -> (TempDir, Scanner
 
     let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
 
-    let scanner = ScannerTask::new(
+    let scanner = ScannerTask::builder(
         "test-scanner-123".to_string(),
         repo_path,
         repo,
-        requirements,
         test_publisher,
-        None,
-        None,
-        notification_manager,
-    );
+    )
+    .with_requirements(requirements)
+    .with_notification_manager(notification_manager)
+    .build();
     (_temp_dir, scanner)
 }
 

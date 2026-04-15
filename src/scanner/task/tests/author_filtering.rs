@@ -94,7 +94,7 @@ async fn test_commit_traversal_with_author_filtering() {
     );
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo.path().to_string_lossy().to_string(),
         repo,
@@ -215,7 +215,7 @@ async fn test_complex_wildcard_patterns() {
     }
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo.path().to_string_lossy().to_string(),
         repo,
@@ -317,7 +317,7 @@ async fn test_email_auto_completion_integration() {
     }
 
     let repo = gix::open(repo_path).unwrap();
-    let scanner_task = ScannerTask::builder(
+    let scanner_task = ScannerTask::builder_for_tests(
         "test-scanner".to_string(),
         repo.path().to_string_lossy().to_string(),
         repo,
