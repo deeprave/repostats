@@ -37,7 +37,7 @@
   - dependency duplicates currently include overlapping HTTP/TLS stacks such as `reqwest 0.11/0.12`, `hyper 0.14/1.x`, and `rustls 0.21/0.23`
 - First implementation slice chosen:
   - explicitly pin the repository Rust baseline to `1.90.0`
-  - change the CI stable lane from floating `stable` to explicit `1.90.0`
+  - change the CI stable lane from floating `stable` to the repository-pinned baseline from `rust-toolchain.toml`
   - keep `beta` in the matrix as the forward-compatibility canary
 - Toolchain fallout repaired:
   - the repository initially inherited the local `rustup` `complete` profile, which tried to install unavailable optional components for pinned `1.90.0`
@@ -54,7 +54,7 @@
   - no source changes were required; `cargo test` and `cargo clippy --all-targets --all-features -- -D warnings` remained green after the refresh
 - Workflow compatibility spot-check completed:
   - local `cargo +beta check --bins --tests --verbose` completed successfully, matching the command shape used in the PR workflow
-  - beta still inherits the machine-level `rustup` profile when invoked explicitly, but the build itself remained compatible with the refreshed baseline
+  - the stable lane now follows `rust-toolchain.toml` directly, while `beta` remains an explicit canary job
 - Final replacement and documentation pass completed:
   - local changes supersede the open Dependabot PRs for `reqwest`, `gix`, `gix-object`, `gix-protocol`, `gix-url`, and `github/codeql-action`
   - `.github/workflows/codeql.yaml` now uses `github/codeql-action@v4`
