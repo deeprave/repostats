@@ -41,7 +41,7 @@
   - keep `beta` in the matrix as the forward-compatibility canary
 - Toolchain fallout repaired:
   - the repository initially inherited the local `rustup` `complete` profile, which tried to install unavailable optional components for pinned `1.90.0`
-  - `rust-toolchain.toml` now sets `profile = "minimal"` and explicitly requests only `rustfmt`, `clippy`, and `rust-src`
+  - `rust-toolchain.toml` now sets `profile = "minimal"` and explicitly requests only `rustfmt` and `clippy`
   - after that change, `cargo test` and `cargo clippy --all-targets --all-features -- -D warnings` both passed under the pinned toolchain
 - First dependency slice completed:
   - direct dependencies were reviewed and the highest-value slice identified as HTTP/TLS alignment
