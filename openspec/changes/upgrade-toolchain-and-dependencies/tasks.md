@@ -13,7 +13,7 @@
 ## 3. Refresh dependencies in bounded slices
 
 - [x] 3.1 Review direct dependencies in `Cargo.toml` and group them into sensible upgrade slices.
-- [x] 3.2 Apply the first bounded dependency upgrade slice and regenerate `Cargo.lock`.
+- [x] 3.2 Apply the first bounded dependency upgrade slice and refresh the resolved dependency graph under the repository's current no-`Cargo.lock` policy.
 - [x] 3.3 Repair API, behavior, formatting, or lint fallout introduced by the upgraded dependencies.
 - [x] 3.4 Repeat for remaining dependency slices until the intended refresh is complete.
 
@@ -46,10 +46,10 @@
 - First dependency slice completed:
   - direct dependencies were reviewed and the highest-value slice identified as HTTP/TLS alignment
   - the repository direct dependency on `reqwest` was upgraded from `0.11` to `0.12`
-  - `Cargo.lock` was regenerated and the duplicate `reqwest`/`hyper`/`rustls` stacks collapsed to a single `0.12` family
+  - the resolved dependency graph observed during validation collapsed the duplicate `reqwest`/`hyper`/`rustls` stacks to a single `0.12` family
   - no source changes were required; `cargo test` and `cargo clippy --all-targets --all-features -- -D warnings` remained green after the upgrade
 - Second dependency slice completed:
-  - core runtime and test utility packages were refreshed in `Cargo.lock`, including `tokio`, `serde`, `serde_json`, `thiserror`, `log`, `once_cell`, `tempfile`, and `serial_test`
+  - core runtime and test utility packages were refreshed in the resolved dependency graph, including `tokio`, `serde`, `serde_json`, `thiserror`, `log`, `once_cell`, `tempfile`, and `serial_test`
   - the slice stayed bounded to packages behind stable APIs already used throughout the repository
   - no source changes were required; `cargo test` and `cargo clippy --all-targets --all-features -- -D warnings` remained green after the refresh
 - Workflow compatibility spot-check completed:
@@ -62,5 +62,5 @@
   - one test helper was updated to the current `gix` API by replacing deprecated `peel_to_commit_in_place()` with `peel_to_commit()`
   - the final validation baseline remained green with `cargo test` and `cargo clippy --all-targets --all-features -- -D warnings`
 - Deferred follow-up notes:
-  - the lockfile still contains some older transitive `gix` family entries, including `gix-url 0.32.0`, because not every indirect dependency path has converged on the latest family yet
-  - the broad `cargo update --dry-run` result remains too large for a single safe refresh pass and should continue as bounded follow-up slices if deeper lockfile freshness is desired
+  - the resolved dependency graph observed during validation still included some older transitive `gix` family entries, including `gix-url 0.32.0`, because not every indirect dependency path had converged on the latest family yet
+  - the broad `cargo update --dry-run` result remained too large for a single safe refresh pass and should continue as bounded follow-up slices if deeper transitive convergence is desired
