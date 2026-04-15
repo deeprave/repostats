@@ -603,7 +603,7 @@ async fn test_start_point_resolution() {
 
     // Test resolving specific commit SHA (use first 8 chars of HEAD)
     let repo = gix::open(current_dir.as_path()).unwrap();
-    let head_commit = repo.head().unwrap().peel_to_commit_in_place().unwrap();
+    let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
     let full_sha = head_commit.id().to_hex_with_len(40).to_string();
     let short_sha = &full_sha[..8];
 
