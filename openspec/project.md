@@ -2,50 +2,123 @@
 
 ## Current Project Description
 
-`repostats` is being reshaped so the core crate behaves like a reusable analysis engine rather than a single hard-wired application flow.
+`repostats` is currently a working Rust application and library baseline that is being steered toward a reusable repository-analysis engine with plugin-driven behavior.
 
-The intended architecture is:
+The active codebase already contains the major subsystem split that future work is expected to build on:
 
-- The core `repostats` library provides the scanning and execution engine.
-- Drivers and behavior are plugin-based rather than being tightly coupled to a fixed report pipeline.
-- Plugins describe the analysis they need, so scanning should be driven by the needs of the active plugins.
-- The data model produced by a scan is derived from plugin requirements and the analysis those plugins request.
-- Output is also plugin-based: the resulting analyzed data can be handed to an output plugin that renders or delivers it in the required form.
+- `app`
+  - CLI startup, argument handling, display, spinner, and application orchestration.
+- `core`
+  - shared utilities such as logging, validation, retries, versioning, shutdown, and error handling.
+- `notifications`
+  - event publication and subscriber management for cross-subsystem coordination.
+- `plugin`
+  - built-in plugin support, plugin lifecycle management, discovery scaffolding, and the external-plugin boundary.
+- `queue`
+  - internal message queue, publishers, consumers, and typed queue helpers.
+- `scanner`
+  - repository validation, scan coordination, checkout support, git operations, and scan message generation.
 
-Examples of output targets include:
+The intended direction remains:
 
-- report generation
-- email delivery
-- spreadsheet export
-- any other output implemented by a plugin
+- keep the scanning engine usable as library functionality rather than a single hard-wired CLI flow
+- let plugins declare the analysis they need so scanning can be requirement-driven
+- preserve plugin-based output handling rather than baking report formats into the scanner itself
+- narrow the public library surface so future external consumers depend on stable APIs instead of internal application wiring
 
-## Refactor Recovery Context
+## Current Baseline Assessment
 
-The repository is currently in the middle of a large refactor intended to support the engine-and-plugins model above.
+As of 2026-04-15, the repository is no longer in the initial "restore a buildable tree" stage. It has progressed to a stable post-recovery baseline with follow-up refactor work already landing in the active source tree.
 
-The immediate recovery goal is to return the project to a compilable, working state while preserving enough information to understand what the refactor was trying to achieve.
+Verified state:
 
-When making recovery decisions:
+- `cargo test` passes on the active tree
+- the workspace contains substantial tests across scanner, queue, notifications, plugin, CLI, and end-to-end paths
+- recent completed follow-up work includes:
+  - restoring the `HEAD` source baseline and preserving refactor-era trees for review
+  - moving `ScannerTask` construction to a builder-based API
+  - introducing a thread-safe `gix::ThreadSafeRepository` storage boundary in scanner state
+  - cleaning up recursion-heavy scanner helpers
+  - keeping OpenSpec changes in place to describe remaining intended refactors
 
-- preserve architectural intent where it is already clear
-- prefer restoring a working baseline before reapplying larger structural changes
-- treat refactor-era additions in `Cargo.toml`, `build.rs`, plugin loading, and service-oriented module splits as potentially intentional until verified otherwise
+Current limitation:
 
-## Current Recovery State
-
-The active repository source tree has been restored to `HEAD` for `src/`, and the application currently builds and tests successfully in that state.
-
-Refactor-era material preserved outside the active project tree:
-
-- `../repostats-refactor/src`
-  - the interrupted refactor source tree that had become the active `src/` during recovery
-- `../repostats-refactor/src.new`
-  - the preserved `src.old/` snapshot that was tested as an alternative restore candidate
-- `../repostats-reactor/tests/app_services.rs`
-  - a modified test file that did not match the restored `HEAD` source API and blocked `cargo test`
+- `cargo clippy --all-targets --all-features -- -D warnings` is not yet clean
+- the current failures are mostly hygiene and API-surface issues rather than baseline functionality failures
+- the most visible categories are unused public re-exports, dead-code warnings across partially exposed subsystems, and test-only style lints
 
 Interpretation:
 
-- the project is working again from the committed `HEAD` source layout
-- the preserved refactor trees should be treated as review inputs, not active source
-- future recovery work should selectively compare those preserved trees against the restored baseline rather than replacing the baseline wholesale
+- the repository is functionally healthy enough for deliberate incremental refactor work
+- the next phase is not emergency recovery; it is controlled convergence between the working baseline and the intended engine/plugin architecture
+
+## Recovery Context And Working Assumptions
+
+The preserved refactor material still matters, but it should be treated as design input rather than code to replay wholesale.
+
+Preserved review inputs:
+
+- `../repostats-refactor/src`
+  - interrupted refactor source tree preserved during recovery
+- `../repostats-refactor/src.new`
+  - preserved alternative source snapshot
+
+Working assumptions for future recovery-oriented changes:
+
+- preserve architectural intent where it is already clear in the active tree or OpenSpec artifacts
+- prefer small, reviewable changes that improve boundaries without destabilizing the verified baseline
+- treat existing service splits, plugin loading scaffolding, build-script changes, and non-trivial dependency additions as potentially intentional unless disproven
+- keep the active `src/` tree authoritative; use preserved refactor trees only for comparison and selective extraction
+
+## Progression Since Initial Recovery
+
+The project summary previously described only the first restore milestone. That is now outdated. The current progression is:
+
+1. The original source restore work is complete.
+2. The project has a working modular baseline with active `app`, `core`, `notifications`, `plugin`, `queue`, and `scanner` subsystems.
+3. Scanner internals have already absorbed targeted refactors from the broader recovery plan.
+4. The remaining work is mostly architectural consolidation and surface cleanup rather than restoring basic functionality.
+
+OpenSpec changes that appear materially completed in the active tree:
+
+- `cleanup-restart-project`
+- `refactor-scannertask-init`
+- `refactor-gix-repository`
+- `refactor-recursion-methods`
+
+OpenSpec changes that still describe likely next-stage work:
+
+- `introduce-service-facades`
+- `separate-cli-from-library`
+- `define-external-plugin-contract`
+- `implement-external-plugin-loading`
+- `restore-nextest-validation`
+
+## Practical Next Priorities
+
+When choosing follow-up work, prefer items that improve correctness or boundaries without reopening broad recovery risk.
+
+Recommended priorities:
+
+- make the baseline lint-clean enough that `cargo clippy --all-targets --all-features -D warnings` can pass again
+- continue narrowing public API exposure, especially broad `api.rs` re-exports that currently create unused-surface warnings
+- adopt service-facade cleanup where it improves subsystem boundaries without forcing larger architectural movement
+- continue separating CLI-facing concerns from the reusable library surface
+- define and implement the external plugin contract deliberately, after the internal library boundary is clearer
+
+## Guidance For Ongoing Updates
+
+This file should track the real state of the active repository, not just intended direction.
+
+Update this document when:
+
+- a recovery-stage OpenSpec change lands in the active source tree
+- verification status changes materially, especially build, test, nextest, or clippy health
+- a previously speculative architectural direction becomes the active baseline
+- preserved refactor material is superseded or no longer relevant
+
+Do not let this file drift back into describing only the original restore event. It should remain the canonical short-form answer to:
+
+- what `repostats` is today
+- what recovery work has already been completed
+- what is still unfinished and why
