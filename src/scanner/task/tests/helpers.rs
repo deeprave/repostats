@@ -31,7 +31,7 @@ pub fn run_git(repo_path: &Path, args: &[&str]) {
 
 /// Initialize a non-bare git repository for scanner tests with signing disabled.
 pub fn init_test_git_repo(repo_path: &Path) {
-    run_git(repo_path, &["init"]);
+    run_git(repo_path, &["init", "--initial-branch=main"]);
     run_git(repo_path, &["config", "user.name", "Test User"]);
     run_git(repo_path, &["config", "user.email", "test@example.com"]);
     run_git(repo_path, &["config", "commit.gpgsign", "false"]);

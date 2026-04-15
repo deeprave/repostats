@@ -248,12 +248,6 @@ impl PluginManager {
             .await
     }
 
-    /// Helper: Get advertised functions from either registry
-    async fn get_advertised_functions(&self, plugin_name: &str) -> Option<Vec<String>> {
-        self.with_plugin(plugin_name, |plugin| plugin.advertised_functions())
-            .await
-    }
-
     /// Helper: Get requirements from either registry
     async fn get_plugin_requirements(
         &self,

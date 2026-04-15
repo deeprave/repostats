@@ -7,8 +7,7 @@ use crate::notifications::api::{
     AsyncNotificationManager, Event, EventReceiver, PluginEvent, PluginEventType, SystemEvent,
     SystemEventType,
 };
-use crate::plugin::builtin::output::args::OutputConfig;
-use crate::plugin::builtin::output::manager::OutputManager;
+use crate::plugin::builtin::output::manager::OutputPipeline;
 use crate::plugin::data_export::PluginDataExport;
 use crate::plugin::error::PluginResult;
 use crate::plugin::registry::SharedPluginRegistry;
@@ -28,8 +27,8 @@ pub struct OutputEventHandler {
     plugin_name: String,
     /// Notification manager for publishing events and keep-alive signals
     notification_manager: Arc<Mutex<AsyncNotificationManager>>,
-    /// Concrete export configuration for render/write operations.
-    output_config: OutputConfig,
+    /// Cached, stateful output pipeline for render/write operations.
+    output_pipeline: Arc<Mutex<OutputPipeline>>,
     /// Plugin registry for checking active plugins (lazy-loaded to avoid deadlock)
     plugin_registry: Option<SharedPluginRegistry>,
     /// Received data exports indexed by (plugin_id, scan_id)
@@ -49,14 +48,14 @@ impl OutputEventHandler {
     pub fn new(
         plugin_name: String,
         notification_manager: Arc<Mutex<AsyncNotificationManager>>,
-        output_config: OutputConfig,
+        output_pipeline: Arc<Mutex<OutputPipeline>>,
         received_data: ReceivedDataMap,
     ) -> Self {
         let (shutdown_sender, _) = broadcast::channel(1);
         Self {
             plugin_name,
             notification_manager,
-            output_config,
+            output_pipeline,
             plugin_registry: None,
             received_data,
             is_processing_data: Arc::new(AtomicBool::new(false)),
@@ -331,17 +330,24 @@ impl OutputEventHandler {
         self.send_keepalive_signal(&format!("Exporting data from {}", plugin_id))
             .await?;
 
-        let output_manager = OutputManager::new(self.output_config.clone());
-        output_manager.export(data_export).await?;
+        let (format_name, destination_description) = {
+            let mut pipeline = self.output_pipeline.lock().await;
+            pipeline.export(data_export)?;
+            (
+                pipeline.format_name().to_string(),
+                pipeline.destination_description().to_string(),
+            )
+        };
 
         log::debug!("Data export timestamp: {:?}", data_export.timestamp);
         log::debug!("Data export metadata: {:?}", data_export.metadata);
 
         log::info!(
-            "Data export completed: plugin='{}' scan='{}' format='{}' timestamp={:?}",
+            "Data export completed: plugin='{}' scan='{}' format='{}' destination='{}' timestamp={:?}",
             plugin_id,
             scan_id,
-            self.output_config.format.name(),
+            format_name,
+            destination_description,
             data_export.timestamp
         );
 
@@ -462,7 +468,6 @@ impl OutputEventHandler {
                         tokio::select! {
                             _ = wait_shutdown_receiver.recv() => {
                                 log::debug!("Worker interrupted during wait");
-                                return;
                             }
                             _ = tokio::time::sleep(Duration::from_millis(100)) => {
                                 // Continue to next iteration

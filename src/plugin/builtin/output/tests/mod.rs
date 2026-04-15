@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod worker_monitoring_tests {
     use super::super::events::OutputEventHandler;
+    use super::super::manager::OutputPipeline;
     use crate::plugin::builtin::output::args::OutputConfig;
     use crate::notifications::api::AsyncNotificationManager;
     use crate::plugin::data_export::PluginDataExport;
@@ -26,7 +27,9 @@ mod worker_monitoring_tests {
         let handler = OutputEventHandler::new(
             plugin_name.clone(),
             notification_manager.clone(),
-            OutputConfig::default(),
+            Arc::new(Mutex::new(
+                OutputPipeline::new(OutputConfig::default()).await.unwrap(),
+            )),
             received_data.clone(),
         );
 
@@ -68,7 +71,9 @@ mod worker_monitoring_tests {
         let handler = OutputEventHandler::new(
             plugin_name.clone(),
             notification_manager.clone(),
-            OutputConfig::default(),
+            Arc::new(Mutex::new(
+                OutputPipeline::new(OutputConfig::default()).await.unwrap(),
+            )),
             received_data.clone(),
         );
 
@@ -107,7 +112,9 @@ mod worker_monitoring_tests {
         let handler = OutputEventHandler::new(
             plugin_name.clone(),
             notification_manager.clone(),
-            OutputConfig::default(),
+            Arc::new(Mutex::new(
+                OutputPipeline::new(OutputConfig::default()).await.unwrap(),
+            )),
             received_data.clone(),
         );
 

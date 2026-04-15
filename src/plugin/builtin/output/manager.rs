@@ -97,27 +97,45 @@ impl OutputWriter for FileWriter {
     }
 }
 
-/// Output manager for handling different output destinations
-pub struct OutputManager {
-    config: OutputConfig,
+/// Stateful output pipeline for a single output plugin execution.
+///
+/// The pipeline caches the formatter and writer so template loading and file
+/// initialization happen once per plugin execution, not once per export event.
+pub struct OutputPipeline {
+    formatter: Box<dyn OutputFormatter>,
+    writer: Box<dyn OutputWriter>,
+    destination_description: String,
+    format_name: &'static str,
+    use_colors: bool,
+    has_written: bool,
 }
 
-impl OutputManager {
-    /// Create a new output manager with the given configuration
-    pub fn new(config: OutputConfig) -> Self {
-        Self { config }
+impl OutputPipeline {
+    pub async fn new(config: OutputConfig) -> PluginResult<Self> {
+        let formatter = Self::create_formatter(&config).await?;
+        let format_name = formatter.format_type().name();
+        let writer = Self::create_writer(&config)?;
+        let destination_description = Self::describe_destination(&config.destination);
+
+        Ok(Self {
+            formatter,
+            writer,
+            destination_description,
+            format_name,
+            use_colors: config.use_colors,
+            has_written: false,
+        })
     }
 
-    /// Create an output writer based on the configuration
-    pub fn create_writer(&self) -> PluginResult<Box<dyn OutputWriter>> {
-        match &self.config.destination {
+    fn create_writer(config: &OutputConfig) -> PluginResult<Box<dyn OutputWriter>> {
+        match &config.destination {
             OutputDestination::Stdout => Ok(Box::new(StdoutWriter::new())),
             OutputDestination::File(path) => Ok(Box::new(FileWriter::new(path)?)),
         }
     }
 
-    async fn create_formatter(&self) -> PluginResult<Box<dyn OutputFormatter>> {
-        match (&self.config.format, self.config.template_path.as_deref()) {
+    async fn create_formatter(config: &OutputConfig) -> PluginResult<Box<dyn OutputFormatter>> {
+        match (&config.format, config.template_path.as_deref()) {
             (ExportFormat::Template, Some(source)) => {
                 Ok(Box::new(TemplateFormatter::from_source(source).await?))
             }
@@ -125,48 +143,59 @@ impl OutputManager {
         }
     }
 
-    /// Write formatted content to the configured destination
-    pub fn write_output(&self, content: &str) -> PluginResult<()> {
-        let mut writer = self.create_writer()?;
-
-        writer
-            .write_all(content.as_bytes())
-            .map_err(|e| PluginError::IoError {
-                operation: "write output".to_string(),
-                path: self.get_destination_description(),
-                source: Some(Box::new(e)),
-            })?;
-
-        writer.finalize().map_err(|e| PluginError::IoError {
-            operation: "finalize output".to_string(),
-            path: self.get_destination_description(),
-            source: Some(Box::new(e)),
-        })?;
-
-        Ok(())
-    }
-
-    /// Render and write a plugin export using the configured formatter and destination.
-    pub async fn export(&self, data: &PluginDataExport) -> PluginResult<()> {
-        let formatter = self.create_formatter().await?;
-        let format_name = formatter.format_type().name();
-        let content = formatter.format(data, self.config.use_colors)?;
-        self.write_output(&content)?;
-
-        log::debug!(
-            "Rendered output using '{}' formatter to {}",
-            format_name,
-            self.get_destination_description()
-        );
-
-        Ok(())
-    }
-
-    /// Get a description of the output destination for error messages
-    fn get_destination_description(&self) -> String {
-        match &self.config.destination {
+    fn describe_destination(destination: &OutputDestination) -> String {
+        match destination {
             OutputDestination::Stdout => "stdout".to_string(),
             OutputDestination::File(path) => path.clone(),
         }
+    }
+
+    pub fn export(&mut self, data: &PluginDataExport) -> PluginResult<()> {
+        let content = self.formatter.format(data, self.use_colors)?;
+
+        if self.has_written {
+            self.writer
+                .write_all(b"\n")
+                .map_err(|e| PluginError::IoError {
+                    operation: "separate output blocks".to_string(),
+                    path: self.destination_description.clone(),
+                    source: Some(Box::new(e)),
+                })?;
+        }
+
+        self.writer
+            .write_all(content.as_bytes())
+            .map_err(|e| PluginError::IoError {
+                operation: "write output".to_string(),
+                path: self.destination_description.clone(),
+                source: Some(Box::new(e)),
+            })?;
+
+        if !content.ends_with('\n') {
+            self.writer
+                .write_all(b"\n")
+                .map_err(|e| PluginError::IoError {
+                    operation: "terminate output line".to_string(),
+                    path: self.destination_description.clone(),
+                    source: Some(Box::new(e)),
+                })?;
+        }
+
+        self.writer.finalize().map_err(|e| PluginError::IoError {
+            operation: "finalize output".to_string(),
+            path: self.destination_description.clone(),
+            source: Some(Box::new(e)),
+        })?;
+
+        self.has_written = true;
+        Ok(())
+    }
+
+    pub fn format_name(&self) -> &'static str {
+        self.format_name
+    }
+
+    pub fn destination_description(&self) -> &str {
+        &self.destination_description
     }
 }

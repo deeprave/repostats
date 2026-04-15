@@ -9,6 +9,6 @@ pub mod git_ops;
 mod queue_ops;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use core::ScannerTask;
