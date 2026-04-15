@@ -239,11 +239,7 @@ impl PluginManager {
         F: FnOnce(&dyn crate::plugin::traits::Plugin) -> R,
     {
         let registry = self.registry().inner().read().await;
-        if let Some(plugin) = registry.get_plugin(plugin_name) {
-            Some(f(plugin))
-        } else {
-            None
-        }
+        registry.get_plugin(plugin_name).map(f)
     }
 
     /// Helper: Get plugin info from either registry (by name)

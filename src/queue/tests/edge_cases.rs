@@ -240,7 +240,7 @@ mod tests {
             .unwrap();
 
         // Test various Unicode and special characters
-        let test_cases = vec![
+        let test_cases = [
             "Hello, 世界! 🌍",
             "Ñoño café résumé naïve façade",
             "Ελληνικά αλφάβητα",
@@ -254,9 +254,9 @@ mod tests {
         ];
 
         // Publish all test cases
-        for (_i, test_data) in test_cases.iter().enumerate() {
+        for test_data in &test_cases {
             let msg = Message::new(
-                format!("unicode-producer-🚀"),
+                "unicode-producer-🚀".to_string(),
                 "unicode_test".to_string(),
                 test_data.to_string(),
             );

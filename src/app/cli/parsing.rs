@@ -120,7 +120,7 @@ impl Args {
                     .value_name("PATHS/URLS")
                     .value_parser(clap::value_parser!(PathBuf))
                     .action(ArgAction::Append)
-                    .help(&format!("{} Repositories to analyze", star)),
+                    .help(format!("{} Repositories to analyze", star)),
             )
             .arg(
                 clap::Arg::new("config_file")
@@ -142,7 +142,7 @@ impl Args {
                     .long("exclude-plugin")
                     .value_name("NAMES")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Plugins to exclude from discovery", star)),
+                    .help(format!("{} Plugins to exclude from discovery", star)),
             )
             // Output and display options
             .arg(
@@ -193,14 +193,14 @@ impl Args {
                     .long("author")
                     .value_name("AUTHORS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Authors to include (matches name or email containing @)", star)),
+                    .help(format!("{} Authors to include (matches name or email containing @)", star)),
             )
             .arg(
                 clap::Arg::new("exclude_author")
                     .long("exclude-author")
                     .value_name("AUTHORS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Authors to exclude (matches name or email containing @)", star)),
+                    .help(format!("{} Authors to exclude (matches name or email containing @)", star)),
             )
             .arg(
                 clap::Arg::new("files")
@@ -208,14 +208,14 @@ impl Args {
                     .long("files")
                     .value_name("PATTERNS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} File patterns to include", star)),
+                    .help(format!("{} File patterns to include", star)),
             )
             .arg(
                 clap::Arg::new("exclude_files")
                     .long("exclude-files")
                     .value_name("PATTERNS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} File patterns to exclude", star)),
+                    .help(format!("{} File patterns to exclude", star)),
             )
             .arg(
                 clap::Arg::new("paths")
@@ -223,7 +223,7 @@ impl Args {
                     .long("paths")
                     .value_name("PATHS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Include only files in these paths", star)),
+                    .help(format!("{} Include only files in these paths", star)),
             )
             .arg(
                 clap::Arg::new("exclude_paths")
@@ -231,7 +231,7 @@ impl Args {
                     .long("exclude-paths")
                     .value_name("PATHS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Exclude files in these paths", star)),
+                    .help(format!("{} Exclude files in these paths", star)),
             )
             .arg(
                 clap::Arg::new("extensions")
@@ -239,14 +239,14 @@ impl Args {
                     .long("extensions")
                     .value_name("EXTS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Include only files with these extensions", star)),
+                    .help(format!("{} Include only files with these extensions", star)),
             )
             .arg(
                 clap::Arg::new("exclude_extensions")
                     .long("exclude-extensions")
                     .value_name("EXTS")
                     .action(ArgAction::Append)
-                    .help(&format!("{} Exclude files with these extensions", star)),
+                    .help(format!("{} Exclude files with these extensions", star)),
             )
             .arg(
                 clap::Arg::new("git_ref")

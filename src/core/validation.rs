@@ -137,7 +137,11 @@ pub fn validate_positive_int(value: &str) -> Result<usize, ValidationError> {
 /// Validate file extension format
 pub fn validate_extension(ext: &str) -> Result<String, ValidationError> {
     // Remove leading dot if present
-    let cleaned = if ext.starts_with('.') { &ext[1..] } else { ext };
+    let cleaned = if let Some(stripped) = ext.strip_prefix('.') {
+        stripped
+    } else {
+        ext
+    };
 
     // Check for invalid characters
     if cleaned.is_empty() {

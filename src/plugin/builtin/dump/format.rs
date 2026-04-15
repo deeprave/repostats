@@ -84,9 +84,8 @@ pub fn format_compact_typed(
     };
 
     let format_timestamp = |ts: &std::time::SystemTime| -> String {
-        DateTime::<Local>::try_from(*ts)
-            .map(|dt| dt.format("%Y-%m-%d,%H:%M:%S%.f").to_string())
-            .unwrap_or_else(|_| "invalid-time".into())
+        let dt: DateTime<Local> = (*ts).into();
+        dt.format("%Y-%m-%d,%H:%M:%S%.f").to_string()
     };
 
     let format_lines = |insertions: usize, deletions: usize| -> String {
@@ -221,9 +220,8 @@ pub fn format_pretty_text_typed(
     use crate::scanner::api::ScanMessage::*;
     use chrono::{DateTime, Local};
     let ts = |ts: &std::time::SystemTime| {
-        DateTime::<Local>::try_from(*ts)
-            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-            .unwrap_or_else(|_| "invalid-time".into())
+        let dt: DateTime<Local> = (*ts).into();
+        dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     };
     let paint = |role: StyleRole, text: &str| role.paint(text, color_enabled);
     let label = |t: &str| paint(StyleRole::Header, t);
@@ -259,11 +257,12 @@ pub fn format_pretty_text_typed(
             timestamp,
             scanner_id,
         } => {
-            let mut parts = Vec::new();
-            parts.push(label("ScanCompleted"));
-            parts.push(kvs("id", scanner_id));
-            parts.push(kv("commits", stats.total_commits.to_string()));
-            parts.push(kv("files", stats.total_files_changed.to_string()));
+            let mut parts = vec![
+                label("ScanCompleted"),
+                kvs("id", scanner_id),
+                kv("commits", stats.total_commits.to_string()),
+                kv("files", stats.total_files_changed.to_string()),
+            ];
             let lines = if stats.total_insertions == 0 && stats.total_deletions == 0 {
                 "no changes".to_string()
             } else {
@@ -362,7 +361,6 @@ pub fn format_pretty_text_typed(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
 
     /// Test the new chrono-based duration formatting for edge cases

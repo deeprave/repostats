@@ -27,9 +27,12 @@ impl Default for ControllerConfig {
 }
 
 /// Controller registration information for dynamic discovery
+type BoxedControllerFuture =
+    Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>;
+
 pub struct ControllerInfo {
     pub name: &'static str,
-    pub factory: fn() -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>,
+    pub factory: fn() -> BoxedControllerFuture,
 }
 
 // Register ControllerInfo with inventory for dynamic discovery
@@ -353,10 +356,6 @@ mod tests {
             // Test that registered controllers can be discovered via inventory
             let discovered = discover_controllers();
 
-            // The discovery function should work (may be empty if no controllers registered yet)
-            // This tests the mechanism, not necessarily that controllers are present
-            assert!(discovered.len() >= 0, "Discovery mechanism should work");
-
             // Test that we can iterate through discovered controllers
             for controller_info in discovered.iter().take(5) {
                 assert!(
@@ -379,16 +378,14 @@ mod tests {
             // let result = event_controller.graceful_system_stop().await;
             // assert!(result.is_ok());
 
-            // Placeholder test until EventController integration is implemented
-            assert!(true, "Placeholder for EventController discovery test");
+            // Placeholder until EventController integration is implemented.
         }
 
         // Test controller factory function signature
         #[tokio::test]
         async fn test_controller_factory_signature() {
             // Test that factory functions return Future<SystemResult<Box<dyn Controller>>>
-            fn factory() -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>
-            {
+            fn factory() -> BoxedControllerFuture {
                 Box::pin(async {
                     Ok(Box::new(MockController::failing("async test")) as Box<dyn Controller>)
                 })
@@ -402,9 +399,7 @@ mod tests {
         // Test multiple controller types can be registered
         #[tokio::test]
         async fn test_multiple_controller_registration() {
-            fn plugin_factory(
-            ) -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>
-            {
+            fn plugin_factory() -> BoxedControllerFuture {
                 Box::pin(async {
                     MockController::new()
                         .await
@@ -412,9 +407,7 @@ mod tests {
                 })
             }
 
-            fn scanner_factory(
-            ) -> Pin<Box<dyn Future<Output = SystemResult<Box<dyn Controller>>> + Send>>
-            {
+            fn scanner_factory() -> BoxedControllerFuture {
                 Box::pin(async {
                     Ok(Box::new(MockController::failing("scanner")) as Box<dyn Controller>)
                 })

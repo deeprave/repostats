@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod worker_monitoring_tests {
     use super::super::events::OutputEventHandler;
+    use crate::plugin::builtin::output::args::OutputConfig;
     use crate::notifications::api::AsyncNotificationManager;
     use crate::plugin::data_export::PluginDataExport;
     use std::collections::HashMap;
@@ -25,6 +26,7 @@ mod worker_monitoring_tests {
         let handler = OutputEventHandler::new(
             plugin_name.clone(),
             notification_manager.clone(),
+            OutputConfig::default(),
             received_data.clone(),
         );
 
@@ -66,6 +68,7 @@ mod worker_monitoring_tests {
         let handler = OutputEventHandler::new(
             plugin_name.clone(),
             notification_manager.clone(),
+            OutputConfig::default(),
             received_data.clone(),
         );
 
@@ -104,6 +107,7 @@ mod worker_monitoring_tests {
         let handler = OutputEventHandler::new(
             plugin_name.clone(),
             notification_manager.clone(),
+            OutputConfig::default(),
             received_data.clone(),
         );
 

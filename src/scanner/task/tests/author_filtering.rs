@@ -2,12 +2,10 @@
 //!
 //! Tests for author pattern matching and filtering functionality
 
-// Removed unused import: super::helpers::*
 use super::super::*;
 use crate::core::query::QueryParams;
 use crate::scanner::tests::helpers::{collect_scan_messages, count_commit_messages};
 use crate::scanner::types::{ScanMessage, ScanRequires};
-use serial_test::serial;
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
@@ -34,64 +32,64 @@ async fn test_commit_traversal_with_author_filtering() {
     let repo_path = temp_dir.path();
 
     // Initialize git repository
-    run_git_command(&["init"], &repo_path, "Git init failed");
+    run_git_command(&["init"], repo_path, "Git init failed");
     run_git_command(
         &["config", "user.name", "Test User"],
-        &repo_path,
+        repo_path,
         "Git config user.name failed",
     );
     run_git_command(
         &["config", "user.email", "test@example.com"],
-        &repo_path,
+        repo_path,
         "Git config user.email failed",
     );
 
     // Create commits with different authors
     std::fs::write(repo_path.join("file1.txt"), "content1").unwrap();
-    run_git_command(&["add", "."], &repo_path, "Git add failed");
+    run_git_command(&["add", "."], repo_path, "Git add failed");
     run_git_command(
         &["commit", "-m", "First commit"],
-        &repo_path,
+        repo_path,
         "First commit failed",
     );
 
     // Change author for second commit
     run_git_command(
         &["config", "user.name", "Another User"],
-        &repo_path,
+        repo_path,
         "Git config user.name (2) failed",
     );
     run_git_command(
         &["config", "user.email", "another@test.org"],
-        &repo_path,
+        repo_path,
         "Git config user.email (2) failed",
     );
 
     std::fs::write(repo_path.join("file2.txt"), "content2").unwrap();
-    run_git_command(&["add", "."], &repo_path, "Git add (2) failed");
+    run_git_command(&["add", "."], repo_path, "Git add (2) failed");
     run_git_command(
         &["commit", "-m", "Second commit"],
-        &repo_path,
+        repo_path,
         "Second commit failed",
     );
 
     // Create third commit back to original author
     run_git_command(
         &["config", "user.name", "Test User"],
-        &repo_path,
+        repo_path,
         "Git config user.name (3) failed",
     );
     run_git_command(
         &["config", "user.email", "test@example.com"],
-        &repo_path,
+        repo_path,
         "Git config user.email (3) failed",
     );
 
     std::fs::write(repo_path.join("file3.txt"), "content3").unwrap();
-    run_git_command(&["add", "."], &repo_path, "Git add (3) failed");
+    run_git_command(&["add", "."], repo_path, "Git add (3) failed");
     run_git_command(
         &["commit", "-m", "Third commit"],
-        &repo_path,
+        repo_path,
         "Third commit failed",
     );
 
@@ -182,7 +180,7 @@ async fn test_complex_wildcard_patterns() {
     let repo_path = temp_dir.path();
 
     // Initialize git repository
-    run_git_command(&["init"], &repo_path, "Git command failed");
+    run_git_command(&["init"], repo_path, "Git command failed");
 
     // Create commits with complex names and emails
     let authors = [
@@ -194,24 +192,24 @@ async fn test_complex_wildcard_patterns() {
     for (i, (name, email)) in authors.iter().enumerate() {
         run_git_command(
             &["config", "user.name", name],
-            &repo_path,
+            repo_path,
             "Git command failed",
         );
         run_git_command(
             &["config", "user.email", email],
-            &repo_path,
+            repo_path,
             "Git command failed",
         );
 
         std::fs::write(
-            repo_path.join(&format!("file{}.txt", i + 1)),
+            repo_path.join(format!("file{}.txt", i + 1)),
             format!("content{}", i + 1),
         )
         .unwrap();
-        run_git_command(&["add", "."], &repo_path, "Git command failed");
+        run_git_command(&["add", "."], repo_path, "Git command failed");
         run_git_command(
             &["commit", "-m", &format!("Commit {}", i + 1)],
-            &repo_path,
+            repo_path,
             "Git command failed",
         );
     }
@@ -284,7 +282,7 @@ async fn test_email_auto_completion_integration() {
     let repo_path = temp_dir.path();
 
     // Initialize git repository
-    run_git_command(&["init"], &repo_path, "Git command failed");
+    run_git_command(&["init"], repo_path, "Git command failed");
 
     // Create commits with different email patterns
     let authors = [
@@ -296,24 +294,24 @@ async fn test_email_auto_completion_integration() {
     for (i, (name, email)) in authors.iter().enumerate() {
         run_git_command(
             &["config", "user.name", name],
-            &repo_path,
+            repo_path,
             "Git command failed",
         );
         run_git_command(
             &["config", "user.email", email],
-            &repo_path,
+            repo_path,
             "Git command failed",
         );
 
         std::fs::write(
-            repo_path.join(&format!("file{}.txt", i + 1)),
+            repo_path.join(format!("file{}.txt", i + 1)),
             format!("content{}", i + 1),
         )
         .unwrap();
-        run_git_command(&["add", "."], &repo_path, "Git command failed");
+        run_git_command(&["add", "."], repo_path, "Git command failed");
         run_git_command(
             &["commit", "-m", &format!("Commit {}", i + 1)],
-            &repo_path,
+            repo_path,
             "Git command failed",
         );
     }

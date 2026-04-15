@@ -42,9 +42,9 @@ impl CommandSegmenter {
         for arg in args {
             if self.is_known_command(arg) {
                 // Previusly acccumulated command line
-                if current_command.is_some() {
+                if let Some(command_name) = current_command.take() {
                     command_segments.push(CommandSegment {
-                        command_name: current_command.unwrap(),
+                        command_name,
                         args: std::mem::take(&mut current_args),
                     });
                 }
@@ -59,10 +59,10 @@ impl CommandSegmenter {
                 return Err(StartupError::UnexpectedArgument { arg: arg.clone() });
             }
         }
-        if current_command.is_some() {
+        if let Some(command_name) = current_command {
             // wrap up the last command
             command_segments.push(CommandSegment {
-                command_name: current_command.unwrap(),
+                command_name,
                 args: std::mem::take(&mut current_args),
             });
         }

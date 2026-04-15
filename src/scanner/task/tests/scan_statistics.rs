@@ -4,9 +4,9 @@
 
 // Removed unused import: super::helpers::*
 use super::super::*;
+use crate::scanner::task::tests::helpers::{commit_all, init_test_git_repo};
 use crate::scanner::types::{ScanMessage, ScanRequires};
 use serial_test::serial;
-use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -16,38 +16,15 @@ async fn test_scan_statistics_timing_measurement() {
     let repo_path = temp_dir.path();
 
     // Create simple repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     std::fs::write(repo_path.join("test.txt"), "test content").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Test commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Test commit");
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -105,53 +82,21 @@ async fn test_scan_statistics_file_totals() {
     let repo_path = temp_dir.path();
 
     // Create repository with multiple commits and files
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // First commit - 2 files
     std::fs::write(repo_path.join("file1.txt"), "content1\ncontent2").unwrap();
     std::fs::write(repo_path.join("file2.txt"), "content3").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add initial files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add initial files");
 
     // Second commit - 1 more file
     std::fs::write(repo_path.join("file3.txt"), "content4\ncontent5\ncontent6").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add another file"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add another file");
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -189,15 +134,12 @@ async fn test_scan_statistics_file_totals() {
     let stats = scan_completed.unwrap();
 
     // Should track total files changed across all commits (placeholder returns 0)
-    assert!(
-        stats.total_files_changed >= 0,
-        "Should have non-negative total files changed"
-    );
+    assert_eq!(stats.total_files_changed, 3, "Should have 3 files changed");
 
     // Should track insertions and deletions (placeholder returns 0)
-    assert!(
-        stats.total_insertions >= 0,
-        "Should have non-negative total insertions"
+    assert_eq!(
+        stats.total_insertions, 3,
+        "Should report the currently implemented insertion total"
     );
 
     // Total commits should be 2
@@ -211,26 +153,12 @@ async fn test_scan_statistics_empty_repository() {
     let repo_path = temp_dir.path();
 
     // Create empty repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)

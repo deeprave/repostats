@@ -290,7 +290,7 @@ impl RepositoryDataBuilder {
             // Extract repo name from URL (e.g., "repo.git" from "https://github.com/user/repo.git")
             self.name = url_str
                 .split('/')
-                .last()
+                .next_back()
                 .map(|s| s.strip_suffix(".git").unwrap_or(s).to_string());
         } else if let Some(ref path) = self.path {
             // Extract from local path
@@ -320,10 +320,10 @@ impl RepositoryDataBuilder {
                 // Try to get remote default branch from origin/HEAD
                 repo.find_reference("refs/remotes/origin/HEAD")
                     .ok()
-                    .and_then(|origin_head| {
+                    .map(|origin_head| {
                         // Extract the branch name from the reference name
                         let name = origin_head.name();
-                        Some(name.shorten().to_string())
+                        name.shorten().to_string()
                     })
             })
             .or_else(|| Some("main".to_string())); // final fallback only if all queries fail
@@ -404,10 +404,8 @@ impl RepositoryDataBuilder {
 fn format_system_time(time: &std::time::SystemTime) -> String {
     use chrono::{DateTime, Utc};
 
-    match DateTime::<Utc>::try_from(*time) {
-        Ok(datetime) => datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        Err(_) => "invalid-time".to_string(),
-    }
+    let datetime: DateTime<Utc> = (*time).into();
+    datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Scanner messages for repository scan data

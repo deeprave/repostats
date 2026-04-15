@@ -101,11 +101,6 @@ impl TemplateFormatter {
         Self::with_template(content)
     }
 
-    /// Load template from URL with default timeout
-    pub async fn from_url(url: &str) -> PluginResult<Self> {
-        Self::from_url_with_timeout(url, DEFAULT_HTTP_TIMEOUT_SECS).await
-    }
-
     /// Load template from URL with custom timeout
     pub async fn from_url_with_timeout(url: &str, timeout_secs: u64) -> PluginResult<Self> {
         // Simple URL validation

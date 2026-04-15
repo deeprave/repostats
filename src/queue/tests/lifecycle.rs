@@ -249,7 +249,7 @@ mod tests {
             )
             .unwrap();
         tokio::time::sleep(Duration::from_millis(10)).await;
-        let manager = QueueManager::create_with_notification_manager(Arc::new(
+        let _manager = QueueManager::create_with_notification_manager(Arc::new(
             tokio::sync::Mutex::new(notification_manager),
         ))
         .await;
@@ -335,10 +335,7 @@ mod tests {
         for (i, subscriber) in [&mut subscriber1, &mut subscriber2].iter_mut().enumerate() {
             let started_event = timeout(Duration::from_millis(400), subscriber.recv())
                 .await
-                .expect(&format!(
-                    "Subscriber {} should receive Started event",
-                    i + 1
-                ))
+                .unwrap_or_else(|_| panic!("Subscriber {} should receive Started event", i + 1))
                 .expect("Should have Started event");
             match started_event {
                 Event::Queue(queue_event) => {
@@ -360,10 +357,7 @@ mod tests {
         for (i, subscriber) in [&mut subscriber1, &mut subscriber2].iter_mut().enumerate() {
             let shutdown_event = timeout(Duration::from_millis(400), subscriber.recv())
                 .await
-                .expect(&format!(
-                    "Subscriber {} should receive Shutdown event",
-                    i + 1
-                ))
+                .unwrap_or_else(|_| panic!("Subscriber {} should receive Shutdown event", i + 1))
                 .expect("Should have Shutdown event");
             match shutdown_event {
                 Event::Queue(queue_event) => {

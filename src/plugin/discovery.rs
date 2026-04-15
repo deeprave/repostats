@@ -21,21 +21,12 @@ pub struct DiscoveredPlugin {
 }
 
 /// Plugin discovery that handles all plugin types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PluginDiscovery {
     /// Plugin directories to search
     pub search_paths: Vec<PathBuf>,
     /// Plugins to exclude from discovery
     pub excluded_plugins: Vec<String>,
-}
-
-impl Default for PluginDiscovery {
-    fn default() -> Self {
-        Self {
-            search_paths: vec![],
-            excluded_plugins: Vec::new(),
-        }
-    }
 }
 
 impl PluginDiscovery {
@@ -138,9 +129,7 @@ impl ExternalPluginDiscovery {
         &self,
         discovery: &PluginDiscovery,
     ) -> PluginResult<Vec<DiscoveredPlugin>> {
-        Ok(crate::plugin::external::api::get_all_external_plugins(
-            &discovery.search_paths,
-        )?)
+        crate::plugin::external::api::get_all_external_plugins(&discovery.search_paths)
     }
 }
 

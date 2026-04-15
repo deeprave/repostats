@@ -80,7 +80,7 @@ fn test_parse_future_dates() {
     // Test "N unit from now" format
     let result = parse_date("2 hours from now").unwrap();
     let diff = result.duration_since(SystemTime::now()).unwrap();
-    assert!(diff > StdDuration::from_secs(1 * 3600 + 50 * 60)); // 1h 50m
+    assert!(diff > StdDuration::from_secs(3600 + 50 * 60)); // 1h 50m
     assert!(diff < StdDuration::from_secs(2 * 3600 + 10 * 60)); // 2h 10m
 
     // Test various future units

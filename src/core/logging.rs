@@ -337,8 +337,7 @@ mod tests {
         log::debug!("Test debug message");
         log::warn!("Test warning message");
 
-        // If we get here without panicking, logging is working
-        assert!(true);
+        // If we get here without panicking, logging is working.
     }
 
     #[test]
@@ -426,8 +425,7 @@ mod tests {
             "Should be able to create logger with file output"
         );
 
-        // GREEN phase - now test passes because we can configure file logging
-        assert!(true, "File logging configuration works");
+        // GREEN phase: we can configure file logging.
     }
 
     #[test]
@@ -512,8 +510,7 @@ mod tests {
                 // Test that we can pop it back
                 handle.pop_temp_spec();
 
-                // If we get here, runtime reconfiguration works
-                assert!(true, "Runtime reconfiguration works");
+                // If we get here, runtime reconfiguration works.
             }
             Ok(Err(e)) => {
                 // Expected if logger already initialized
@@ -526,7 +523,7 @@ mod tests {
             }
             Err(_) => {
                 // Logger creation failed
-                assert!(false, "Logger creation should not fail");
+                panic!("Logger creation should not fail");
             }
         }
     }
@@ -557,8 +554,7 @@ mod tests {
                 // Test pop_temp_spec - reverts to previous log level
                 handle.pop_temp_spec();
 
-                // If we get here, the API we need is available
-                assert!(true, "Reconfiguration API is available");
+                // If we get here, the API we need is available.
             }
             Err(e) => {
                 // Logger already initialized - that's expected in test environment

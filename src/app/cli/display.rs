@@ -110,11 +110,7 @@ pub fn display_plugin_table_to_writer<W: Write>(
         let fn_list_plain = if p.functions.is_empty() {
             "(none)".to_string()
         } else {
-            p.functions
-                .iter()
-                .map(|f| f.clone())
-                .collect::<Vec<_>>()
-                .join(", ")
+            p.functions.to_vec().join(", ")
         };
 
         let plugin_name_cell = if use_color {
@@ -251,11 +247,7 @@ pub fn display_plugin_table(plugins: Vec<PluginInfo>, use_color: bool) -> Result
         let fn_list_plain = if p.functions.is_empty() {
             "(none)".to_string()
         } else {
-            p.functions
-                .iter()
-                .map(|f| f.clone())
-                .collect::<Vec<_>>()
-                .join(", ")
+            p.functions.to_vec().join(", ")
         };
 
         let plugin_name_cell = if use_color {

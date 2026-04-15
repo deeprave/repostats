@@ -4,9 +4,9 @@
 
 // Removed unused import: super::helpers::*
 use super::super::*;
+use crate::scanner::task::tests::helpers::{commit_all, init_test_git_repo, run_git};
 use crate::scanner::types::{ChangeType, ScanMessage, ScanRequires};
 use serial_test::serial;
-use std::process::Command;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -16,21 +16,7 @@ async fn test_real_commit_diff_analysis() {
     let repo_path = temp_dir.path();
 
     // Create repository with actual file changes
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Initial commit with multiple files
     std::fs::write(
@@ -44,21 +30,12 @@ async fn test_real_commit_diff_analysis() {
         "fn main() {\n    println!(\"Hello, world!\");\n}",
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add initial project files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add initial project files");
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -126,40 +103,17 @@ async fn test_commit_diff_statistics() {
     let repo_path = temp_dir.path();
 
     // Create repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create commit with known content
     std::fs::write(repo_path.join("data.txt"), "line1\nline2\nline3").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add data file"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add data file");
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo_clone,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -213,34 +167,11 @@ async fn test_file_change_types() {
     let repo_path = temp_dir.path();
 
     // Create a more complex repository with different change types
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Initial commit
     std::fs::write(repo_path.join("existing.txt"), "existing content").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add existing file"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add existing file");
 
     // Second commit with multiple operations
     std::fs::write(repo_path.join("new.txt"), "new content").unwrap(); // Added file
@@ -251,22 +182,13 @@ async fn test_file_change_types() {
         "completely different content",
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add new file and modify existing"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add new file and modify existing");
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -275,7 +197,7 @@ async fn test_file_change_types() {
     // Test the latest commit (should have added and modified files)
     let head_commit = scanner_task.resolve_start_point("HEAD").await.unwrap();
     let commit_obj = repo_clone
-        .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
+        .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
     let file_changes = scanner_task
@@ -317,52 +239,21 @@ async fn test_file_paths_for_renames() {
     let repo_path = temp_dir.path();
 
     // Create repository with rename operation
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Initial commit
     std::fs::write(repo_path.join("original.txt"), "content").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Initial"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Initial");
 
     // Rename file
-    Command::new("git")
-        .args(["mv", "original.txt", "renamed.txt"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Rename file operation"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    run_git(repo_path, &["mv", "original.txt", "renamed.txt"]);
+    commit_all(repo_path, "Rename file operation");
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -370,7 +261,7 @@ async fn test_file_paths_for_renames() {
 
     let head_commit = scanner_task.resolve_start_point("HEAD").await.unwrap();
     let commit_obj = repo_clone
-        .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
+        .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
     let file_changes = scanner_task
@@ -422,21 +313,7 @@ async fn test_line_level_statistics_per_file() {
     let repo_path = temp_dir.path();
 
     // Create repository with multiple files
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create multiple files with different content sizes
     std::fs::write(repo_path.join("small.txt"), "line1\nline2").unwrap();
@@ -450,22 +327,13 @@ async fn test_line_level_statistics_per_file() {
         "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10",
     )
     .unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add multiple test files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add multiple test files");
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -473,7 +341,7 @@ async fn test_line_level_statistics_per_file() {
 
     let head_commit = scanner_task.resolve_start_point("HEAD").await.unwrap();
     let commit_obj = repo_clone
-        .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
+        .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
     let file_changes = scanner_task
@@ -522,21 +390,7 @@ async fn test_binary_vs_text_file_detection() {
     let repo_path = temp_dir.path();
 
     // Create repository with binary and text files
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create text and binary files
     std::fs::write(repo_path.join("text.txt"), "This is text content").unwrap();
@@ -552,22 +406,13 @@ async fn test_binary_vs_text_file_detection() {
     )
     .unwrap(); // PNG header
 
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add text and binary files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add text and binary files");
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -575,7 +420,7 @@ async fn test_binary_vs_text_file_detection() {
 
     let head_commit = scanner_task.resolve_start_point("HEAD").await.unwrap();
     let commit_obj = repo_clone
-        .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
+        .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
     let file_changes = scanner_task
@@ -626,21 +471,7 @@ async fn test_comprehensive_change_type_coverage() {
     let repo_path = temp_dir.path();
 
     // Create repository and test all change types
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Test each change type with specific commit messages
     let test_commits = vec![
@@ -668,21 +499,12 @@ async fn test_comprehensive_change_type_coverage() {
 
     // Initial commit
     std::fs::write(repo_path.join("initial.txt"), "initial").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Initial commit");
 
     let repo = gix::open(repo_path).unwrap();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo.clone(),
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -695,82 +517,63 @@ async fn test_comprehensive_change_type_coverage() {
                 // Actually add a new file
                 let new_file = expected_files[0];
                 std::fs::write(repo_path.join(new_file), "new file content").unwrap();
-                Command::new("git")
-                    .args(["add", new_file])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["add", new_file]);
             }
             ChangeType::Deleted => {
                 // First create a file to delete
                 let file_to_delete = expected_files[0];
                 std::fs::write(repo_path.join(file_to_delete), "temporary").unwrap();
-                Command::new("git")
-                    .args(["add", file_to_delete])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
-                Command::new("git")
-                    .args(["commit", "-m", "Add file to be deleted"])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["add", file_to_delete]);
+                run_git(
+                    repo_path,
+                    &[
+                        "-c",
+                        "commit.gpgsign=false",
+                        "commit",
+                        "-m",
+                        "Add file to be deleted",
+                    ],
+                );
 
                 // Now delete it
                 std::fs::remove_file(repo_path.join(file_to_delete)).unwrap();
-                Command::new("git")
-                    .args(["rm", file_to_delete])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["rm", file_to_delete]);
             }
             ChangeType::Renamed => {
                 // Create and rename a file (Git tracks this as delete + add)
                 let renamed_file = expected_files[0];
                 std::fs::write(repo_path.join("old_name.txt"), "content").unwrap();
-                Command::new("git")
-                    .args(["add", "old_name.txt"])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
-                Command::new("git")
-                    .args(["commit", "-m", "Add file to be renamed"])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["add", "old_name.txt"]);
+                run_git(
+                    repo_path,
+                    &[
+                        "-c",
+                        "commit.gpgsign=false",
+                        "commit",
+                        "-m",
+                        "Add file to be renamed",
+                    ],
+                );
 
                 // Rename it
-                Command::new("git")
-                    .args(["mv", "old_name.txt", renamed_file])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["mv", "old_name.txt", renamed_file]);
             }
             ChangeType::Modified => {
                 // Modify an existing file (initial.txt)
                 std::fs::write(repo_path.join("initial.txt"), "modified content").unwrap();
-                Command::new("git")
-                    .args(["add", "initial.txt"])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["add", "initial.txt"]);
             }
             _ => {
                 // For other change types, just modify temp.txt
                 std::fs::write(repo_path.join("temp.txt"), message).unwrap();
-                Command::new("git")
-                    .args(["add", "."])
-                    .current_dir(&repo_path)
-                    .output()
-                    .unwrap();
+                run_git(repo_path, &["add", "."]);
             }
         }
 
-        Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(&repo_path)
-            .output()
-            .unwrap();
+        run_git(
+            repo_path,
+            &["-c", "commit.gpgsign=false", "commit", "-m", message],
+        );
 
         let head_commit = scanner_task.resolve_start_point("HEAD").await.unwrap();
         let commit_obj = repo
@@ -805,10 +608,8 @@ async fn test_comprehensive_change_type_coverage() {
 
         assert!(
             assertion_passes,
-            "Commit '{}' should produce {} change type, got: {:?}",
-            message,
-            format!("{:?}", expected_type),
-            detected_types
+            "Commit '{}' should produce {:?} change type, got: {:?}",
+            message, expected_type, detected_types
         );
     }
 }
@@ -820,41 +621,18 @@ async fn test_real_file_paths_not_placeholder() {
     let repo_path = temp_dir.path();
 
     // Create repository
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create actual files with known names
     std::fs::write(repo_path.join("actual_file.txt"), "real content").unwrap();
     std::fs::write(repo_path.join("another_file.rs"), "fn main() {}").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Add real files"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    commit_all(repo_path, "Add real files");
 
     let repo = gix::open(repo_path).unwrap();
     let repo_clone = repo.clone();
     let scanner_task = ScannerTask::builder(
         "test-scanner".to_string(),
-        repo.path().to_string_lossy().to_string(),
+        repo_path.to_string_lossy().to_string(),
         repo,
     )
     .with_requirements(ScanRequires::FILE_CHANGES)
@@ -862,7 +640,7 @@ async fn test_real_file_paths_not_placeholder() {
 
     let head_commit = scanner_task.resolve_start_point("HEAD").await.unwrap();
     let commit_obj = repo_clone
-        .find_object(gix::ObjectId::from_hex(&head_commit.as_bytes()).unwrap())
+        .find_object(gix::ObjectId::from_hex(head_commit.as_bytes()).unwrap())
         .unwrap();
     let commit = commit_obj.try_into_commit().unwrap();
     let file_changes = scanner_task
@@ -904,68 +682,51 @@ async fn test_real_file_paths_not_placeholder() {
 #[tokio::test]
 #[serial]
 async fn test_commit_with_no_file_changes() {
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let repo_path = temp_dir.path();
 
-    // Initialize git repository using system commands
-    Command::new("git")
-        .args(["init"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
+    init_test_git_repo(repo_path);
 
     // Create initial commit with a file
     std::fs::write(repo_path.join("test.txt"), "initial content").unwrap();
-    Command::new("git")
-        .args(["add", "test.txt"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    let first_commit_output = Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    assert!(
-        first_commit_output.status.success(),
-        "Failed to create initial commit"
+    run_git(repo_path, &["add", "test.txt"]);
+    run_git(
+        repo_path,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "Initial commit",
+        ],
     );
 
     // Create second commit with NO file changes (commit --allow-empty)
-    let second_commit_output = Command::new("git")
-        .args(["commit", "--allow-empty", "-m", "No file changes"])
-        .current_dir(&repo_path)
-        .output()
-        .unwrap();
-    assert!(
-        second_commit_output.status.success(),
-        "Failed to create empty commit"
+    run_git(
+        repo_path,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "No file changes",
+        ],
     );
 
     // Get commit hashes
-    let head_hash = Command::new("git")
+    let head_hash = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     let head_str = std::str::from_utf8(&head_hash.stdout).unwrap().trim();
 
-    let parent_hash = Command::new("git")
+    let parent_hash = std::process::Command::new("git")
         .args(["rev-parse", "HEAD~1"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     let parent_str = std::str::from_utf8(&parent_hash.stdout).unwrap().trim();

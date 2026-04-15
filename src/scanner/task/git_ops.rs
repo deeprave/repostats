@@ -238,7 +238,7 @@ impl ScannerTask {
         // Process commits directly into messages to avoid memory duplication
 
         // Pre-compile author patterns for performance
-        let author_matcher = if let Some(ref params) = query_params {
+        let author_matcher = if let Some(params) = query_params {
             if !params.authors.include.is_empty() || !params.authors.exclude.is_empty() {
                 Some(
                     AuthorPatternMatcher::new(&params.authors.include, &params.authors.exclude)
@@ -254,7 +254,7 @@ impl ScannerTask {
         };
 
         // Determine starting point based on git_ref parameter
-        let start_ref = if let Some(ref params) = query_params {
+        let start_ref = if let Some(params) = query_params {
             if let Some(ref git_ref) = params.git_ref {
                 git_ref.as_str()
             } else {
@@ -385,7 +385,7 @@ impl ScannerTask {
             }
 
             // Apply date range filtering
-            if let Some(ref params) = query_params {
+            if let Some(params) = query_params {
                 if let Some(ref date_range) = params.date_range {
                     let commit_time = Self::git_time_to_system_time(&time);
 
@@ -396,7 +396,7 @@ impl ScannerTask {
             }
 
             // Apply merge commit filtering
-            if let Some(ref params) = query_params {
+            if let Some(params) = query_params {
                 if !params.should_include_merge_commits() {
                     // Check if this is a merge commit (has more than one parent)
                     let parent_count = commit.parent_ids().count();
@@ -841,55 +841,47 @@ impl ScannerTask {
             let mut files_analyzed = 0;
 
             // First, try to find actual files in the tree and analyze them properly
-            for entry in tree.iter() {
-                if let Ok(entry) = entry {
-                    if entry.mode().is_blob() {
-                        // This is a real file blob - let's analyze it properly
-                        let filename = entry.filename();
-                        let file_path = match std::str::from_utf8(filename) {
-                            Ok(path) => path,
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to decode filename as UTF-8 in commit {}: {} (bytes: {:?}). Using fallback name.",
-                                    commit.id().to_hex_with_len(40), e, filename
-                                );
-                                "unknown_file.txt"
-                            }
-                        };
-
-                        // Use binary detection (extension + content analysis)
-                        let is_binary =
-                            Self::get_binary_status(repo, file_path, entry.oid().into());
-
-                        // Use our enhanced line counting for text files
-                        let insertions = if !is_binary {
-                            Self::count_lines_in_blob(repo, entry.oid().into()).unwrap_or_else(
-                                |e| {
-                                    log::warn!("Failed to count lines in '{}': {}", file_path, e);
-                                    3 // Fallback for test compatibility
-                                },
-                            )
-                        } else {
-                            0 // Binary files have no line count
-                        };
-
-                        diff_files.push(DiffFileInfo {
-                            change_type: ChangeType::Added,
-                            old_path: None,
-                            new_path: file_path.to_string(),
-                            insertions,
-                            deletions: 0,
-                            is_binary,
-                            // gix EntryMode doesn't expose direct numeric; use its raw value via into() if possible or fallback
-                            mode: Some(format!("{:?}", entry.mode())),
-                        });
-
-                        files_analyzed += 1;
-
-                        // Limit to reasonable number to avoid overwhelming output
-                        if files_analyzed >= 10 {
-                            break;
+            for entry in tree.iter().flatten() {
+                if entry.mode().is_blob() {
+                    // This is a real file blob - let's analyze it properly
+                    let filename = entry.filename();
+                    let file_path = match std::str::from_utf8(filename) {
+                        Ok(path) => path,
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to decode filename as UTF-8 in commit {}: {} (bytes: {:?}). Using fallback name.",
+                                commit.id().to_hex_with_len(40), e, filename
+                            );
+                            "unknown_file.txt"
                         }
+                    };
+
+                    // Use binary detection (extension + content analysis)
+                    let is_binary = Self::get_binary_status(repo, file_path, entry.oid().into());
+
+                    // Use our enhanced line counting for text files
+                    let insertions = if !is_binary {
+                        Self::count_lines_in_blob(repo, entry.oid().into()).unwrap_or_else(|e| {
+                            log::warn!("Failed to count lines in '{}': {}", file_path, e);
+                            3
+                        })
+                    } else {
+                        0
+                    };
+
+                    diff_files.push(DiffFileInfo {
+                        change_type: ChangeType::Added,
+                        old_path: None,
+                        new_path: file_path.to_string(),
+                        insertions,
+                        deletions: 0,
+                        is_binary,
+                        mode: Some(format!("{:?}", entry.mode())),
+                    });
+
+                    files_analyzed += 1;
+                    if files_analyzed >= 10 {
+                        break;
                     }
                 }
             }
@@ -1261,7 +1253,7 @@ impl ScannerTask {
                 // Consider binary if:
                 // - Contains null bytes (strong indicator)
                 // - More than 30% high-bit bytes (likely binary data)
-                null_count > 0 || (sample.len() > 0 && high_bit_count * 100 / sample.len() > 30)
+                null_count > 0 || (!sample.is_empty() && high_bit_count * 100 / sample.len() > 30)
             }
             Err(e) => {
                 log::warn!("Failed to read blob content for binary detection: {}", e);
@@ -1354,19 +1346,19 @@ impl ScannerTask {
     /// Create a checkout directory for a specific commit when FILE_CONTENT is required
     async fn create_checkout_for_commit(&self, commit_info: &CommitInfo) -> ScanResult<PathBuf> {
         if let Some(checkout_manager) = self.checkout_manager() {
-            let mut manager =
-                handle_mutex_poison(checkout_manager.lock(), |msg| ScanError::Repository {
-                    message: format!(
-                        "Failed to acquire checkout manager lock for commit {}: {}",
-                        commit_info.hash, msg
-                    ),
-                })?;
             let vars = crate::scanner::checkout::manager::TemplateVars::for_commit_checkout(
                 &commit_info.hash,
                 self.scanner_id(),
             );
-            // Step 1: Prepare directory (CheckoutManager responsibility)
-            let target_dir =
+            let target_dir = {
+                let mut manager =
+                    handle_mutex_poison(checkout_manager.lock(), |msg| ScanError::Repository {
+                        message: format!(
+                            "Failed to acquire checkout manager lock for commit {}: {}",
+                            commit_info.hash, msg
+                        ),
+                    })?;
+                // Step 1: Prepare directory (CheckoutManager responsibility)
                 manager
                     .prepare_checkout_directory(&vars)
                     .map_err(|e| ScanError::Repository {
@@ -1374,7 +1366,8 @@ impl ScannerTask {
                             "Failed to prepare checkout directory for commit {}: {}",
                             commit_info.hash, e
                         ),
-                    })?;
+                    })?
+            };
 
             // Step 2: Extract Git files (ScannerTask responsibility)
             let files_extracted = self

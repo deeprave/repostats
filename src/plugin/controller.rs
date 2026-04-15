@@ -363,14 +363,9 @@ mod tests {
 
             // Wait for SystemEvent::ForceShutdown to be published
             let _event_result = timeout(Duration::from_millis(100), async {
-                if let Some(event) = receiver.recv().await {
-                    match event {
-                        Event::System(system_event) => {
-                            assert_eq!(system_event.event_type, SystemEventType::ForceShutdown);
-                            true
-                        }
-                        _ => false,
-                    }
+                if let Some(Event::System(system_event)) = receiver.recv().await {
+                    assert_eq!(system_event.event_type, SystemEventType::ForceShutdown);
+                    true
                 } else {
                     false
                 }

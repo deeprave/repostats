@@ -75,33 +75,6 @@ impl CsvFormatter {
         Ok(result)
     }
 
-    /// Convert hierarchical data to flat CSV format
-    fn format_hierarchical(
-        &self,
-        tree: &crate::plugin::data_export::TreeNode,
-    ) -> PluginResult<String> {
-        let mut rows = Vec::new();
-        self.flatten_tree(tree, String::new(), &mut rows);
-
-        if rows.is_empty() {
-            return Ok(String::new());
-        }
-
-        let mut result = String::new();
-
-        // Add flattened data
-        for (path, value) in rows {
-            let escaped_path = self.escape_csv_value(&path);
-            let escaped_value = self.escape_csv_value(&value);
-            result.push_str(&format!(
-                "{}{}{}\n",
-                escaped_path, self.delimiter, escaped_value
-            ));
-        }
-
-        Ok(result)
-    }
-
     /// Recursively flatten tree structure
     fn flatten_tree(
         &self,

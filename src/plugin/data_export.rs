@@ -667,7 +667,7 @@ mod tests {
         // Test all expected Value variants exist
         let string_val = Value::String("test".to_string());
         let int_val = Value::Integer(42);
-        let float_val = Value::Float(3.14);
+        let float_val = Value::Float(std::f64::consts::PI);
         let bool_val = Value::Boolean(true);
         let timestamp_val = Value::Timestamp(SystemTime::now());
         let duration_val = Value::Duration(Duration::from_secs(60));
@@ -711,7 +711,10 @@ mod tests {
             Value::String("test".to_string())
         );
         assert_eq!(Value::Integer(42), Value::Integer(42));
-        assert_eq!(Value::Float(3.14), Value::Float(3.14));
+        assert_eq!(
+            Value::Float(std::f64::consts::PI),
+            Value::Float(std::f64::consts::PI)
+        );
         assert_eq!(Value::Boolean(true), Value::Boolean(true));
         assert_eq!(Value::Null, Value::Null);
 
@@ -773,7 +776,7 @@ mod tests {
         let col = ColumnDef::new("test_col", ColumnType::String);
         assert_eq!(col.name, "test_col");
         assert_eq!(col.column_type, ColumnType::String);
-        assert_eq!(col.nullable, true);
+        assert!(col.nullable);
         assert_eq!(col.description, None);
         assert_eq!(col.default_value, None);
     }
@@ -783,7 +786,7 @@ mod tests {
         let col = ColumnDef::builder("test_col", ColumnType::Integer).build();
         assert_eq!(col.name, "test_col");
         assert_eq!(col.column_type, ColumnType::Integer);
-        assert_eq!(col.nullable, true);
+        assert!(col.nullable);
         assert_eq!(col.description, None);
         assert_eq!(col.default_value, None);
     }
@@ -798,7 +801,7 @@ mod tests {
 
         assert_eq!(col.name, "test_col");
         assert_eq!(col.column_type, ColumnType::String);
-        assert_eq!(col.nullable, false);
+        assert!(!col.nullable);
         assert_eq!(col.description, Some("A test column".to_string()));
         assert_eq!(
             col.default_value,
@@ -815,7 +818,7 @@ mod tests {
 
         assert_eq!(col.name, "id");
         assert_eq!(col.column_type, ColumnType::Integer);
-        assert_eq!(col.nullable, false);
+        assert!(!col.nullable);
         assert_eq!(col.description, Some("Primary key".to_string()));
     }
 
@@ -977,7 +980,7 @@ mod tests {
             .validate_value("int_col", &Value::Integer(42))
             .is_ok());
         assert!(schema
-            .validate_value("float_col", &Value::Float(3.14))
+            .validate_value("float_col", &Value::Float(std::f64::consts::PI))
             .is_ok());
         assert!(schema
             .validate_value("bool_col", &Value::Boolean(true))
@@ -1424,8 +1427,8 @@ mod tests {
 
         assert_eq!(hints.format, ExportFormat::Json);
         assert_eq!(hints.max_rows, None);
-        assert_eq!(hints.include_headers, true);
-        assert_eq!(hints.pretty_print, true);
+        assert!(hints.include_headers);
+        assert!(hints.pretty_print);
         assert!(hints.custom_options.is_empty());
     }
 
@@ -1435,8 +1438,8 @@ mod tests {
 
         assert_eq!(hints.format, ExportFormat::Text);
         assert_eq!(hints.max_rows, None);
-        assert_eq!(hints.include_headers, true);
-        assert_eq!(hints.pretty_print, true);
+        assert!(hints.include_headers);
+        assert!(hints.pretty_print);
         assert!(hints.custom_options.is_empty());
     }
 
@@ -1451,8 +1454,8 @@ mod tests {
 
         assert_eq!(hints.format, ExportFormat::Csv);
         assert_eq!(hints.max_rows, Some(100));
-        assert_eq!(hints.include_headers, false);
-        assert_eq!(hints.pretty_print, false);
+        assert!(!hints.include_headers);
+        assert!(!hints.pretty_print);
         assert_eq!(hints.get_custom_option("delimiter"), Some(&",".to_string()));
         assert_eq!(hints.get_custom_option("quote"), Some(&"\"".to_string()));
     }

@@ -17,11 +17,6 @@ impl JsonFormatter {
         Self { pretty: true }
     }
 
-    /// Create a compact JSON formatter
-    pub fn new_compact() -> Self {
-        Self { pretty: false }
-    }
-
     /// Convert plugin Value to JSON Value
     fn convert_value(&self, value: &Value) -> JsonValue {
         match value {

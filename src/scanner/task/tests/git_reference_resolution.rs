@@ -76,7 +76,7 @@ async fn test_git_reference_validation() {
     .build();
 
     // Test valid references
-    let valid_refs = vec!["HEAD", "main", "master"];
+    let valid_refs = ["HEAD", "main", "master"];
 
     for reference in valid_refs {
         match scanner_task.resolve_start_point(reference).await {
@@ -100,7 +100,7 @@ async fn test_git_reference_validation() {
     }
 
     // Test invalid references should return errors (not panic)
-    let invalid_refs = vec!["nonexistent-branch", "invalid/ref/name", ""];
+    let invalid_refs = ["nonexistent-branch", "invalid/ref/name", ""];
 
     for reference in invalid_refs {
         match scanner_task.resolve_start_point(reference).await {
@@ -121,35 +121,35 @@ async fn test_complex_git_reference_patterns() {
     // Create a repository with multiple commits and branches
     Command::new("git")
         .args(["init"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     Command::new("git")
         .args(["config", "user.name", "Test"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     Command::new("git")
         .args(["config", "user.email", "test@test.com"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
 
     // Create multiple commits
     for i in 1..=5 {
         std::fs::write(
-            repo_path.join(&format!("file{}.txt", i)),
+            repo_path.join(format!("file{}.txt", i)),
             format!("content {}", i),
         )
         .unwrap();
         Command::new("git")
             .args(["add", "."])
-            .current_dir(&repo_path)
+            .current_dir(repo_path)
             .output()
             .unwrap();
         Command::new("git")
             .args(["commit", "-m", &format!("Commit {}", i)])
-            .current_dir(&repo_path)
+            .current_dir(repo_path)
             .output()
             .unwrap();
     }
@@ -157,25 +157,25 @@ async fn test_complex_git_reference_patterns() {
     // Create a tag
     Command::new("git")
         .args(["tag", "v1.0"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
 
     // Create a branch
     Command::new("git")
         .args(["checkout", "-b", "feature-branch"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     std::fs::write(repo_path.join("branch-file.txt"), "branch content").unwrap();
     Command::new("git")
         .args(["add", "."])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
     Command::new("git")
         .args(["commit", "-m", "Branch commit"])
-        .current_dir(&repo_path)
+        .current_dir(repo_path)
         .output()
         .unwrap();
 
@@ -189,7 +189,7 @@ async fn test_complex_git_reference_patterns() {
     .build();
 
     // Test complex HEAD patterns
-    let complex_patterns = vec![
+    let complex_patterns = [
         ("HEAD", "Current commit"),
         ("HEAD~1", "One commit back"),
         ("HEAD~2", "Two commits back"),

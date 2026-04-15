@@ -286,14 +286,6 @@ mod tests {
                 name: name.to_string(),
             }
         }
-
-        async fn was_stop_called(&self) -> bool {
-            *self.stop_called.lock().await
-        }
-
-        async fn was_await_called(&self) -> bool {
-            *self.await_called.lock().await
-        }
     }
 
     #[async_trait]
@@ -361,7 +353,7 @@ mod tests {
 
         // Should successfully create and discover controllers
         // Note: Discovery count depends on what's registered at compile time
-        assert!(event_controller.controller_count() >= 0);
+        let _controller_count = event_controller.controller_count();
     }
 
     #[tokio::test]
@@ -391,12 +383,7 @@ mod tests {
         // 3. log::debug!("Controller '{}' discovered", controller_name) for each
         // 4. log::debug!("Controller '{}' instantiated successfully", controller_name) for each success
 
-        // For now, this test passes but doesn't verify logging
-        // When logging is implemented, we would use a log capture mechanism
-        assert!(
-            true,
-            "Placeholder test - logging verification not yet implemented"
-        );
+        // For now, this test documents the intended logging behavior without verification.
     }
 
     #[tokio::test]
@@ -544,9 +531,7 @@ mod tests {
 
         let _result = event_controller.coordinate_graceful_shutdown().await;
 
-        // Note: We can't easily verify individual calls with Arc<dyn Controller>
-        // The important thing is testing that the coordination method works
-        assert!(true, "Coordination method completed");
+        // Note: We can't easily verify individual calls with Arc<dyn Controller>.
     }
 
     #[tokio::test]
@@ -569,9 +554,7 @@ mod tests {
         let (_tx, rx) = broadcast::channel(1);
         let _result = event_controller.coordinate_completion_wait(rx).await;
 
-        // Note: We can't easily verify individual calls with Arc<dyn Controller>
-        // The important thing is testing that the coordination method works
-        assert!(true, "Coordination method completed");
+        // Note: We can't easily verify individual calls with Arc<dyn Controller>.
     }
 
     // Tests for EventController::guard() API
@@ -719,7 +702,7 @@ mod tests {
             // of shutdown coordination, signal handling, or subsystem management
             let result = EventController::guard(|| async {
                 // Pure application logic with no coordination concerns
-                let data = vec![1, 2, 3];
+                let data = [1, 2, 3];
                 let sum: i32 = data.iter().sum();
 
                 if sum == 6 {
@@ -765,7 +748,7 @@ mod tests {
             // Test various async closure patterns with guard()
 
             // Test with move closure
-            let data = vec![10, 20, 30];
+            let data = [10, 20, 30];
             let result = EventController::guard(move || async move {
                 let sum: i32 = data.iter().sum();
                 Ok::<i32, ()>(sum)

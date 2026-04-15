@@ -163,8 +163,8 @@ pub fn parse_extensions(extensions_str: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(|s| {
             // Remove leading dot if present
-            if s.starts_with('.') {
-                s[1..].to_lowercase()
+            if let Some(stripped) = s.strip_prefix('.') {
+                stripped.to_lowercase()
             } else {
                 s.to_lowercase()
             }
