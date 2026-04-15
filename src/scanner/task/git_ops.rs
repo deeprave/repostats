@@ -204,7 +204,7 @@ impl ScannerTask {
         )
         .await?;
 
-        // Use the repository directly - it's already opened
+        // Materialize one thread-local repository handle for this scan operation.
         let repo = self.repository();
 
         // Start timing the actual scanning work
@@ -218,7 +218,7 @@ impl ScannerTask {
         // Create repository data for the message
         let mut builder = crate::scanner::types::RepositoryData::builder()
             .with_repository(self.repository_path())
-            .with_repository_info(repo);
+            .with_repository_info(&repo);
 
         if let Some(params) = query_params {
             builder = builder.with_query(params);
@@ -412,7 +412,7 @@ impl ScannerTask {
             // Calculate insertions/deletions by analyzing diff against first parent
             let (commit_insertions, commit_deletions) =
                 if let Some(first_parent_id) = commit.parent_ids().next() {
-                    match Self::parse_commit_diff(repo, &commit, first_parent_id.into()) {
+                    match Self::parse_commit_diff(&repo, &commit, first_parent_id.into()) {
                         Ok(diff_files) => {
                             // Aggregate insertions/deletions from all changed files
                             diff_files.iter().fold((0, 0), |(ins, del), file| {
@@ -1410,12 +1410,12 @@ impl ScannerTask {
         );
 
         // Parse the revision to get commit SHA
-        let parsed_ref =
-            self.repository()
-                .rev_parse(commit_sha)
-                .map_err(|e| ScanError::Repository {
-                    message: format!("Failed to resolve revision '{}': {}", commit_sha, e),
-                })?;
+        let repo = self.repository();
+        let parsed_ref = repo
+            .rev_parse(commit_sha)
+            .map_err(|e| ScanError::Repository {
+                message: format!("Failed to resolve revision '{}': {}", commit_sha, e),
+            })?;
 
         let commit_id = parsed_ref.single().ok_or_else(|| ScanError::Repository {
             message: format!(
@@ -1425,12 +1425,11 @@ impl ScannerTask {
         })?;
 
         // Get the commit object
-        let commit =
-            self.repository()
-                .find_commit(commit_id)
-                .map_err(|e| ScanError::Repository {
-                    message: format!("Failed to find commit '{}': {}", commit_id, e),
-                })?;
+        let commit = repo
+            .find_commit(commit_id)
+            .map_err(|e| ScanError::Repository {
+                message: format!("Failed to find commit '{}': {}", commit_id, e),
+            })?;
 
         // Get the tree from the commit
         let tree = commit.tree().map_err(|e| ScanError::Repository {
@@ -1438,11 +1437,11 @@ impl ScannerTask {
         })?;
 
         // Count total entries for progress reporting
-        let total_entries = self.count_tree_entries(&tree)?;
+        let total_entries = Self::count_tree_entries(&tree)?;
         let mut extracted_count = 0;
 
         // Extract all files recursively
-        self.extract_tree_recursive(
+        Self::extract_tree_recursive(
             &tree,
             target_dir,
             "",
@@ -1455,7 +1454,7 @@ impl ScannerTask {
     }
 
     /// Count total entries in a Git tree recursively
-    fn count_tree_entries(&self, tree: &gix::Tree) -> ScanResult<usize> {
+    fn count_tree_entries(tree: &gix::Tree) -> ScanResult<usize> {
         let mut count = 0;
         for entry_result in tree.iter() {
             let entry = entry_result.map_err(|e| ScanError::Repository {
@@ -1473,7 +1472,7 @@ impl ScannerTask {
                     .map_err(|_| ScanError::Repository {
                         message: "Expected tree object".to_string(),
                     })?;
-                count += self.count_tree_entries(&subtree)?;
+                count += Self::count_tree_entries(&subtree)?;
             } else {
                 count += 1;
             }
@@ -1483,7 +1482,6 @@ impl ScannerTask {
 
     /// Recursively extract tree contents to directory
     fn extract_tree_recursive(
-        &self,
         tree: &gix::Tree,
         base_dir: &std::path::Path,
         relative_path: &str,
@@ -1529,7 +1527,7 @@ impl ScannerTask {
                         message: "Expected tree object".to_string(),
                     })?;
 
-                self.extract_tree_recursive(
+                Self::extract_tree_recursive(
                     &subtree,
                     base_dir,
                     &entry_path,
@@ -1589,12 +1587,12 @@ impl ScannerTask {
         );
 
         // Use gix to resolve the revision to a commit object
-        let parsed_ref =
-            self.repository()
-                .rev_parse(revision_str)
-                .map_err(|e| ScanError::Repository {
-                    message: format!("Failed to resolve revision '{}': {}", revision_str, e),
-                })?;
+        let repo = self.repository();
+        let parsed_ref = repo
+            .rev_parse(revision_str)
+            .map_err(|e| ScanError::Repository {
+                message: format!("Failed to resolve revision '{}': {}", revision_str, e),
+            })?;
 
         let commit_id = parsed_ref.single().ok_or_else(|| ScanError::Repository {
             message: format!(
@@ -1604,15 +1602,14 @@ impl ScannerTask {
         })?;
 
         // Verify the resolved object is actually a commit
-        let commit =
-            self.repository()
-                .find_commit(commit_id)
-                .map_err(|e| ScanError::Repository {
-                    message: format!(
-                        "Revision '{}' (SHA: {}) is not a valid commit: {}",
-                        revision_str, commit_id, e
-                    ),
-                })?;
+        let commit = repo
+            .find_commit(commit_id)
+            .map_err(|e| ScanError::Repository {
+                message: format!(
+                    "Revision '{}' (SHA: {}) is not a valid commit: {}",
+                    revision_str, commit_id, e
+                ),
+            })?;
 
         let commit_sha = commit.id().to_string();
 
