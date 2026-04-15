@@ -35,16 +35,19 @@ impl ScanRequires {
     pub const FILE_INFO: Self = Self((1 << 6) | Self::FILE_CHANGES.0);
 
     /// Create from raw bits
+    #[allow(dead_code)]
     pub const fn from_bits(bits: u64) -> Self {
         Self(bits)
     }
 
     /// Get raw bits
+    #[allow(dead_code)]
     pub const fn bits(&self) -> u64 {
         self.0
     }
 
     /// Check if no requirements are set
+    #[allow(dead_code)]
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
     }
@@ -65,6 +68,7 @@ impl ScanRequires {
     }
 
     /// Remove requirements
+    #[allow(dead_code)]
     pub const fn difference(&self, other: Self) -> Self {
         Self(self.0 & !other.0)
     }

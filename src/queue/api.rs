@@ -12,10 +12,11 @@ pub use crate::queue::manager::QueueManager;
 pub use crate::queue::publisher::QueuePublisher;
 
 // Message types and utilities
-pub use crate::queue::message::{Message, MessageHeader}; // re-export header for test helpers
-
-// Typed queue consumers for compile-time type safety
-pub use crate::queue::typed::{TypedQueueConsumer, TypedQueueManagerExt};
+pub use crate::queue::message::Message;
+#[allow(unused_imports)]
+pub use crate::queue::traits::GroupedMessage;
+#[allow(unused_imports)]
+pub use crate::queue::typed::TypedQueueConsumer;
 
 // Internal queue implementation (may be needed by some components)
 
@@ -24,14 +25,37 @@ pub use crate::queue::error::{QueueError, QueueResult};
 
 // Type definitions and statistics
 
-// Traits
-pub use crate::queue::traits::GroupedMessage;
-
 /// Global queue service instance
 static QUEUE_SERVICE: LazyLock<Arc<QueueManager>> = LazyLock::new(|| {
     log::trace!("Initializing queue service");
     Arc::new(QueueManager::new())
 });
+
+/// Stable queue facade for interacting with the global queue service.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct QueueService;
+
+/// Access the stable queue facade.
+pub fn queue_service() -> QueueService {
+    QueueService
+}
+
+impl QueueService {
+    /// Create a publisher on the global queue service.
+    pub fn create_publisher(self, producer_id: String) -> QueueResult<QueuePublisher> {
+        QUEUE_SERVICE.create_publisher(producer_id)
+    }
+
+    /// Create a consumer on the global queue service.
+    #[allow(dead_code)]
+    pub fn create_consumer(self, plugin_name: String) -> QueueResult<QueueConsumer> {
+        QUEUE_SERVICE.create_consumer(plugin_name)
+    }
+
+    pub(crate) fn manager(self) -> Arc<QueueManager> {
+        Arc::clone(&QUEUE_SERVICE)
+    }
+}
 
 /// Access queue service
 ///
@@ -49,6 +73,7 @@ static QUEUE_SERVICE: LazyLock<Arc<QueueManager>> = LazyLock::new(|| {
 /// # Ok(())
 /// # }
 /// ```
+#[allow(dead_code)]
 pub fn get_queue_service() -> Arc<QueueManager> {
-    Arc::clone(&QUEUE_SERVICE)
+    queue_service().manager()
 }

@@ -40,6 +40,7 @@
 ///     }
 /// }
 /// ```
+#[allow(dead_code)]
 pub trait GroupedMessage {
     /// Get the group identifier for this message
     ///

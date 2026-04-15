@@ -63,6 +63,7 @@ impl ScannerTask {
     }
 
     /// Subscribe to queue events to trigger scanning operations
+    #[allow(dead_code)]
     pub async fn subscribe_to_queue_events(&self) -> ScanResult<EventReceiver> {
         let mut notification_manager = self.notification_manager.lock().await;
 
@@ -81,6 +82,7 @@ impl ScannerTask {
     }
 
     /// Handle queue started events and trigger scanning operations
+    #[allow(dead_code)]
     pub async fn handle_queue_started_event(
         &self,
         mut receiver: EventReceiver,
@@ -110,6 +112,7 @@ impl ScannerTask {
     }
 
     /// Handle scanner shutdown via system events
+    #[allow(dead_code)]
     pub async fn handle_shutdown_event(&self, timeout: std::time::Duration) -> ScanResult<bool> {
         let mut notification_manager = self.notification_manager.lock().await;
 

@@ -1,8 +1,7 @@
 //! Unit tests for Subscriber trait and SubscriberStatistics
 
-use crate::notifications::api::{
-    Event, Subscriber, SubscriberStatistics, SystemEvent, SystemEventType,
-};
+use crate::notifications::api::{Event, SystemEvent, SystemEventType};
+use crate::notifications::traits::{Subscriber, SubscriberStatistics};
 use async_trait::async_trait;
 use std::time::Instant;
 

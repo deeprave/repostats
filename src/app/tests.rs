@@ -1,14 +1,13 @@
 //! Integration tests for application services
 
-use crate::notifications::api::get_notification_service;
-use crate::plugin::api::get_plugin_service;
-use crate::queue::api::get_queue_service;
+use crate::notifications::api::{get_notification_service, notification_service};
+use crate::plugin::api::{get_plugin_service, plugin_service};
+use crate::queue::api::{get_queue_service, queue_service};
 
 #[tokio::test]
 async fn test_service_initialization() {
     // Test that notification service is accessible
-    let notification_manager = get_notification_service().await;
-    let count = notification_manager.subscriber_count();
+    let count = notification_service().subscriber_count().await;
     // Don't assert specific count since tests may run in parallel and share state
     println!(
         "Service initialization test: current subscriber count: {}",
@@ -34,7 +33,7 @@ async fn test_concurrent_service_access() {
     let tasks: Vec<_> = (0..10)
         .map(|i| {
             task::spawn(async move {
-                let _notification_manager = get_notification_service().await;
+                let _ = notification_service().subscriber_count().await;
 
                 // Each task gets the notification manager
                 // Return the task ID to verify all completed
@@ -56,14 +55,11 @@ async fn test_concurrent_service_access() {
 
 #[tokio::test]
 async fn test_queue_manager_access() {
-    // Test that queue manager is accessible
-    let queue_manager = get_queue_service();
-
-    // Test that we can create publishers and consumers through the global service
-    let publisher = queue_manager
+    // Test that we can create publishers and consumers through the stable facade
+    let publisher = queue_service()
         .create_publisher("test-producer".to_string())
         .unwrap();
-    let consumer = queue_manager
+    let consumer = queue_service()
         .create_consumer("test-plugin".to_string())
         .unwrap();
 
@@ -71,7 +67,7 @@ async fn test_queue_manager_access() {
     assert_eq!(consumer.plugin_name(), "test-plugin");
 
     // Test multiple producer support
-    let publisher2 = queue_manager
+    let publisher2 = queue_service()
         .create_publisher("another-producer".to_string())
         .unwrap();
     assert_eq!(publisher2.producer_id(), "another-producer");
@@ -79,19 +75,25 @@ async fn test_queue_manager_access() {
 
 #[tokio::test]
 async fn test_plugin_manager_access() {
-    // Test that plugin manager is accessible
-    let plugin_manager = get_plugin_service().await;
-
-    // Test that plugin manager has the correct API version
     assert_eq!(
-        plugin_manager.api_version(),
+        plugin_service().api_version().await,
         crate::core::version::get_api_version()
     );
 
-    // Test that we can access the plugin registry through the manager
-    let registry = plugin_manager.registry();
-    let plugin_count = registry.plugin_count().await;
+    assert!(plugin_service().get_active_plugins().await.is_empty());
+}
 
-    // Initially should be empty
-    assert_eq!(plugin_count, 0);
+#[tokio::test]
+async fn test_facades_preserve_existing_global_services() {
+    let facade_subscriber_count = notification_service().subscriber_count().await;
+    let direct_subscriber_count = get_notification_service().await.subscriber_count();
+    assert_eq!(facade_subscriber_count, direct_subscriber_count);
+
+    let direct_plugin_api_version = get_plugin_service().await.api_version();
+    let facade_plugin_api_version = plugin_service().api_version().await;
+    assert_eq!(facade_plugin_api_version, direct_plugin_api_version);
+
+    let direct_queue = get_queue_service();
+    let facade_queue = queue_service().manager();
+    assert!(std::sync::Arc::ptr_eq(&direct_queue, &facade_queue));
 }

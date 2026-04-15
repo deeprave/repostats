@@ -176,11 +176,12 @@ pub async fn startup(
     }
 
     let timeout_duration = final_args.plugin_timeout_duration();
-    let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
-    if let Err(e) = plugin_manager.configure_plugin_timeout(timeout_duration) {
+    if let Err(e) = crate::plugin::api::plugin_service()
+        .configure_plugin_timeout(timeout_duration)
+        .await
+    {
         return Err(StartupError::PluginFailed { error: e });
     }
-    drop(plugin_manager);
 
     log::trace!("Started command discovery");
     let commands = discover_commands(&plugin_dirs, &args.plugin_exclusions)
@@ -193,8 +194,9 @@ pub async fn startup(
 
     if args.plugins {
         log::trace!("listing discovered plugins");
-        let plugin_manager = crate::plugin::api::get_plugin_service().await;
-        let plugins = plugin_manager.list_plugins_with_filter(false).await;
+        let plugins = crate::plugin::api::plugin_service()
+            .list_plugins_with_filter(false)
+            .await;
         if plugins.is_empty() {
             return Err(StartupError::ConfigurationError {
                 message: "No plugins available".to_string(),
@@ -262,19 +264,20 @@ async fn discover_commands(
 
     // Enhanced error context - use independent service access
     log::trace!("discover_commands getting plugin service independently");
-    let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
-    log::trace!("discover_commands acquired plugin manager lock successfully");
+    log::trace!("discover_commands acquired plugin service successfully");
 
     // Enhanced error handling with context
-    log::trace!("discover_commands calling plugin_manager.discover_plugins");
-    plugin_manager
+    log::trace!("discover_commands calling plugin_service.discover_plugins");
+    crate::plugin::api::plugin_service()
         .discover_plugins(plugin_dirs, exclusions)
         .await
         .inspect_err(|_| {
-            log::warn!("Plugin discovery failed during plugin_manager.discover_plugins()");
+            log::warn!("Plugin discovery failed during plugin_service.discover_plugins()");
         })?;
 
-    let plugins = plugin_manager.list_plugins_with_filter(false).await;
+    let plugins = crate::plugin::api::plugin_service()
+        .list_plugins_with_filter(false)
+        .await;
     log::trace!("discover_commands found {} plugins", plugins.len());
 
     // Validate that we found plugins
@@ -327,33 +330,35 @@ async fn configure_plugins(
         });
     }
 
-    let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
     if let Some(config) = toml_config {
-        if let Err(e) = plugin_manager.set_plugin_configs(config) {
+        if let Err(e) = crate::plugin::api::plugin_service()
+            .set_plugin_configs(config)
+            .await
+        {
             return Err(StartupError::PluginFailed { error: e });
         }
     }
 
     log::trace!("Activating plugins {:?}", command_segments);
-    plugin_manager
+    crate::plugin::api::plugin_service()
         .activate_plugins(command_segments, use_color)
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     log::trace!("Initialising active plugins");
-    plugin_manager
+    crate::plugin::api::plugin_service()
         .initialize_active_plugins()
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     log::trace!("Setup plugin notification subscribes");
-    plugin_manager
+    crate::plugin::api::plugin_service()
         .setup_plugin_notification_subscribers()
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
 
     log::trace!("Setup manager notification subscriber");
-    plugin_manager
+    crate::plugin::api::plugin_service()
         .setup_system_notification_subscriber()
         .await
         .map_err(|e| StartupError::PluginFailed { error: e })?;
@@ -565,8 +570,9 @@ async fn configure_scanner(
 
     // Step 2: Get plugin manager and check for active processing plugins
     let _plugin_names = {
-        let plugin_manager = crate::plugin::api::get_plugin_service().await;
-        let active_plugins = plugin_manager.get_active_plugins().await;
+        let active_plugins = crate::plugin::api::plugin_service()
+            .get_active_plugins()
+            .await;
 
         if active_plugins.is_empty() {
             log::error!("No active processing plugins found");

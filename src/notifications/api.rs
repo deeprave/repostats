@@ -17,14 +17,50 @@ pub use crate::notifications::event::{
 pub use crate::notifications::error::NotificationError;
 pub use crate::notifications::manager::{AsyncNotificationManager, EventReceiver};
 
-// Traits and statistics
-pub use crate::notifications::traits::{Subscriber, SubscriberStatistics};
-
 /// Global notification service instance
 static NOTIFICATION_SERVICE: LazyLock<Arc<Mutex<AsyncNotificationManager>>> = LazyLock::new(|| {
     log::trace!("Initializing notification service");
     Arc::new(Mutex::new(AsyncNotificationManager::new()))
 });
+
+/// Stable notification facade for interacting with the global event bus.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NotificationService;
+
+/// Access the stable notification facade.
+pub fn notification_service() -> NotificationService {
+    NotificationService
+}
+
+impl NotificationService {
+    /// Publish an event through the global notification bus.
+    pub async fn publish(self, event: Event) -> Result<(), NotificationError> {
+        let mut manager = NOTIFICATION_SERVICE.lock().await;
+        manager.publish(event).await
+    }
+
+    /// Subscribe to events from the global notification bus.
+    pub async fn subscribe(
+        self,
+        subscriber_id: String,
+        filter: EventFilter,
+        source: String,
+    ) -> Result<EventReceiver, Box<dyn std::error::Error>> {
+        let mut manager = NOTIFICATION_SERVICE.lock().await;
+        manager.subscribe(subscriber_id, filter, source)
+    }
+
+    /// Return the current number of event subscribers.
+    #[allow(dead_code)]
+    pub async fn subscriber_count(self) -> usize {
+        let manager = NOTIFICATION_SERVICE.lock().await;
+        manager.subscriber_count()
+    }
+
+    pub(crate) fn manager_arc(self) -> Arc<Mutex<AsyncNotificationManager>> {
+        NOTIFICATION_SERVICE.clone()
+    }
+}
 
 /// Access notification service
 ///
@@ -42,6 +78,7 @@ static NOTIFICATION_SERVICE: LazyLock<Arc<Mutex<AsyncNotificationManager>>> = La
 /// # Ok(())
 /// # }
 /// ```
+#[allow(dead_code)]
 pub async fn get_notification_service() -> tokio::sync::MutexGuard<'static, AsyncNotificationManager>
 {
     let guard = NOTIFICATION_SERVICE.lock().await;
@@ -54,5 +91,5 @@ pub async fn get_notification_service() -> tokio::sync::MutexGuard<'static, Asyn
 /// reference for dependency injection into their sub-components.
 pub(crate) fn get_notification_service_arc() -> Arc<Mutex<AsyncNotificationManager>> {
     log::trace!("Getting notification service Arc reference for internal component");
-    NOTIFICATION_SERVICE.clone()
+    notification_service().manager_arc()
 }

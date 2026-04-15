@@ -43,6 +43,7 @@ pub struct MultiConsumerQueue {
     max_size: usize,
 
     /// Queue identifier
+    #[allow(dead_code)]
     queue_id: String,
 }
 
@@ -59,11 +60,13 @@ impl MultiConsumerQueue {
     }
 
     /// Get the queue identifier
+    #[allow(dead_code)]
     pub fn queue_id(&self) -> &str {
         &self.queue_id
     }
 
     /// Get current queue size (number of messages)
+    #[allow(dead_code)]
     pub fn size(&self) -> QueueResult<usize> {
         let messages =
             handle_mutex_poison(self.messages.read(), |msg| QueueError::OperationFailed {
@@ -73,6 +76,7 @@ impl MultiConsumerQueue {
     }
 
     /// Get the current head sequence number (next message to be assigned)
+    #[allow(dead_code)]
     pub fn head_sequence(&self) -> QueueResult<u64> {
         let sequence = handle_mutex_poison(self.next_sequence.read(), |msg| {
             QueueError::OperationFailed {
@@ -83,6 +87,7 @@ impl MultiConsumerQueue {
     }
 
     /// Get the minimum sequence across all consumers (for garbage collection)
+    #[allow(dead_code)]
     pub fn min_consumer_sequence(&self) -> QueueResult<Option<u64>> {
         let positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
             QueueError::OperationFailed {
@@ -136,6 +141,7 @@ impl MultiConsumerQueue {
     }
 
     /// Get all registered consumer IDs
+    #[allow(dead_code)]
     pub fn consumer_ids(&self) -> QueueResult<Vec<u64>> {
         let positions = handle_mutex_poison(self.consumer_positions.read(), |msg| {
             QueueError::OperationFailed {
@@ -251,6 +257,7 @@ impl MultiConsumerQueue {
     }
 
     /// Check if consumer exists
+    #[allow(dead_code)]
     pub fn has_consumer(&self, consumer_id: u64) -> bool {
         handle_rwlock_read(self.consumer_positions.read(), |_| {
             QueueError::OperationFailed {
@@ -262,6 +269,7 @@ impl MultiConsumerQueue {
     }
 
     /// Get consumer position information
+    #[allow(dead_code)]
     pub fn consumer_position(&self, consumer_id: u64) -> Option<u64> {
         handle_rwlock_read(self.consumer_positions.read(), |_| {
             QueueError::OperationFailed {
@@ -276,6 +284,7 @@ impl MultiConsumerQueue {
     }
 
     /// Get consumer's last read timestamp
+    #[allow(dead_code)]
     pub fn consumer_last_read_time(
         &self,
         consumer_id: u64,
@@ -293,6 +302,7 @@ impl MultiConsumerQueue {
     /// Perform garbage collection based on consumer positions
     /// Removes messages that have been read by all consumers
     /// Returns the number of messages collected
+    #[allow(dead_code)]
     pub fn collect_garbage(&self) -> QueueResult<usize> {
         // Find the minimum sequence number across all consumers
         let min_sequence = match self.min_consumer_sequence()? {

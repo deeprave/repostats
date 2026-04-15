@@ -21,14 +21,15 @@ use std::sync::Arc;
 /// # Example
 /// ```rust,no_run
 /// # use repostats::scanner::api::ScanMessage;
-/// # use repostats::queue::api::{TypedQueueConsumer, QueueConsumer};
+/// # use repostats::queue::api::{QueueConsumer, TypedQueueConsumer};
 /// # fn example(base_consumer: QueueConsumer) -> Result<(), Box<dyn std::error::Error>> {
 /// let typed_consumer: TypedQueueConsumer<ScanMessage> =
 ///     TypedQueueConsumer::new(base_consumer);
 ///
 /// // Direct typed message reading - no manual deserialization needed!
-/// match typed_consumer.read()? {
-///     Some(scan_message) => {
+/// match typed_consumer.read_with_header()? {
+///     Some(typed_message) => {
+///         let scan_message = typed_message.content;
 ///         println!("Received scan message: {:?}", scan_message);
 ///     }
 ///     None => println!("No messages available"),
@@ -50,22 +51,6 @@ where
         Self {
             inner,
             _phantom: PhantomData,
-        }
-    }
-
-    /// Read a strongly-typed message from the queue
-    ///
-    /// Returns:
-    /// - `Ok(Some(T))` - Successfully read and deserialized a message
-    /// - `Ok(None)` - No messages available in the queue
-    /// - `Err(QueueError)` - Queue error or deserialization failure
-    pub fn read(&self) -> QueueResult<Option<T>> {
-        match self.inner.read()? {
-            Some(message) => {
-                let typed_message = self.deserialize_message(&message)?;
-                Ok(Some(typed_message))
-            }
-            None => Ok(None),
         }
     }
 
@@ -111,11 +96,6 @@ where
             }
         })
     }
-
-    /// Get access to the underlying consumer for advanced operations
-    pub fn inner(&self) -> &QueueConsumer {
-        &self.inner
-    }
 }
 
 /// A typed message containing both header metadata and strongly-typed content
@@ -125,63 +105,6 @@ pub struct TypedMessage<T> {
     pub header: MessageHeader,
     /// Strongly-typed message content
     pub content: T,
-}
-
-impl<T> TypedMessage<T> {
-    /// Get the message sequence number
-    pub fn sequence(&self) -> u64 {
-        self.header.sequence
-    }
-
-    /// Get the producer ID that sent this message
-    pub fn producer_id(&self) -> &str {
-        &self.header.producer_id
-    }
-
-    /// Get the message type string
-    pub fn message_type(&self) -> &str {
-        &self.header.message_type
-    }
-
-    /// Get the timestamp when the message was created
-    pub fn timestamp(&self) -> std::time::SystemTime {
-        self.header.timestamp
-    }
-}
-
-/// Extension trait for QueueManager to create typed consumers
-pub trait TypedQueueManagerExt {
-    /// Create a typed consumer for a specific message type
-    ///
-    /// # Type Parameters
-    /// * `T` - The message type to deserialize to
-    ///
-    /// # Arguments
-    /// * `consumer_id` - Unique identifier for this consumer
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use repostats::scanner::api::ScanMessage;
-    /// # use repostats::queue::api::{QueueManager, TypedQueueManagerExt};
-    /// # use std::sync::Arc;
-    /// # fn example(queue_manager: Arc<QueueManager>) -> Result<(), Box<dyn std::error::Error>> {
-    /// let scan_consumer = queue_manager.create_typed_consumer::<ScanMessage>("plugin-name".to_string())?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    fn create_typed_consumer<T>(&self, consumer_id: String) -> QueueResult<TypedQueueConsumer<T>>
-    where
-        T: DeserializeOwned;
-}
-
-impl TypedQueueManagerExt for std::sync::Arc<crate::queue::api::QueueManager> {
-    fn create_typed_consumer<T>(&self, consumer_id: String) -> QueueResult<TypedQueueConsumer<T>>
-    where
-        T: DeserializeOwned,
-    {
-        let base_consumer = self.create_consumer(consumer_id)?;
-        Ok(TypedQueueConsumer::new(base_consumer))
-    }
 }
 
 // Tests are located in src/queue/tests/typed.rs

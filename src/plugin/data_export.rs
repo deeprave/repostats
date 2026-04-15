@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Data export structures for plugin data interchange
 //!
 //! This module defines the data structures used for exchanging data between

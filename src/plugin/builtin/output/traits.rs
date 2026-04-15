@@ -46,6 +46,7 @@ impl ExportFormat {
         }
     }
 
+    #[allow(dead_code)]
     pub fn mimetype(&self) -> &'static str {
         match self {
             Self::Text => "text/plain",
@@ -86,6 +87,7 @@ impl ExportFormat {
     }
 
     /// Public iterator over all ExportFormat variants (stable API surface)
+    #[allow(dead_code)]
     pub fn formats() -> impl Iterator<Item = ExportFormat> {
         ExportFormat::iter()
     }
@@ -95,11 +97,13 @@ impl ExportFormat {
     }
 
     /// Get the default file extension for this format
+    #[allow(dead_code)]
     pub fn file_ext(&self) -> &'static str {
         self.name()
     }
 
     /// Get the common file extensions for this format
+    #[allow(dead_code)]
     pub fn file_exts(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.file_ext()).chain(self.aliases().iter().copied())
     }
@@ -117,6 +121,7 @@ impl ExportFormat {
         Self::Text
     }
 
+    #[allow(dead_code)]
     pub fn from_ext(ext: &str) -> Self {
         Self::from_str(ext)
     }

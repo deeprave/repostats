@@ -77,6 +77,7 @@ impl TemplateVars {
     }
 
     /// Create TemplateVars with optional values for all fields (None uses defaults)
+    #[allow(dead_code)]
     pub fn with_all_fields(
         commit_id: String,
         sha256: String,
@@ -171,6 +172,7 @@ impl TemplateVars {
     }
 
     /// Render with default template if none provided
+    #[allow(dead_code)]
     pub fn render_default(&self) -> CheckoutResult<String> {
         self.render(Self::DEFAULT_TEMPLATE)
     }
@@ -221,6 +223,7 @@ impl crate::core::error_handling::ContextualError for CheckoutError {
 
 impl CheckoutManager {
     /// Create a CheckoutManager with default settings
+    #[allow(dead_code)]
     pub async fn create() -> Self {
         Self::default()
     }
@@ -307,6 +310,7 @@ impl CheckoutManager {
     }
 
     /// Clean up a specific checkout directory
+    #[allow(dead_code)]
     pub fn cleanup_checkout(&mut self, checkout_id: &str) -> CheckoutResult<()> {
         if let Some(checkout_path) = self.active_checkouts.remove(checkout_id) {
             if !self.keep_files && checkout_path.exists() {
@@ -340,6 +344,7 @@ impl CheckoutManager {
     }
 
     /// Check if a checkout is active
+    #[allow(dead_code)]
     pub fn is_checkout_active(&self, checkout_id: &str) -> bool {
         self.active_checkouts.contains_key(checkout_id)
     }

@@ -9,9 +9,11 @@ pub enum QueueError {
     ConsumerNotFound { consumer_id: String },
 
     #[error("Producer not found: {producer_id}")]
+    #[allow(dead_code)]
     ProducerNotFound { producer_id: String },
 
     #[error("Sequence out of bounds: {sequence}")]
+    #[allow(dead_code)]
     SequenceOutOfBounds { sequence: u64 },
 
     #[error("Operation failed: {message}")]

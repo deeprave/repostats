@@ -12,7 +12,6 @@ use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::initialization::PluginInitializer;
 use crate::plugin::registry::SharedPluginRegistry;
 use crate::plugin::types::PluginInfo;
-use log;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,12 +24,15 @@ use toml::Table;
 #[derive(Clone, Debug)]
 pub struct PluginManagerConfig {
     /// Timeout for waiting for plugin completion events
+    #[allow(dead_code)]
     pub completion_event_timeout: Duration,
 
     /// Maximum time to wait for all plugins to complete during shutdown
+    #[allow(dead_code)]
     pub shutdown_timeout: Duration,
 
     /// Check interval for plugin completion status
+    #[allow(dead_code)]
     pub completion_check_interval: Duration,
 
     /// Maximum time to wait for plugin completion with keep-alive reset capability
@@ -50,6 +52,7 @@ impl Default for PluginManagerConfig {
 
 impl PluginManagerConfig {
     /// Create configuration with custom timeouts
+    #[allow(dead_code)]
     pub fn with_timeouts(
         completion_event_timeout: Duration,
         shutdown_timeout: Duration,
@@ -67,6 +70,7 @@ impl PluginManagerConfig {
     }
 
     /// Validate that plugin timeout meets minimum requirements (5 seconds)
+    #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if self.plugin_timeout < Duration::from_secs(5) {
             return Err("Plugin timeout must be at least 5 seconds".to_string());
@@ -99,10 +103,12 @@ pub struct PluginManager {
 
     /// Plugin coordination state for shutdown management
     /// Tracks whether plugins are in process of shutdown
+    #[allow(dead_code)]
     shutdown_requested: Arc<AtomicBool>,
 
     /// Plugin completion tracking
     /// Maps plugin name to completion status
+    #[allow(dead_code)]
     plugin_completion: Arc<RwLock<HashMap<String, bool>>>,
 
     /// Configuration for timeouts and thresholds
@@ -122,6 +128,7 @@ pub struct PluginManager {
 
 impl PluginManager {
     /// Error message for plugin event subscription not initialized
+    #[allow(dead_code)]
     const EVENT_SUBSCRIPTION_ERROR: &'static str =
         "Plugin event subscription not initialized. Call initialize() first.";
 
@@ -346,7 +353,7 @@ impl PluginManager {
         let active_segments = activator.process_segments(command_segments)?;
         let active_plugins = active_segments.keys().cloned().collect::<Vec<_>>();
         let plugin_configs = self.plugin_configs.clone();
-        let queue_manager = Arc::new(crate::queue::api::get_queue_service());
+        let queue_manager = crate::queue::api::queue_service().manager();
 
         {
             // Initialize all active plugins
@@ -447,16 +454,19 @@ impl PluginManager {
     ///
     /// Returns the TOML configuration table for the specified plugin,
     /// or None if no configuration was found.
+    #[allow(dead_code)]
     pub fn get_plugin_config(&self, plugin_name: &str) -> Option<&Table> {
         self.plugin_configs.get(plugin_name)
     }
 
     /// Check if a plugin has configuration
+    #[allow(dead_code)]
     pub fn has_plugin_config(&self, plugin_name: &str) -> bool {
         self.plugin_configs.contains_key(plugin_name)
     }
 
     /// Get all plugin configurations
+    #[allow(dead_code)]
     pub fn get_all_plugin_configs(&self) -> &HashMap<String, Table> {
         &self.plugin_configs
     }
@@ -472,10 +482,8 @@ impl PluginManager {
 
     /// Setup notification subscribers for active plugins during initialization
     pub async fn setup_plugin_notification_subscribers(&mut self) -> PluginResult<()> {
-        use crate::notifications::api::get_notification_service;
         use crate::notifications::api::EventFilter;
 
-        let mut notification_manager = get_notification_service().await;
         let active_plugin_names = self.get_active_plugins().await;
 
         for plugin_name in &active_plugin_names {
@@ -484,7 +492,10 @@ impl PluginManager {
 
             // Create notification subscriber for system, queue, and scan messages
             // Plugins need to see system events, queue events, and scan events
-            match notification_manager.subscribe(subscriber_id.clone(), EventFilter::All, source) {
+            match crate::notifications::api::notification_service()
+                .subscribe(subscriber_id.clone(), EventFilter::All, source)
+                .await
+            {
                 Ok(receiver) => {
                     // Store the receiver to keep the channel alive
                     self.notification_receivers.insert(subscriber_id, receiver);
@@ -527,15 +538,14 @@ impl PluginManager {
     /// - `Ok(())` if subscription and task spawn succeed
     /// - `Err(PluginError)` if notification service subscription fails
     async fn subscribe_to_system_events(&self) -> PluginResult<()> {
-        use crate::notifications::api::get_notification_service;
         use crate::notifications::api::{Event, EventFilter, SystemEventType};
-
-        let mut notification_manager = get_notification_service().await;
 
         let subscriber_id = "plugin-manager-system".to_string();
         let source = "PluginManager-System".to_string();
 
-        match notification_manager.subscribe(subscriber_id.clone(), EventFilter::SystemOnly, source)
+        match crate::notifications::api::notification_service()
+            .subscribe(subscriber_id.clone(), EventFilter::SystemOnly, source)
+            .await
         {
             Ok(mut receiver) => {
                 // Spawn a task to listen for system events for monitoring
@@ -565,12 +575,10 @@ impl PluginManager {
     }
 
     /// Notify all active plugins about system shutdown
+    #[allow(dead_code)]
     pub async fn notify_plugins_shutdown(&self) -> PluginResult<()> {
-        use crate::notifications::api::get_notification_service;
         use crate::notifications::api::PluginEvent;
         use crate::notifications::event::{Event, PluginEventType};
-
-        let mut notification_manager = get_notification_service().await;
 
         // Get list of all active plugins
         let registry = self.registry().inner().read().await;
@@ -591,7 +599,7 @@ impl PluginManager {
                 "System shutdown requested".to_string(),
             );
 
-            if let Err(e) = notification_manager
+            if let Err(e) = crate::notifications::api::notification_service()
                 .publish(Event::Plugin(plugin_event))
                 .await
             {
@@ -639,6 +647,7 @@ impl PluginManager {
     ///
     /// This implementation uses the pre-subscribed event receiver to eliminate race conditions.
     /// Supports keep-alive events to extend timeout for long-running operations.
+    #[allow(dead_code)]
     pub async fn await_all_plugins_completion(&self) -> PluginResult<()> {
         log::trace!("Starting await_all_plugins_completion");
 
@@ -840,6 +849,7 @@ impl PluginManager {
     /// This method is similar to await_all_plugins_completion() but also listens
     /// for shutdown signals and can be interrupted gracefully. This solves the
     /// signal handling integration issue during plugin completion wait.
+    #[allow(dead_code)]
     pub async fn await_all_plugins_completion_with_shutdown(
         &self,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
@@ -901,6 +911,7 @@ impl PluginManager {
     /// This method signals all active plugins to stop processing and waits
     /// for them to complete within the specified timeout. Returns a summary
     /// of which plugins completed vs timed out.
+    #[allow(dead_code)]
     pub async fn graceful_stop_all(
         &self,
         stop_timeout: Duration,
@@ -979,11 +990,13 @@ impl PluginManager {
     }
 
     /// Check if shutdown has been requested
+    #[allow(dead_code)]
     pub fn is_shutdown_requested(&self) -> bool {
         self.shutdown_requested.load(Ordering::Acquire)
     }
 
     /// Mark a plugin as completed (for use by plugins to signal completion)
+    #[allow(dead_code)]
     pub async fn mark_plugin_completed(&self, plugin_name: &str) {
         let mut completion = self.plugin_completion.write().await;
         completion.insert(plugin_name.to_string(), true);
@@ -991,6 +1004,7 @@ impl PluginManager {
 
     /// Remove all completed plugins from the tracking map
     /// This prevents memory leaks by cleaning up completed entries
+    #[allow(dead_code)]
     pub async fn cleanup_completed_plugins(&self) {
         let mut completion = self.plugin_completion.write().await;
         let initial_count = completion.len();
@@ -1017,6 +1031,7 @@ impl PluginManager {
 
     /// Get count of plugins currently being tracked for completion
     /// Useful for monitoring and debugging
+    #[allow(dead_code)]
     pub async fn get_pending_completion_count(&self) -> usize {
         let completion = self.plugin_completion.read().await;
         completion.len()
@@ -1025,6 +1040,7 @@ impl PluginManager {
 
 /// Summary of plugin stop operation results
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PluginStopSummary {
     /// Plugins that completed gracefully
     pub completed: Vec<String>,
@@ -1036,6 +1052,7 @@ pub struct PluginStopSummary {
 
 impl PluginStopSummary {
     /// Create an empty summary
+    #[allow(dead_code)]
     pub fn empty() -> Self {
         Self {
             completed: Vec::new(),
@@ -1045,11 +1062,13 @@ impl PluginStopSummary {
     }
 
     /// Check if all plugins completed successfully
+    #[allow(dead_code)]
     pub fn all_completed(&self) -> bool {
         self.timed_out.is_empty() && self.errors.is_empty()
     }
 
     /// Get total number of plugins that were stopped
+    #[allow(dead_code)]
     pub fn total_plugins(&self) -> usize {
         self.completed.len() + self.timed_out.len() + self.errors.len()
     }

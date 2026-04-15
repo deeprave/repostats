@@ -6,9 +6,11 @@ use repostats::app::cli::args::*;
 
 #[test]
 fn test_validate_single_repository_with_checkout_success() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.checkout_dir = Some("/tmp/checkout".to_string());
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        checkout_dir: Some("/tmp/checkout".to_string()),
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -19,11 +21,13 @@ fn test_validate_single_repository_with_checkout_success() {
 
 #[test]
 fn test_validate_multiple_repositories_without_checkout_success() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        ..Default::default()
+    };
     // No checkout flags set
 
     let result = args.validate();
@@ -35,12 +39,14 @@ fn test_validate_multiple_repositories_without_checkout_success() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_dir_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_dir = Some("/tmp/checkout".to_string());
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_dir: Some("/tmp/checkout".to_string()),
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -57,12 +63,14 @@ fn test_validate_multiple_repositories_with_checkout_dir_error() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_keep_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_keep = true;
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_keep: true,
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -73,12 +81,14 @@ fn test_validate_multiple_repositories_with_checkout_keep_error() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_force_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_force = true;
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_force: true,
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -89,12 +99,14 @@ fn test_validate_multiple_repositories_with_checkout_force_error() {
 
 #[test]
 fn test_validate_multiple_repositories_with_checkout_rev_error() {
-    let mut args = Args::default();
-    args.repository = vec![
-        "https://github.com/user/repo1.git".into(),
-        "https://github.com/user/repo2.git".into(),
-    ];
-    args.checkout_rev = Some("main".to_string());
+    let args = Args {
+        repository: vec![
+            "https://github.com/user/repo1.git".into(),
+            "https://github.com/user/repo2.git".into(),
+        ],
+        checkout_rev: Some("main".to_string()),
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -116,10 +128,11 @@ fn test_validate_empty_repository_list_success() {
 
 #[test]
 fn test_validate_checkout_flags_without_dir_error() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.checkout_keep = true;
-    // checkout_dir is None
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        checkout_keep: true,
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -132,9 +145,11 @@ fn test_validate_checkout_flags_without_dir_error() {
 
 #[test]
 fn test_validate_max_commits_zero_error() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.max_commits = Some(0);
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        max_commits: Some(0),
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(result.is_err(), "--max-commits 0 should fail validation");
@@ -144,9 +159,11 @@ fn test_validate_max_commits_zero_error() {
 
 #[test]
 fn test_validate_max_commits_positive_success() {
-    let mut args = Args::default();
-    args.repository = vec!["https://github.com/user/repo.git".into()];
-    args.max_commits = Some(100);
+    let args = Args {
+        repository: vec!["https://github.com/user/repo.git".into()],
+        max_commits: Some(100),
+        ..Default::default()
+    };
 
     let result = args.validate();
     assert!(
@@ -162,10 +179,10 @@ mod integration_tests {
     #[test]
     fn test_end_to_end_cli_validation_integration() {
         // Test that Args parsing + validation works together
-        let mut args = Args::default();
-
-        // Valid case: single repo, no checkout flags
-        args.repository = vec!["https://github.com/user/repo.git".into()];
+        let mut args = Args {
+            repository: vec!["https://github.com/user/repo.git".into()],
+            ..Default::default()
+        };
         assert!(args.validate().is_ok(), "Valid args should pass validation");
 
         // Invalid case: checkout flags with multiple repos (caught by validation)
@@ -192,18 +209,22 @@ mod integration_tests {
         // Note: Empty repository list is now valid (defaults to current directory)
 
         // Case 1: Checkout flags without checkout-dir
-        let mut args_incomplete = Args::default();
-        args_incomplete.repository = vec!["/repo".into()];
-        args_incomplete.checkout_keep = true; // Missing checkout_dir
+        let args_incomplete = Args {
+            repository: vec!["/repo".into()],
+            checkout_keep: true,
+            ..Default::default()
+        };
         assert!(
             args_incomplete.validate().is_err(),
             "Incomplete checkout config should fail"
         );
 
         // Case 2: Invalid max commits
-        let mut args_bad_commits = Args::default();
-        args_bad_commits.repository = vec!["/repo".into()];
-        args_bad_commits.max_commits = Some(0);
+        let args_bad_commits = Args {
+            repository: vec!["/repo".into()],
+            max_commits: Some(0),
+            ..Default::default()
+        };
         assert!(
             args_bad_commits.validate().is_err(),
             "Invalid max commits should fail"

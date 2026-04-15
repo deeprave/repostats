@@ -29,11 +29,13 @@ impl ShutdownCoordinator {
     }
 
     /// Subscribe to shutdown notifications
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<()> {
         self.shutdown_tx.subscribe()
     }
 
     /// Trigger shutdown
+    #[allow(dead_code)]
     pub fn trigger_shutdown(&self) {
         // Use Release ordering to synchronize-with all Acquire loads
         // This ensures that any thread checking is_shutdown_requested()
@@ -43,6 +45,7 @@ impl ShutdownCoordinator {
     }
 
     /// Check if shutdown has been requested
+    #[allow(dead_code)]
     pub fn is_shutdown_requested(&self) -> bool {
         // Use Acquire ordering to synchronize-with Release stores
         // This ensures we see the most up-to-date shutdown state
@@ -54,6 +57,7 @@ impl ShutdownCoordinator {
     /// This method automatically sets up signal handlers and coordinates
     /// shutdown for the provided closure, making it appear as if the
     /// closure is "guarded" by shutdown coordination.
+    #[allow(dead_code)]
     pub async fn guard<F, Fut, R, E>(future_fn: F) -> Result<R, E>
     where
         F: FnOnce(broadcast::Receiver<()>) -> Fut,

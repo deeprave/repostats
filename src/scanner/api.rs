@@ -10,13 +10,15 @@
 pub use crate::scanner::manager::ScannerManager;
 
 // Error handling
+#[allow(unused_imports)]
 pub use crate::scanner::error::{ScanError, ScanResult};
 
 // Scanner task functionality - exported for integration tests only
 // Note: Integration tests run as separate binaries, so #[cfg(test)] doesn't work
 // Hidden from public documentation as this is only intended for testing use
 #[doc(hidden)]
+#[allow(unused_imports)]
 pub use crate::scanner::task::ScannerTask;
 
 // Core data types and structures
-pub use crate::scanner::types::{ScanMessage, ScanRequires, ScanStats};
+pub use crate::scanner::types::{ScanMessage, ScanRequires};

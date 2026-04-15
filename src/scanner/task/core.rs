@@ -105,7 +105,7 @@ impl ScannerTask {
         repository_path: String,
         repository: gix::Repository,
     ) -> ScannerTaskBuilder {
-        let queue_service = crate::queue::api::get_queue_service();
+        let queue_service = crate::queue::api::queue_service();
         let test_publisher = queue_service
             .create_publisher(scanner_id.clone())
             .expect("Failed to create test queue publisher");
@@ -164,6 +164,7 @@ impl ScannerTaskBuilder {
 impl ScannerTask {
     /// Create a new ScannerTask with repository (for test compatibility)
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn new_with_repository(
         scanner_id: String,
         repository_path: String,
@@ -225,6 +226,7 @@ impl ScannerTask {
     }
 
     /// Check if this is a remote repository
+    #[allow(dead_code)]
     pub fn is_remote(&self) -> bool {
         self.is_remote
     }

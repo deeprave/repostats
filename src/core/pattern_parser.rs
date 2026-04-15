@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// File pattern matcher for include/exclude filtering
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FilePatternMatcher {
     include_patterns: Vec<Pattern>,
     exclude_patterns: Vec<Pattern>,
@@ -17,6 +18,7 @@ pub struct FilePatternMatcher {
 
 impl FilePatternMatcher {
     /// Create a new file pattern matcher from CLI arguments
+    #[allow(dead_code)]
     pub fn new(
         include_patterns: &[String],
         exclude_patterns: &[String],
@@ -53,6 +55,7 @@ impl FilePatternMatcher {
     /// Files matching any exclude pattern or extension are always excluded,
     /// even if they also match an include pattern or extension.
     /// This means exclusion takes precedence over inclusion.
+    #[allow(dead_code)]
     pub fn matches(&self, path: &Path) -> bool {
         // Check excluded patterns first
         for pattern in &self.exclude_patterns {
@@ -118,6 +121,7 @@ impl FilePatternMatcher {
     /// - `is_path_prefix_match("src2/main.rs", "src")` -> `false`
     /// - `is_path_prefix_match("src", "src")` -> `true`
     /// - `is_path_prefix_match("src/nested/file.rs", "src")` -> `true`
+    #[allow(dead_code)]
     fn is_path_prefix_match(path: &Path, prefix: &Path) -> bool {
         // Convert both paths to string representations for consistent comparison
         let path_str = path.to_string_lossy();
@@ -156,6 +160,7 @@ fn parse_patterns(pattern_strings: &[String]) -> Result<Vec<Pattern>, String> {
 }
 
 /// Parse a comma-separated list of extensions
+#[allow(dead_code)]
 pub fn parse_extensions(extensions_str: &str) -> Vec<String> {
     extensions_str
         .split(',')
