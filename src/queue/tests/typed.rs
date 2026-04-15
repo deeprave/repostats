@@ -5,7 +5,7 @@
 
 use crate::queue::api::{Message, QueueManager};
 use crate::queue::error::QueueError;
-use crate::queue::typed::TypedQueueManagerExt;
+use crate::queue::typed::TypedQueueConsumer;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -23,9 +23,11 @@ async fn test_typed_consumer_successful_deserialization() {
     let publisher = manager
         .create_publisher("test-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("test-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("test-consumer".to_string())
+            .unwrap(),
+    );
 
     // Test successful deserialization
     let test_message = TestMessage {
@@ -37,11 +39,11 @@ async fn test_typed_consumer_successful_deserialization() {
 
     publisher.publish(message).unwrap();
 
-    let received = typed_consumer.read().unwrap();
+    let received = typed_consumer.read_with_header().unwrap();
     assert!(received.is_some());
     let received_msg = received.unwrap();
-    assert_eq!(received_msg.content, "Hello World");
-    assert_eq!(received_msg.value, 42);
+    assert_eq!(received_msg.content.content, "Hello World");
+    assert_eq!(received_msg.content.value, 42);
 }
 
 #[tokio::test]
@@ -51,9 +53,11 @@ async fn test_typed_consumer_deserialization_error() {
     let publisher = manager
         .create_publisher("test-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("test-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("test-consumer".to_string())
+            .unwrap(),
+    );
 
     // Test invalid JSON
     let message = Message::new(
@@ -63,7 +67,7 @@ async fn test_typed_consumer_deserialization_error() {
     );
     publisher.publish(message).unwrap();
 
-    let result = typed_consumer.read();
+    let result = typed_consumer.read_with_header();
     assert!(result.is_err());
     match result.unwrap_err() {
         QueueError::DeserializationError { message } => {
@@ -81,9 +85,11 @@ async fn test_typed_consumer_with_header_metadata() {
     let publisher = manager
         .create_publisher("test-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("test-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("test-consumer".to_string())
+            .unwrap(),
+    );
 
     let test_message = TestMessage {
         content: "Test".to_string(),
@@ -104,20 +110,22 @@ async fn test_typed_consumer_with_header_metadata() {
     assert_eq!(received.content.value, 123);
 
     // Verify header metadata
-    assert_eq!(received.producer_id(), "test-producer");
-    assert_eq!(received.message_type(), "test_type");
-    assert!(received.sequence() > 0);
+    assert_eq!(received.header.producer_id, "test-producer");
+    assert_eq!(received.header.message_type, "test_type");
+    assert!(received.header.sequence > 0);
 }
 
 #[tokio::test]
 async fn test_typed_consumer_empty_queue() {
     let manager = Arc::new(QueueManager::new());
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("test-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("test-consumer".to_string())
+            .unwrap(),
+    );
 
     // Should return None for empty queue
-    let result = typed_consumer.read().unwrap();
+    let result = typed_consumer.read_with_header().unwrap();
     assert!(result.is_none());
 
     let result_with_header = typed_consumer.read_with_header().unwrap();
@@ -131,9 +139,11 @@ async fn test_typed_consumer_multiple_messages() {
     let publisher = manager
         .create_publisher("test-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("test-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("test-consumer".to_string())
+            .unwrap(),
+    );
 
     // Publish multiple messages
     for i in 0..3 {
@@ -148,15 +158,18 @@ async fn test_typed_consumer_multiple_messages() {
 
     // Read all messages in order
     for expected_i in 0..3 {
-        let received = typed_consumer.read().unwrap();
+        let received = typed_consumer.read_with_header().unwrap();
         assert!(received.is_some());
         let received_msg = received.unwrap();
-        assert_eq!(received_msg.content, format!("Message {}", expected_i));
-        assert_eq!(received_msg.value, expected_i);
+        assert_eq!(
+            received_msg.content.content,
+            format!("Message {}", expected_i)
+        );
+        assert_eq!(received_msg.content.value, expected_i);
     }
 
     // Queue should be empty now
-    let result = typed_consumer.read().unwrap();
+    let result = typed_consumer.read_with_header().unwrap();
     assert!(result.is_none());
 }
 
@@ -167,9 +180,11 @@ async fn test_enhanced_deserialization_error_context() {
     let publisher = manager
         .create_publisher("context-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("context-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("context-consumer".to_string())
+            .unwrap(),
+    );
 
     // Test with invalid JSON that's longer than 100 characters to test data preview truncation
     let long_invalid_json = format!("{{\"invalid\": \"{}\"}}", "x".repeat(150));
@@ -180,7 +195,7 @@ async fn test_enhanced_deserialization_error_context() {
     );
     publisher.publish(message).unwrap();
 
-    let result = typed_consumer.read();
+    let result = typed_consumer.read_with_header();
     assert!(result.is_err());
     match result.unwrap_err() {
         QueueError::DeserializationError { message } => {
@@ -212,9 +227,11 @@ async fn test_short_message_error_context() {
     let publisher = manager
         .create_publisher("short-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("short-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("short-consumer".to_string())
+            .unwrap(),
+    );
 
     // Test with short invalid JSON (no truncation expected)
     let short_invalid_json = "invalid";
@@ -225,7 +242,7 @@ async fn test_short_message_error_context() {
     );
     publisher.publish(message).unwrap();
 
-    let result = typed_consumer.read();
+    let result = typed_consumer.read_with_header();
     assert!(result.is_err());
     match result.unwrap_err() {
         QueueError::DeserializationError { message } => {
@@ -248,27 +265,17 @@ async fn test_short_message_error_context() {
 }
 
 #[tokio::test]
-async fn test_typed_consumer_inner_access() {
-    let manager = Arc::new(QueueManager::new());
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("test-consumer".to_string())
-        .unwrap();
-
-    // Should provide access to underlying consumer
-    let inner = typed_consumer.inner();
-    assert_eq!(inner.plugin_name(), "test-consumer");
-}
-
-#[tokio::test]
 async fn test_typed_message_metadata_methods() {
     let manager = Arc::new(QueueManager::new());
 
     let publisher = manager
         .create_publisher("metadata-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("metadata-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("metadata-consumer".to_string())
+            .unwrap(),
+    );
 
     let test_message = TestMessage {
         content: "Metadata Test".to_string(),
@@ -285,9 +292,9 @@ async fn test_typed_message_metadata_methods() {
     let typed_msg = typed_consumer.read_with_header().unwrap().unwrap();
 
     // Test all metadata methods
-    assert!(typed_msg.sequence() > 0);
-    assert_eq!(typed_msg.producer_id(), "metadata-producer");
-    assert_eq!(typed_msg.message_type(), "metadata_type");
+    assert!(typed_msg.header.sequence > 0);
+    assert_eq!(typed_msg.header.producer_id, "metadata-producer");
+    assert_eq!(typed_msg.header.message_type, "metadata_type");
 }
 
 #[tokio::test]
@@ -297,9 +304,11 @@ async fn test_typed_consumer_mixed_message_types() {
     let publisher = manager
         .create_publisher("mixed-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("mixed-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("mixed-consumer".to_string())
+            .unwrap(),
+    );
 
     // Publish a valid TestMessage
     let valid_message = TestMessage {
@@ -320,12 +329,12 @@ async fn test_typed_consumer_mixed_message_types() {
     publisher.publish(invalid_msg).unwrap();
 
     // First message should deserialize successfully
-    let first = typed_consumer.read().unwrap().unwrap();
-    assert_eq!(first.content, "Valid");
-    assert_eq!(first.value, 100);
+    let first = typed_consumer.read_with_header().unwrap().unwrap();
+    assert_eq!(first.content.content, "Valid");
+    assert_eq!(first.content.value, 100);
 
     // Second message should fail deserialization
-    let second = typed_consumer.read();
+    let second = typed_consumer.read_with_header();
     assert!(second.is_err());
     match second.unwrap_err() {
         QueueError::DeserializationError { message } => {
@@ -342,9 +351,11 @@ async fn test_binary_data_error_context() {
     let publisher = manager
         .create_publisher("binary-producer".to_string())
         .unwrap();
-    let typed_consumer = manager
-        .create_typed_consumer::<TestMessage>("binary-consumer".to_string())
-        .unwrap();
+    let typed_consumer = TypedQueueConsumer::<TestMessage>::new(
+        manager
+            .create_consumer("binary-consumer".to_string())
+            .unwrap(),
+    );
 
     // Create binary data with invalid UTF-8 sequences
     let mut binary_data = b"valid start ".to_vec();
@@ -362,7 +373,7 @@ async fn test_binary_data_error_context() {
     );
     publisher.publish(message).unwrap();
 
-    let result = typed_consumer.read();
+    let result = typed_consumer.read_with_header();
     assert!(result.is_err());
     match result.unwrap_err() {
         QueueError::DeserializationError { message } => {

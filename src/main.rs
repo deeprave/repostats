@@ -1,6 +1,6 @@
 use crate::app::event_controller::EventController;
 use crate::core::error_handling::log_error_with_context;
-use crate::notifications::api::{Event, SystemEvent, SystemEventType};
+use crate::notifications::api::{notification_service, Event, SystemEvent, SystemEventType};
 use crate::scanner::api::ScanError;
 
 mod app;
@@ -86,8 +86,7 @@ async fn run_scanner_simple(
 ) -> Result<(), ScanError> {
     // Initialize plugin manager
     {
-        let mut plugin_manager = crate::plugin::api::get_plugin_service().await;
-        if let Err(e) = plugin_manager.initialize().await {
+        if let Err(e) = crate::plugin::api::plugin_service().initialize().await {
             log::error!("Failed to initialize plugin manager: {}", e);
             std::process::exit(1);
         }
@@ -111,24 +110,21 @@ async fn run_scanner_simple(
 }
 
 async fn system_start(pid: u32) -> Result<(), NotificationError> {
-    // Get notification manager and process ID once
-    let mut notification_manager = crate::notifications::api::get_notification_service().await;
-
     // Publish system startup event
     let startup_event = Event::System(SystemEvent::with_message(
         SystemEventType::Startup,
         format!("System started, pid={pid}"),
     ));
-    notification_manager.publish(startup_event).await
+    notification_service().publish(startup_event).await
 }
 
+#[allow(dead_code)]
 async fn system_stop(pid: u32) -> Result<(), NotificationError> {
-    let mut notification_manager = crate::notifications::api::get_notification_service().await;
     let shutdown_event = Event::System(SystemEvent::with_message(
         SystemEventType::Shutdown,
         format!("System shutting down, pid={pid}"),
     ));
-    notification_manager.publish(shutdown_event).await
+    notification_service().publish(shutdown_event).await
 }
 
 /// Start the actual repository scanner with the configured scanner manager
@@ -152,8 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_main_is_async() {
-        // Test that main function is now async
-        assert!(true, "Main function is now async");
+        let _ = start_scanner(scanner::api::ScannerManager::create().await).await;
     }
 
     #[tokio::test]

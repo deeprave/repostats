@@ -145,6 +145,7 @@ impl ScannerTask {
         }
     }
     /// Extract repository metadata from the git repository
+    #[allow(dead_code)]
     pub async fn extract_repository_data(
         &self,
         query_params: Option<&QueryParams>,
@@ -522,6 +523,7 @@ impl ScannerTask {
     }
 
     /// Resolve start point (commit SHA, branch name, tag name) to full commit SHA
+    #[allow(dead_code)]
     pub async fn resolve_start_point(&self, start_point: &str) -> ScanResult<String> {
         let repository_path = self.repository_path().to_string();
         let start_point = start_point.to_string();
@@ -554,6 +556,7 @@ impl ScannerTask {
     ///
     /// This function reconstructs the file content as it existed at the specified commit,
     /// using Git's object database rather than the working directory.
+    #[allow(dead_code)]
     pub async fn read_current_file_content(
         &self,
         file_path: &str,
@@ -1578,6 +1581,7 @@ impl ScannerTask {
 
     /// Resolve a revision (branch, tag, or commit SHA) to a commit SHA
     /// Moved from CheckoutManager to maintain SRP - Git operations belong in ScannerTask
+    #[allow(dead_code)]
     pub async fn resolve_revision(&self, revision: Option<&str>) -> ScanResult<String> {
         let revision_str = revision.unwrap_or("HEAD");
 

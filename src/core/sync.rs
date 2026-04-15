@@ -57,6 +57,7 @@ pub fn handle_mutex_poison<T, E>(
 ///
 /// # Returns
 /// The RwLock read guard on success, or an application error on poison/failure
+#[allow(dead_code)]
 pub fn handle_rwlock_read<T, E>(
     result: LockResult<RwLockReadGuard<T>>,
     error_constructor: impl FnOnce(String) -> E,
@@ -82,6 +83,7 @@ pub fn handle_rwlock_read<T, E>(
 ///
 /// # Returns
 /// The RwLock write guard on success, or an application error on poison/failure
+#[allow(dead_code)]
 pub fn handle_rwlock_write<T, E>(
     result: LockResult<RwLockWriteGuard<T>>,
     error_constructor: impl FnOnce(String) -> E,

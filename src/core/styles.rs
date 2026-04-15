@@ -36,6 +36,7 @@ use colored::Color; // for clap help mapping
 macro_rules! style {
     ( $( $variant:ident => $color:expr ),+ $(,)? ) => {
         #[derive(Copy, Clone, Debug)]
+        #[allow(dead_code)]
         pub enum StyleRole { $( $variant ),+ }
 
         impl StyleRole {

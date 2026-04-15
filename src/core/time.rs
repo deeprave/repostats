@@ -40,6 +40,7 @@ pub struct MockTimeProvider {
 
 #[cfg(test)]
 impl MockTimeProvider {
+    #[allow(dead_code)]
     pub fn new_with_time(instant: Instant, system_time: SystemTime) -> Self {
         Self {
             current_instant: Arc::new(Mutex::new(instant)),

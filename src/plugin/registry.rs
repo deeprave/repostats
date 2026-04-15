@@ -56,6 +56,7 @@ impl PluginRegistry {
     }
 
     /// Remove a plugin from the registry
+    #[allow(dead_code)]
     pub fn deregister_plugin(&mut self, name: &str) -> PluginResult<()> {
         if self.active_plugins.contains(name) {
             self.active_plugins.remove(name);
@@ -92,6 +93,7 @@ impl PluginRegistry {
     }
 
     /// Deactivate a plugin (mark it as inactive)
+    #[allow(dead_code)]
     pub fn deactivate_plugin(&mut self, name: &str) -> PluginResult<()> {
         if !self.has_plugin(name) {
             Err(PluginError::PluginNotFound {
@@ -137,17 +139,20 @@ impl PluginRegistry {
     }
 
     /// Check if a plugin is currently active
+    #[allow(dead_code)]
     pub fn is_plugin_active(&self, name: &str) -> bool {
         self.active_plugins.contains(name)
     }
 
     /// Clear all active plugins
+    #[allow(dead_code)]
     pub fn clear_active_plugins(&mut self) {
         self.active_plugins.clear();
     }
 
     /// Get the plugin type for a registered plugin
     /// Helper method for uniqueness constraint enforcement
+    #[allow(dead_code)]
     pub fn get_plugin_type(&self, name: &str) -> PluginResult<PluginType> {
         if let Some(plugin) = self.plugins.get(name) {
             Ok(plugin.plugin_info().plugin_type)
@@ -159,11 +164,13 @@ impl PluginRegistry {
     }
 
     /// Get total count of registered plugins
+    #[allow(dead_code)]
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
     }
 
     /// Clear all plugins from registry
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.plugins.clear();
         self.active_plugins.clear();
@@ -171,6 +178,7 @@ impl PluginRegistry {
     }
 
     /// Execute a plugin with execution token pattern to prevent concurrent execution
+    #[allow(dead_code)]
     pub async fn execute_plugin(&mut self, name: &str) -> PluginResult<()> {
         // Check if already executing
         if self.executing.contains(name) {
@@ -201,6 +209,7 @@ impl PluginRegistry {
     }
 
     /// Check if a plugin is currently executing
+    #[allow(dead_code)]
     pub fn is_plugin_executing(&self, name: &str) -> bool {
         self.executing.contains(name)
     }
@@ -240,30 +249,35 @@ impl SharedPluginRegistry {
     }
 
     /// Convenience method to check if plugin exists
+    #[allow(dead_code)]
     pub async fn has_plugin(&self, name: &str) -> bool {
         let registry = self.inner.read().await;
         registry.has_plugin(name)
     }
 
     /// Convenience method to get plugin names
+    #[allow(dead_code)]
     pub async fn get_plugin_names(&self) -> Vec<String> {
         let registry = self.inner.read().await;
         registry.get_plugin_names()
     }
 
     /// Convenience method to get plugin count
+    #[allow(dead_code)]
     pub async fn plugin_count(&self) -> usize {
         let registry = self.inner.read().await;
         registry.plugin_count()
     }
 
     /// Convenience method to get active plugin names
+    #[allow(dead_code)]
     pub async fn get_active_plugins(&self) -> Vec<String> {
         let registry = self.inner.read().await;
         registry.get_active_plugins()
     }
 
     /// Convenience method to activate a plugin
+    #[allow(dead_code)]
     pub async fn activate_plugin(&self, name: &str) -> PluginResult<()> {
         log::trace!("SharedPluginRegistry: activating plugin '{}'", name);
         let mut registry = self.inner.write().await;
@@ -271,6 +285,7 @@ impl SharedPluginRegistry {
     }
 
     /// Convenience method to deactivate a plugin
+    #[allow(dead_code)]
     async fn deactivate_plugin(&self, name: &str) -> PluginResult<()> {
         log::trace!("SharedPluginRegistry: deactivating plugin '{}'", name);
         let mut registry = self.inner.write().await;
@@ -299,8 +314,7 @@ impl SharedPluginRegistry {
             "Plugin deregistered".to_string(),
         );
 
-        let mut manager = crate::notifications::api::get_notification_service().await;
-        if let Err(e) = manager
+        if let Err(e) = crate::notifications::api::notification_service()
             .publish(crate::notifications::event::Event::Plugin(event))
             .await
         {
@@ -317,6 +331,7 @@ impl SharedPluginRegistry {
     }
 
     /// Deactivate a plugin and publish Unregistered event
+    #[allow(dead_code)]
     pub async fn deregister_plugin_with_notification(&self, name: &str) -> PluginResult<()> {
         log::trace!(
             "SharedPluginRegistry: deactivating plugin '{}' with notification",
@@ -333,8 +348,7 @@ impl SharedPluginRegistry {
             "Plugin completed and deregistered".to_string(),
         );
 
-        let mut manager = crate::notifications::api::get_notification_service().await;
-        if let Err(e) = manager
+        if let Err(e) = crate::notifications::api::notification_service()
             .publish(crate::notifications::event::Event::Plugin(event))
             .await
         {
@@ -351,12 +365,14 @@ impl SharedPluginRegistry {
     }
 
     /// Convenience method to check if plugin is active
+    #[allow(dead_code)]
     pub async fn is_plugin_active(&self, name: &str) -> bool {
         let registry = self.inner.read().await;
         registry.is_plugin_active(name)
     }
 
     /// Convenience method to clear all active plugins
+    #[allow(dead_code)]
     pub async fn clear_active_plugins(&self) {
         let mut registry = self.inner.write().await;
         registry.clear_active_plugins();
@@ -402,6 +418,7 @@ impl SharedPluginRegistry {
     }
 
     /// Check if a plugin is currently executing
+    #[allow(dead_code)]
     pub async fn is_plugin_executing(&self, name: &str) -> bool {
         let registry = self.inner.read().await;
         registry.is_plugin_executing(name)

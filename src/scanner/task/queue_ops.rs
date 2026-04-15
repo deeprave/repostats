@@ -5,7 +5,6 @@
 use crate::queue::api::{Message, QueuePublisher};
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::types::ScanMessage;
-use serde_json;
 
 use super::core::ScannerTask;
 
@@ -50,6 +49,7 @@ impl ScannerTask {
     }
 
     /// Publish scan messages to the queue with streaming and backpressure control
+    #[allow(dead_code)]
     pub async fn publish_messages(&self, messages: Vec<ScanMessage>) -> ScanResult<()> {
         if messages.is_empty() {
             return Ok(());

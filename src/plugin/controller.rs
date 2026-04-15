@@ -5,10 +5,10 @@
 
 use crate::core::controller::{Controller, SystemError, SystemResult};
 use crate::notifications::api::{
-    get_notification_service, Event, EventFilter, EventReceiver, PluginEventType, SystemEvent,
+    notification_service, Event, EventFilter, EventReceiver, PluginEventType, SystemEvent,
     SystemEventType,
 };
-use crate::plugin::api::get_plugin_service;
+use crate::plugin::api::plugin_service;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use tokio::sync::broadcast;
@@ -30,13 +30,13 @@ impl PluginController {
 
     /// Create a new PluginController with custom timeout
     pub async fn with_timeout(plugin_timeout: Duration) -> SystemResult<Self> {
-        let mut notification_service = get_notification_service().await;
-        let plugin_event_receiver = notification_service
+        let plugin_event_receiver = notification_service()
             .subscribe(
                 "plugin-controller-completion".to_string(),
                 EventFilter::PluginOnly,
                 "PluginController".to_string(),
             )
+            .await
             .map_err(|e| SystemError::EventPublishFailed {
                 event_type: format!("Failed to subscribe to plugin events - {}", e),
             })?;
@@ -55,10 +55,9 @@ impl Drop for PluginController {
 impl Controller for PluginController {
     async fn graceful_system_stop(&mut self) -> SystemResult<()> {
         // Publish SystemEvent::ForceShutdown to trigger plugin shutdown
-        let mut notification_service = get_notification_service().await;
         let force_shutdown_event = Event::System(SystemEvent::new(SystemEventType::ForceShutdown));
 
-        notification_service
+        notification_service()
             .publish(force_shutdown_event)
             .await
             .map_err(|e| SystemError::EventPublishFailed {
@@ -73,12 +72,7 @@ impl Controller for PluginController {
         &mut self,
         mut shutdown_rx: broadcast::Receiver<()>,
     ) -> SystemResult<()> {
-        let active_plugins = {
-            let plugin_manager = get_plugin_service().await;
-            let active_list = plugin_manager.get_active_plugins().await;
-            drop(plugin_manager); // Release lock immediately
-            active_list
-        };
+        let active_plugins = plugin_service().get_active_plugins().await;
 
         log::trace!(
             "PluginController tracking {} active plugins for completion",

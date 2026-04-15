@@ -41,5 +41,6 @@ pub struct PluginInfo {
 pub enum PluginType {
     Processing,
     Output,
+    #[allow(dead_code)]
     Notification,
 }

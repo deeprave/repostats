@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Build metadata and API version accessors shared across app and plugins.
 //! This includes the generated version.rs from the build script into a core module,
 //! providing a single source of truth.

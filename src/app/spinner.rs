@@ -32,8 +32,9 @@ pub async fn should_show_spinner() -> bool {
     }
 
     // Check if any plugin suppresses progress display
-    let plugin_manager = crate::plugin::api::get_plugin_service().await;
-    let suppresses_progress = plugin_manager.should_suppress_progress().await;
+    let suppresses_progress = crate::plugin::api::plugin_service()
+        .should_suppress_progress()
+        .await;
 
     // Show spinner only if terminal conditions are met AND no plugin suppresses progress
     !suppresses_progress
@@ -73,17 +74,16 @@ impl ProgressSpinner {
 /// Run the spinner task
 pub async fn run_spinner(mut shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Result<()> {
     // Subscribe to events
-    let mut notification_manager = crate::notifications::api::get_notification_service().await;
-    let mut event_receiver = notification_manager
+    let mut event_receiver = crate::notifications::api::notification_service()
         .subscribe(
             "progress-spinner".to_string(),
             EventFilter::All, // Will filter manually for ScanEvent::Started/Progress and SystemEvent::Shutdown
             "main-spinner".to_string(),
         )
+        .await
         .map_err(|e| SpinnerError::SubscribeFailed {
             reason: e.to_string(),
         })?;
-    drop(notification_manager);
 
     let mut spinner = ProgressSpinner::new();
     let mut update_interval = interval(Duration::from_millis(100)); // 10Hz

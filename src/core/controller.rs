@@ -14,6 +14,7 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone)]
 pub struct ControllerConfig {
     pub completion_timeout: Duration,
+    #[allow(dead_code)]
     pub shutdown_timeout: Duration,
 }
 

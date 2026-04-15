@@ -31,9 +31,7 @@ pub async fn publish_plugin_event(
     scan_id: &str,
     message: &str,
 ) -> PluginResult<()> {
-    use crate::notifications::api::get_notification_service;
-
-    let mut notification_manager = get_notification_service().await;
+    use crate::notifications::api::notification_service;
 
     let event = Event::Plugin(PluginEvent::with_message(
         event_type.clone(),
@@ -42,7 +40,7 @@ pub async fn publish_plugin_event(
         message.to_string(),
     ));
 
-    notification_manager
+    notification_service()
         .publish(event)
         .await
         .map_err(|e| PluginError::LoadError {

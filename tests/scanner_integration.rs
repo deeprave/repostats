@@ -14,7 +14,7 @@ async fn test_scanner_manager_creation() {
 
     // Should successfully create a ScannerManager
     // (Testing that creation succeeds - no internal state assertions needed)
-    assert!(manager.as_ref() as *const _ != std::ptr::null());
+    assert!(std::sync::Arc::strong_count(&manager) >= 1);
 }
 
 #[tokio::test]

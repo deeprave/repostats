@@ -10,7 +10,6 @@ use crate::notifications::api::{
 use crate::plugin::builtin::output::manager::OutputPipeline;
 use crate::plugin::data_export::PluginDataExport;
 use crate::plugin::error::PluginResult;
-use crate::plugin::registry::SharedPluginRegistry;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -29,8 +28,6 @@ pub struct OutputEventHandler {
     notification_manager: Arc<Mutex<AsyncNotificationManager>>,
     /// Cached, stateful output pipeline for render/write operations.
     output_pipeline: Arc<Mutex<OutputPipeline>>,
-    /// Plugin registry for checking active plugins (lazy-loaded to avoid deadlock)
-    plugin_registry: Option<SharedPluginRegistry>,
     /// Received data exports indexed by (plugin_id, scan_id)
     received_data: ReceivedDataMap,
     /// Flag indicating if we're currently processing/exporting data
@@ -56,23 +53,12 @@ impl OutputEventHandler {
             plugin_name,
             notification_manager,
             output_pipeline,
-            plugin_registry: None,
             received_data,
             is_processing_data: Arc::new(AtomicBool::new(false)),
             worker_handle: None,
             shutdown_sender,
             shutdown_sent: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    /// Get plugin registry, lazy-loading on first access to avoid deadlock
-    async fn get_registry(&mut self) -> &SharedPluginRegistry {
-        if self.plugin_registry.is_none() {
-            log::debug!("Lazy-loading plugin registry for OutputEventHandler");
-            let plugin_manager = crate::plugin::api::get_plugin_service().await;
-            self.plugin_registry = Some(plugin_manager.registry().clone());
-        }
-        self.plugin_registry.as_ref().unwrap()
     }
 
     /// Run the main event loop - this will be called in a spawned task
@@ -227,8 +213,9 @@ impl OutputEventHandler {
                 log::debug!("Plugin {} unregistered", event.plugin_id);
 
                 // Check if all other plugins have unregistered
-                let registry = self.get_registry().await;
-                let active_plugins = registry.get_active_plugins().await;
+                let active_plugins = crate::plugin::api::plugin_service()
+                    .get_active_plugins()
+                    .await;
                 let other_active_plugins: Vec<_> = active_plugins
                     .iter()
                     .filter(|name| *name != &self.plugin_name)

@@ -1,5 +1,6 @@
 use unicode_segmentation::UnicodeSegmentation;
 
+#[allow(dead_code)]
 pub fn title_case(s: &str) -> String {
     s.split_word_bounds()
         .map(|w| {

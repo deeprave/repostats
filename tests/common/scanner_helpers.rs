@@ -12,6 +12,7 @@ use repostats::scanner::api::{ScanMessage, ScanResult, ScannerTask};
 /// in many test cases, making tests more maintainable and consistent.
 ///
 /// Uses Rc<RefCell<>> for efficient single-threaded test execution.
+#[allow(dead_code)]
 pub async fn collect_scan_messages(
     scanner_task: &ScannerTask,
     query_params: Option<&QueryParams>,
@@ -33,11 +34,13 @@ pub async fn collect_scan_messages(
 }
 
 /// Alias for collect_scan_messages for backward compatibility
+#[allow(dead_code)]
 pub async fn scan_and_capture_messages(scanner_task: &ScannerTask) -> ScanResult<Vec<ScanMessage>> {
     collect_scan_messages(scanner_task, None).await
 }
 
 /// Test helper to count commit data messages without collecting all messages
+#[allow(dead_code)]
 pub async fn count_commit_messages(
     scanner_task: &ScannerTask,
     query_params: Option<&QueryParams>,

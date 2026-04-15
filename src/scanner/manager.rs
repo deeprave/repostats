@@ -10,7 +10,6 @@ use crate::notifications::api::AsyncNotificationManager;
 use crate::scanner::checkout::manager::CheckoutManager;
 use crate::scanner::error::{ScanError, ScanResult};
 use crate::scanner::task::ScannerTask;
-use log;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -476,8 +475,9 @@ impl ScannerManager {
         };
 
         // Query all active plugins for their requirements
-        let plugin_manager = crate::plugin::api::get_plugin_service().await;
-        let requirements = plugin_manager.get_combined_requirements().await;
+        let requirements = crate::plugin::api::plugin_service()
+            .combined_requirements()
+            .await;
 
         // Check if checkout is needed BEFORE creating scanner task
         let needs_checkout = checkout_settings.is_some() || requirements.requires_file_content();
@@ -545,7 +545,7 @@ impl ScannerManager {
         let queue_publisher =
             retry_async("create_queue_publisher", Self::QUEUE_RETRY_POLICY, || {
                 let scanner_id = scanner_id.clone();
-                async move { crate::queue::api::get_queue_service().create_publisher(scanner_id) }
+                async move { crate::queue::api::queue_service().create_publisher(scanner_id) }
             })
             .await
             .map_err(|e| {
