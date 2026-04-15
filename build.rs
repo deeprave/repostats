@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::Path;
 
 fn main() {
-    const DEFAULT_VERSION: &str = "0.99.0";
+    const DEFAULT_VERSION: &str = "unknown";
     // Re-run if the build script itself changes
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
@@ -34,44 +34,36 @@ fn main() {
     // Read the plugin API version from Cargo.toml metadata
     let cargo_toml_content = std::fs::read_to_string(&cargo_toml_path).unwrap();
 
-    let program_authors: Vec<String> = match cargo_toml_content.parse::<toml::Table>() {
-        Ok(cargo_toml) => cargo_toml
-            .get("package")
-            .and_then(|p| p.as_table())
-            .and_then(|p| p.get("authors"))
-            .and_then(|a| a.as_array())
-            .map(|authors_array| {
-                authors_array
-                    .iter()
-                    .filter_map(|author| author.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_else(Vec::new),
-        Err(_) => Vec::new(),
-    };
+    let cargo_toml = cargo_toml_content.parse::<toml::Table>().ok();
+    let package = cargo_toml
+        .as_ref()
+        .and_then(|cargo_toml| cargo_toml.get("package"))
+        .and_then(|package| package.as_table());
 
-    let program_version = match cargo_toml_content.parse::<toml::Table>() {
-        Ok(cargo_toml) => cargo_toml
-            .get("package")
-            .and_then(|p| p.as_table())
-            .and_then(|p| p.get("version"))
-            .and_then(|v| v.as_str())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| DEFAULT_VERSION.to_string()),
-        Err(_) => DEFAULT_VERSION.to_string(),
-    };
-    let plugin_api_version = match cargo_toml_content.parse::<toml::Table>() {
-        Ok(cargo_toml) => cargo_toml
-            .get("package")
-            .and_then(|p| p.as_table())
-            .and_then(|p| p.get("metadata"))
-            .and_then(|m| m.as_table())
-            .and_then(|m| m.get("plugin_api_version"))
-            .and_then(|v| v.as_integer())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        Err(_) => "unknown".to_string(),
-    };
+    let program_authors: Vec<String> = package
+        .and_then(|package| package.get("authors"))
+        .and_then(|authors| authors.as_array())
+        .map(|authors_array| {
+            authors_array
+                .iter()
+                .filter_map(|author| author.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let program_version = package
+        .and_then(|package| package.get("version"))
+        .and_then(|version| version.as_str())
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| DEFAULT_VERSION.to_string());
+
+    let plugin_api_version = package
+        .and_then(|package| package.get("metadata"))
+        .and_then(|metadata| metadata.as_table())
+        .and_then(|metadata| metadata.get("plugin_api_version"))
+        .and_then(|version| version.as_integer())
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     let build_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let git_hash = std::process::Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
@@ -92,7 +84,7 @@ fn main() {
     } else {
         program_authors
             .iter()
-            .map(|author| format!("\"{}\"", author.replace("\"", "\\\"")))
+            .map(|author| format!("{:?}", author))
             .collect::<Vec<_>>()
             .join(", ")
     };
