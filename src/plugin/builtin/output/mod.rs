@@ -16,6 +16,7 @@ use crate::plugin::api::Plugin;
 use crate::plugin::api::PluginConfig;
 use crate::plugin::builtin::output::args::OutputConfig;
 use crate::plugin::builtin::output::events::OutputEventHandler;
+use crate::plugin::builtin::output::manager::OutputPipeline;
 use crate::plugin::builtin::output::traits::{ExportFormat, OutputDestination};
 use crate::plugin::error::{PluginError, PluginResult};
 use crate::plugin::types::{PluginInfo, PluginType};
@@ -166,11 +167,14 @@ impl Plugin for OutputPlugin {
                 })?
         };
 
+        let output_pipeline =
+            Arc::new(Mutex::new(OutputPipeline::new(self.output_config()).await?));
+
         // Create OutputEventHandler with all required resources
         let handler = OutputEventHandler::new(
             self.plugin_info().name.clone(),
             notification_manager,
-            self.output_config(),
+            output_pipeline,
             Arc::new(Mutex::new(HashMap::new())), // received_data - Arc needed for worker task
         );
 

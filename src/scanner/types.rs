@@ -404,8 +404,7 @@ impl RepositoryDataBuilder {
 fn format_system_time(time: &std::time::SystemTime) -> String {
     use chrono::{DateTime, Utc};
 
-    let datetime: DateTime<Utc> = (*time).into();
-    datetime.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    DateTime::<Utc>::from(*time).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Scanner messages for repository scan data

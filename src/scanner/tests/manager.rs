@@ -5,42 +5,10 @@
 
 use crate::notifications::api::ScanEventType;
 use crate::scanner::manager::ScannerManager;
+use crate::scanner::task::tests::helpers::{commit_all, init_test_git_repo, run_git};
 use crate::scanner::tests::helpers::{collect_scan_messages, scan_and_capture_messages};
 use crate::scanner::types::{ScanMessage, ScanStats};
-use std::path::Path;
-use std::process::Command;
 use std::time::SystemTime;
-
-fn run_git(repo_path: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo_path)
-        .output()
-        .expect("Failed to spawn git command");
-
-    assert!(
-        output.status.success(),
-        "git {} failed\nstdout:\n{}\nstderr:\n{}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn init_test_git_repo(repo_path: &Path) {
-    run_git(repo_path, &["init"]);
-    run_git(repo_path, &["config", "user.name", "Test User"]);
-    run_git(repo_path, &["config", "user.email", "test@example.com"]);
-    run_git(repo_path, &["config", "commit.gpgsign", "false"]);
-}
-
-fn commit_all(repo_path: &Path, message: &str) {
-    run_git(repo_path, &["add", "."]);
-    run_git(
-        repo_path,
-        &["-c", "commit.gpgsign=false", "commit", "-m", message],
-    );
-}
 
 #[tokio::test]
 async fn test_scanner_manager_creation() {

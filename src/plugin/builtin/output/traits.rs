@@ -144,13 +144,13 @@ pub enum OutputDestination {
 pub type FormatResult = PluginResult<String>;
 
 /// Output writer trait for abstraction over different output destinations
-pub trait OutputWriter: Write {
+pub trait OutputWriter: Write + Send {
     /// Flush and finalise the output
     fn finalize(&mut self) -> std::io::Result<()>;
 }
 
 /// Trait for output formatters
-pub trait OutputFormatter {
+pub trait OutputFormatter: Send {
     /// Format the provided data export into the target format
     /// use_colors parameter comes from PluginConfig processing
     fn format(&self, data: &PluginDataExport, use_colors: bool) -> FormatResult;

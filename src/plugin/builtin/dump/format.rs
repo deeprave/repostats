@@ -84,8 +84,9 @@ pub fn format_compact_typed(
     };
 
     let format_timestamp = |ts: &std::time::SystemTime| -> String {
-        let dt: DateTime<Local> = (*ts).into();
-        dt.format("%Y-%m-%d,%H:%M:%S%.f").to_string()
+        DateTime::<Local>::from(*ts)
+            .format("%Y-%m-%d,%H:%M:%S%.f")
+            .to_string()
     };
 
     let format_lines = |insertions: usize, deletions: usize| -> String {
