@@ -26,5 +26,5 @@
 
 ## 5. Prepare follow-up recovery analysis
 
-- [ ] 5.1 Diff the preserved refactor trees against the restored baseline to identify intentional improvements worth reapplying later.
-- [ ] 5.2 Document unresolved decisions about dependency changes, build-script updates, built-in versus external plugin boundaries, and dynamic loading work that should be handled in later changes.
+- [x] 5.1 Diff the preserved refactor trees against the restored baseline to identify intentional improvements worth reapplying later.
+- [x] 5.2 Document unresolved decisions about dependency changes, build-script updates, built-in versus external plugin boundaries, and dynamic loading work that should be handled in later changes.
