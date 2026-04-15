@@ -110,7 +110,10 @@ impl ScannerTask {
             .create_publisher(scanner_id.clone())
             .expect("Failed to create test queue publisher");
 
+        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
+
         Self::builder(scanner_id, repository_path, repository, test_publisher)
+            .with_notification_manager(notification_manager)
     }
 }
 
@@ -166,13 +169,7 @@ impl ScannerTask {
         repository_path: String,
         repository: gix::Repository,
     ) -> Self {
-        // Create a test queue publisher and notification manager for test scenarios
-        let queue_service = crate::queue::api::get_queue_service();
-        let test_publisher = queue_service
-            .create_publisher(scanner_id.clone())
-            .expect("Failed to create test queue publisher");
-
-        Self::builder(scanner_id, repository_path, repository, test_publisher).build()
+        Self::builder_for_tests(scanner_id, repository_path, repository).build()
     }
 
     /// Determine if a repository path represents a remote repository
