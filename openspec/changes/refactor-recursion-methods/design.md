@@ -48,3 +48,10 @@ Rollback strategy:
 ## Open Questions
 
 - None at this time.
+
+## Outcome Notes
+
+Implemented outcome:
+- `count_tree_entries` and `extract_tree_recursive` already exist as private non-instance helpers in `src/scanner/task/git_ops.rs`.
+- Local call sites already invoke them via `Self::...`, so no further recursion-shape refactor was needed.
+- Validation confirmed there are no remaining `clippy::only_used_in_recursion` findings for this area.
