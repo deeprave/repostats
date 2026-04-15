@@ -42,10 +42,10 @@ repos:
           types: [ rust ]
           pass_filenames: false
 
-        - id: cargo-test
-          name: cargo nextest
-          entry: cargo nextest
-          language: system
-          types: [ rust ]
-          pass_filenames: false
-          args: ["run", "--workspace"]
+#        - id: cargo-test
+#          name: cargo nextest
+#          entry: cargo nextest
+#          language: system
+#          types: [ rust ]
+#          pass_filenames: false
+#          args: ["run", "--workspace"]

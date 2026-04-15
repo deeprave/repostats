@@ -1,0 +1,14 @@
+plugin-info:
+  name: Test
+  version: 0.1.0
+  description: A test plugin
+  author: Repostats <deeprave@gmail.com>
+  api_version: 20250727
+  plugin_type: Processing
+  functions:
+    - test
+    - hello_world
+  required: Commits|FileInfo
+  auto_active: false
+
+plugin-file: test

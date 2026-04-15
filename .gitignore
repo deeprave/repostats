@@ -74,3 +74,16 @@ AmazonQ.json
 CLAUDE*md
 .github/instructions/
 sessions/
+
+.cline/
+.clinerules/
+.codex/
+.cursor/
+.gemini/
+.github/prompts/
+.github/skills/
+.kiro/
+.windsurf/
+
+.guide.yaml
+.agents
