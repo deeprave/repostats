@@ -10,11 +10,7 @@ use repostats::scanner::api::ScannerManager;
 #[tokio::test]
 async fn test_scanner_manager_creation() {
     // GREEN: Now implement basic ScannerManager creation
-    let manager = ScannerManager::create().await;
-
-    // Should successfully create a ScannerManager
-    // (Testing that creation succeeds - no internal state assertions needed)
-    assert!(std::sync::Arc::strong_count(&manager) >= 1);
+    let _manager = ScannerManager::create().await;
 }
 
 #[tokio::test]

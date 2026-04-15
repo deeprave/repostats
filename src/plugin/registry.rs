@@ -306,12 +306,12 @@ impl SharedPluginRegistry {
         let mut registry = self.inner.write().await;
         registry.register_plugin(plugin)?;
 
-        // Then publish Registeration event
+        // Then publish Registration event
         let event = crate::notifications::api::PluginEvent::with_message(
             crate::notifications::event::PluginEventType::Registered,
             plugin_name.to_string(),
             crate::plugin::events::SYSTEM_SCAN_ID.to_string(),
-            "Plugin deregistered".to_string(),
+            "Plugin registered".to_string(),
         );
 
         if let Err(e) = crate::notifications::api::notification_service()
@@ -319,7 +319,7 @@ impl SharedPluginRegistry {
             .await
         {
             log::error!(
-                "Failed to publish plugin registrater event for '{}': {}",
+                "Failed to publish plugin registration event for '{}': {}",
                 plugin_name,
                 e
             );

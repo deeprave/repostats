@@ -21,4 +21,5 @@ pub use crate::scanner::error::{ScanError, ScanResult};
 pub use crate::scanner::task::ScannerTask;
 
 // Core data types and structures
-pub use crate::scanner::types::{ScanMessage, ScanRequires};
+#[allow(unused_imports)]
+pub use crate::scanner::types::{ScanMessage, ScanRequires, ScanStats};

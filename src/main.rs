@@ -148,7 +148,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_main_is_async() {
-        let _ = start_scanner(scanner::api::ScannerManager::create().await).await;
+        let result = start_scanner(scanner::api::ScannerManager::create().await).await;
+
+        assert!(
+            result.is_err(),
+            "start_scanner should return an error when no repository scanners are configured"
+        );
+
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Repository error: No active repository scanner"
+        );
     }
 
     #[tokio::test]
