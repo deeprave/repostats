@@ -28,28 +28,27 @@ The intended direction remains:
 
 ## Current Baseline Assessment
 
-As of 2026-04-15, the repository is no longer in the initial "restore a buildable tree" stage. It has progressed to a stable post-recovery baseline with follow-up refactor work already landing in the active source tree.
+As of 2026-04-16, the repository is no longer in the initial "restore a buildable tree" stage. It has progressed to a stable post-recovery baseline with follow-up refactor work landing in the active source tree.
 
 Verified state:
 
 - `cargo test` passes on the active tree
+- `cargo clippy --all-targets --all-features -- -D warnings` passes on the active tree
 - the workspace contains substantial tests across scanner, queue, notifications, plugin, CLI, and end-to-end paths
 - recent completed follow-up work includes:
   - restoring the `HEAD` source baseline and preserving refactor-era trees for review
   - moving `ScannerTask` construction to a builder-based API
   - introducing a thread-safe `gix::ThreadSafeRepository` storage boundary in scanner state
   - cleaning up recursion-heavy scanner helpers
+  - introducing stable `NotificationService`, `PluginService`, and `QueueService` facades in subsystem `api.rs` modules
+  - migrating primary runtime call sites away from raw global-manager access patterns
+  - trimming broad public re-exports and compatibility surface where facade adoption made that safe
   - keeping OpenSpec changes in place to describe remaining intended refactors
-
-Current limitation:
-
-- `cargo clippy --all-targets --all-features -- -D warnings` is not yet clean
-- the current failures are mostly hygiene and API-surface issues rather than baseline functionality failures
-- the most visible categories are unused public re-exports, dead-code warnings across partially exposed subsystems, and test-only style lints
 
 Interpretation:
 
 - the repository is functionally healthy enough for deliberate incremental refactor work
+- the baseline is now both test-clean and lint-clean, which gives follow-up architectural work a stronger verified starting point
 - the next phase is not emergency recovery; it is controlled convergence between the working baseline and the intended engine/plugin architecture
 
 ## Recovery Context And Working Assumptions
@@ -85,10 +84,10 @@ OpenSpec changes that appear materially completed in the active tree:
 - `refactor-scannertask-init`
 - `refactor-gix-repository`
 - `refactor-recursion-methods`
+- `introduce-service-facades`
 
 OpenSpec changes that still describe likely next-stage work:
 
-- `introduce-service-facades`
 - `separate-cli-from-library`
 - `define-external-plugin-contract`
 - `implement-external-plugin-loading`
@@ -100,11 +99,10 @@ When choosing follow-up work, prefer items that improve correctness or boundarie
 
 Recommended priorities:
 
-- make the baseline lint-clean enough that `cargo clippy --all-targets --all-features -D warnings` can pass again
-- continue narrowing public API exposure, especially broad `api.rs` re-exports that currently create unused-surface warnings
-- adopt service-facade cleanup where it improves subsystem boundaries without forcing larger architectural movement
+- continue narrowing public API exposure from the now-stable subsystem facade boundaries
 - continue separating CLI-facing concerns from the reusable library surface
 - define and implement the external plugin contract deliberately, after the internal library boundary is clearer
+- restore or adopt the preferred nextest validation workflow on top of the now clean `cargo test` and `clippy` baseline
 
 ## Guidance For Ongoing Updates
 
