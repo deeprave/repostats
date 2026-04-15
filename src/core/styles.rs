@@ -98,52 +98,53 @@ style! {
     Dim         => Some(Color::BrightBlack)
 }
 
+#[allow(unreachable_patterns)]
 fn map_color_code(c: Color) -> Option<String> {
-    use Color::*;
     match c {
-        Black => Some("30".to_string()),
-        Red => Some("31".to_string()),
-        Green => Some("32".to_string()),
-        Yellow => Some("33".to_string()),
-        Blue => Some("34".to_string()),
-        Magenta => Some("35".to_string()),
-        Cyan => Some("36".to_string()),
-        White => Some("37".to_string()),
-        BrightBlack => Some("90".to_string()),
-        BrightRed => Some("91".to_string()),
-        BrightGreen => Some("92".to_string()),
-        BrightYellow => Some("93".to_string()),
-        BrightBlue => Some("94".to_string()),
-        BrightMagenta => Some("95".to_string()),
-        BrightCyan => Some("96".to_string()),
-        BrightWhite => Some("97".to_string()),
-        TrueColor { r, g, b } => {
+        Color::Black => Some("30".to_string()),
+        Color::Red => Some("31".to_string()),
+        Color::Green => Some("32".to_string()),
+        Color::Yellow => Some("33".to_string()),
+        Color::Blue => Some("34".to_string()),
+        Color::Magenta => Some("35".to_string()),
+        Color::Cyan => Some("36".to_string()),
+        Color::White => Some("37".to_string()),
+        Color::BrightBlack => Some("90".to_string()),
+        Color::BrightRed => Some("91".to_string()),
+        Color::BrightGreen => Some("92".to_string()),
+        Color::BrightYellow => Some("93".to_string()),
+        Color::BrightBlue => Some("94".to_string()),
+        Color::BrightMagenta => Some("95".to_string()),
+        Color::BrightCyan => Some("96".to_string()),
+        Color::BrightWhite => Some("97".to_string()),
+        Color::TrueColor { r, g, b } => {
             // ANSI TrueColor format: 38;2;R;G;B for foreground text
             Some(format!("38;2;{};{};{}", r, g, b))
         }
+        _ => None,
     }
 }
 
 fn color_to_ansi(c: Color) -> Option<AnsiColor> {
-    use AnsiColor as A;
-    use Color::*;
+    use clap::builder::styling::AnsiColor as ClapAnsiColor;
+
     Some(match c {
-        Black => A::Black,
-        Red => A::Red,
-        Green => A::Green,
-        Yellow => A::Yellow,
-        Blue => A::Blue,
-        Magenta => A::Magenta,
-        Cyan => A::Cyan,
-        White => A::White,
-        BrightBlack => A::BrightBlack,
-        BrightRed => A::BrightRed,
-        BrightGreen => A::BrightGreen,
-        BrightYellow => A::BrightYellow,
-        BrightBlue => A::BrightBlue,
-        BrightMagenta => A::BrightMagenta,
-        BrightCyan => A::BrightCyan,
-        BrightWhite => A::BrightWhite,
+        Color::Black => ClapAnsiColor::Black,
+        Color::Red => ClapAnsiColor::Red,
+        Color::Green => ClapAnsiColor::Green,
+        Color::Yellow => ClapAnsiColor::Yellow,
+        Color::Blue => ClapAnsiColor::Blue,
+        Color::Magenta => ClapAnsiColor::Magenta,
+        Color::Cyan => ClapAnsiColor::Cyan,
+        Color::White => ClapAnsiColor::White,
+        Color::BrightBlack => ClapAnsiColor::BrightBlack,
+        Color::BrightRed => ClapAnsiColor::BrightRed,
+        Color::BrightGreen => ClapAnsiColor::BrightGreen,
+        Color::BrightYellow => ClapAnsiColor::BrightYellow,
+        Color::BrightBlue => ClapAnsiColor::BrightBlue,
+        Color::BrightMagenta => ClapAnsiColor::BrightMagenta,
+        Color::BrightCyan => ClapAnsiColor::BrightCyan,
+        Color::BrightWhite => ClapAnsiColor::BrightWhite,
         _ => return None,
     })
 }
