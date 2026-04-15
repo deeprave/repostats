@@ -211,6 +211,9 @@ impl ScannerTask {
     }
 
     /// Materialize a thread-local repository handle from the shared repository state.
+    ///
+    /// Callers should cache the returned handle in a local variable when they need
+    /// to perform multiple repository operations within the same function.
     pub fn repository(&self) -> gix::Repository {
         self.repository.to_thread_local()
     }
