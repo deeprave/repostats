@@ -34,6 +34,8 @@ repos:
 #          types: [ rust ]
 #          pass_filenames: false
 #          args: [ "--", "-D", "warnings" ]
+#          Temporarily disabled pending fixup in
+#          openspec/changes/restore-nextest-validation.
 
         - id: cargo-check
           name: cargo check
@@ -49,3 +51,5 @@ repos:
 #          types: [ rust ]
 #          pass_filenames: false
 #          args: ["run", "--workspace"]
+#          Temporarily disabled pending fixup in
+#          openspec/changes/restore-nextest-validation.

@@ -6,7 +6,7 @@ The preserved review inputs are:
 
 - `../repostats-refactor/src`: interrupted refactor source tree
 - `../repostats-refactor/src.new`: preserved `src.old/` snapshot that was tested as an alternative restore candidate
-- `../repostats-reactor/tests/app_services.rs`: test drift that blocked the restored baseline test suite
+- `../repostats-refactor/tests/app_services.rs`: test drift that blocked the restored baseline test suite
 
 The immediate need is no longer source-tree rescue. It is to consolidate the recovery outcome, review remaining non-`src/` changes, and document the current architecture and intended refactor direction before more structural changes are attempted.
 
