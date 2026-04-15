@@ -23,5 +23,5 @@ The repository now has a clean `cargo test` and `cargo clippy --all-targets --al
 
 ## Impact
 
-- Affected code: `Cargo.toml`, `Cargo.lock`, any source or test files affected by upgraded crate APIs or lint behavior, CI workflow/toolchain configuration, and local developer tooling configuration.
+- Affected code: `Cargo.toml` dependency constraints, any source or test files affected by upgraded crate APIs or lint behavior, CI workflow/toolchain configuration, and local developer tooling configuration. Because this repository does not currently track `Cargo.lock`, dependency resolution changes are expected to come from manifest constraints unless the lockfile policy changes.
 - Affected systems: Rust compiler baseline, dependency resolution, local validation, CI matrix behavior, linting, and test execution.
