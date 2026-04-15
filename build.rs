@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::Path;
 
 fn main() {
+    const DEFAULT_VERSION: &str = "0.99.0";
     // Re-run if the build script itself changes
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
@@ -30,9 +31,35 @@ fn main() {
 
     let mut f = File::create(&dest_path).unwrap();
 
-    // Read plugin API version from Cargo.toml metadata
+    // Read the plugin API version from Cargo.toml metadata
     let cargo_toml_content = std::fs::read_to_string(&cargo_toml_path).unwrap();
 
+    let program_authors: Vec<String> = match cargo_toml_content.parse::<toml::Table>() {
+        Ok(cargo_toml) => cargo_toml
+            .get("package")
+            .and_then(|p| p.as_table())
+            .and_then(|p| p.get("authors"))
+            .and_then(|a| a.as_array())
+            .map(|authors_array| {
+                authors_array
+                    .iter()
+                    .filter_map(|author| author.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_else(Vec::new),
+        Err(_) => Vec::new(),
+    };
+
+    let program_version = match cargo_toml_content.parse::<toml::Table>() {
+        Ok(cargo_toml) => cargo_toml
+            .get("package")
+            .and_then(|p| p.as_table())
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str())
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| DEFAULT_VERSION.to_string()),
+        Err(_) => DEFAULT_VERSION.to_string(),
+    };
     let plugin_api_version = match cargo_toml_content.parse::<toml::Table>() {
         Ok(cargo_toml) => cargo_toml
             .get("package")
@@ -60,13 +87,27 @@ fn main() {
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    let authors = if program_authors.is_empty() {
+        "".to_string()
+    } else {
+        program_authors
+            .iter()
+            .map(|author| format!("\"{}\"", author.replace("\"", "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
     #[allow(clippy::uninlined_format_args)]
     writeln!(
         &mut f,
-        r###"pub const PLUGIN_API_VERSION: &str = "{}";
+        r###"
+pub const VERSION: &str = "{}";
+pub const AUTHORS: &[&str] = &[{}];
+pub const PLUGIN_API_VERSION: &str = "{}";
 pub const BUILD_TIME: &str = "{}";
-pub const GIT_HASH: &str = "{}";"###,
-        plugin_api_version, build_time, git_hash
+pub const GIT_HASH: &str = "{}";
+"###,
+        program_version, authors, plugin_api_version, build_time, git_hash
     )
     .unwrap();
 }
