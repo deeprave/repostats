@@ -694,7 +694,7 @@ impl ScannerManager {
                 }
 
                 // Cancel repository reservation if applicable
-                if let Ok(repo_id) = self.get_unique_repo_id(scanner.repository()) {
+                if let Ok(repo_id) = self.get_unique_repo_id(&scanner.repository()) {
                     self.cancel_reservation(&repo_id);
                 }
 

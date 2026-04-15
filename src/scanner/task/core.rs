@@ -19,7 +19,7 @@ pub struct ScannerTask {
     /// Repository path (local or remote URL - normalized)
     repository_path: String,
     /// Git repository instance
-    repository: gix::Repository,
+    repository: gix::ThreadSafeRepository,
     /// Flag indicating if this is a remote repository
     is_remote: bool,
     /// Combined requirements from all active plugins
@@ -57,22 +57,25 @@ impl std::fmt::Debug for ScannerTask {
 
 impl ScannerTask {
     /// Create a new ScannerTask with dependency injection
-    pub fn new(
+    pub fn new<R>(
         scanner_id: String,
         repository_path: String,
-        repository: gix::Repository,
+        repository: R,
         requirements: ScanRequires,
         queue_publisher: QueuePublisher,
         query_params: Option<QueryParams>,
         checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
         notification_manager: Arc<TokioMutex<AsyncNotificationManager>>,
-    ) -> Self {
+    ) -> Self
+    where
+        R: Into<gix::ThreadSafeRepository>,
+    {
         let is_remote = Self::is_remote_path(&repository_path);
 
         Self {
             scanner_id,
             repository_path,
-            repository,
+            repository: repository.into(),
             is_remote,
             requirements,
             query_params,
@@ -207,9 +210,9 @@ impl ScannerTask {
         &self.repository_path
     }
 
-    /// Get reference to the repository instance
-    pub fn repository(&self) -> &gix::Repository {
-        &self.repository
+    /// Materialize a thread-local repository handle from the shared repository state.
+    pub fn repository(&self) -> gix::Repository {
+        self.repository.to_thread_local()
     }
 
     /// Get the requirements for this scanner task
