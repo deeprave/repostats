@@ -561,20 +561,18 @@ impl ScannerManager {
                 }
             })?;
 
-        // Create independent notification manager for scanner dependency injection
-        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
-
-        // Create scanner task with simple dependency injection
-        let scanner_task = ScannerTask::new(
+        // Create scanner task with builder-based dependency injection
+        let scanner_task = ScannerTask::builder(
             scanner_id.clone(),
             normalised_path.clone(),
             repo,
-            requirements,
             queue_publisher,
-            query_params.cloned(),
-            checkout_manager,
-            notification_manager,
-        );
+        )
+        .with_requirements(requirements)
+        .with_query_params(query_params.cloned())
+        .with_checkout_manager(checkout_manager)
+        .with_notification_manager(Arc::new(TokioMutex::new(AsyncNotificationManager::new())))
+        .build();
         let scanner_task = Arc::new(scanner_task);
 
         // Store the scanner task in the manager for later use

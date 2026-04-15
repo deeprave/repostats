@@ -3,7 +3,7 @@
 //! Core ScannerTask struct and basic methods including constructors and accessors.
 
 use crate::core::query::QueryParams;
-use crate::notifications::api::AsyncNotificationManager;
+use crate::notifications::api::{get_notification_service_arc, AsyncNotificationManager};
 use crate::queue::api::QueuePublisher;
 use crate::scanner::types::ScanRequires;
 use std::sync::{Arc, Mutex};
@@ -56,90 +56,105 @@ impl std::fmt::Debug for ScannerTask {
 }
 
 impl ScannerTask {
-    /// Create a new ScannerTask with dependency injection
-    pub fn new<R>(
+    /// Create a new `ScannerTask` builder with the required runtime dependencies.
+    pub fn builder<R>(
         scanner_id: String,
         repository_path: String,
         repository: R,
-        requirements: ScanRequires,
         queue_publisher: QueuePublisher,
-        query_params: Option<QueryParams>,
-        checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
-        notification_manager: Arc<TokioMutex<AsyncNotificationManager>>,
-    ) -> Self
+    ) -> ScannerTaskBuilder
     where
         R: Into<gix::ThreadSafeRepository>,
     {
-        let is_remote = Self::is_remote_path(&repository_path);
-
-        Self {
+        ScannerTaskBuilder {
             scanner_id,
             repository_path,
             repository: repository.into(),
-            is_remote,
-            requirements,
-            query_params,
-            checkout_manager,
+            requirements: ScanRequires::NONE,
+            query_params: None,
+            checkout_manager: None,
             queue_publisher,
-            notification_manager,
+            notification_manager: None,
+        }
+    }
+
+    fn from_builder(builder: ScannerTaskBuilder) -> Self {
+        let is_remote = Self::is_remote_path(&builder.repository_path);
+
+        Self {
+            scanner_id: builder.scanner_id,
+            repository_path: builder.repository_path,
+            repository: builder.repository,
+            is_remote,
+            requirements: builder.requirements,
+            query_params: builder.query_params,
+            checkout_manager: builder.checkout_manager,
+            queue_publisher: builder.queue_publisher,
+            notification_manager: builder
+                .notification_manager
+                .unwrap_or_else(get_notification_service_arc),
             checkout_root: Mutex::new(None),
             seen_checkout_files: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
-    /// Create a simple builder for backward compatibility with tests
-    /// This is deprecated in favor of direct constructor injection
+    /// Create a concise test-only builder that auto-creates a queue publisher.
     #[cfg(test)]
-    pub fn builder(
+    pub fn builder_for_tests(
         scanner_id: String,
         repository_path: String,
         repository: gix::Repository,
-    ) -> TestScannerTaskBuilder {
-        TestScannerTaskBuilder {
-            scanner_id,
-            repository_path,
-            repository,
-            requirements: ScanRequires::NONE,
-        }
+    ) -> ScannerTaskBuilder {
+        let queue_service = crate::queue::api::get_queue_service();
+        let test_publisher = queue_service
+            .create_publisher(scanner_id.clone())
+            .expect("Failed to create test queue publisher");
+
+        Self::builder(scanner_id, repository_path, repository, test_publisher)
     }
 }
 
-/// Simplified builder for test compatibility only
-/// Production code should use ScannerTask::new() directly
-#[cfg(test)]
-pub struct TestScannerTaskBuilder {
+/// Builder for constructing a fully initialized `ScannerTask`.
+pub struct ScannerTaskBuilder {
     scanner_id: String,
     repository_path: String,
-    repository: gix::Repository,
+    repository: gix::ThreadSafeRepository,
     requirements: ScanRequires,
+    query_params: Option<QueryParams>,
+    checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
+    queue_publisher: QueuePublisher,
+    notification_manager: Option<Arc<TokioMutex<AsyncNotificationManager>>>,
 }
 
-#[cfg(test)]
-impl TestScannerTaskBuilder {
+impl ScannerTaskBuilder {
     pub fn with_requirements(mut self, requirements: ScanRequires) -> Self {
         self.requirements = requirements;
         self
     }
 
-    pub fn build(self) -> ScannerTask {
-        // Create test queue publisher and notification manager automatically
-        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
-        // Create test queue publisher automatically
-        let queue_service = crate::queue::api::get_queue_service();
-        let test_publisher = queue_service
-            .create_publisher(self.scanner_id.clone())
-            .expect("Failed to create test queue publisher");
+    pub fn with_query_params(mut self, query_params: Option<QueryParams>) -> Self {
+        self.query_params = query_params;
+        self
+    }
 
-        ScannerTask::new(
-            self.scanner_id,
-            self.repository_path,
-            self.repository,
-            self.requirements,
-            test_publisher,
-            None,
-            None,
-            notification_manager,
-        )
+    pub fn with_checkout_manager(
+        mut self,
+        checkout_manager: Option<Arc<Mutex<crate::scanner::checkout::manager::CheckoutManager>>>,
+    ) -> Self {
+        self.checkout_manager = checkout_manager;
+        self
+    }
+
+    pub fn with_notification_manager(
+        mut self,
+        notification_manager: Arc<TokioMutex<AsyncNotificationManager>>,
+    ) -> Self {
+        self.notification_manager = Some(notification_manager);
+        self
+    }
+
+    pub fn build(self) -> ScannerTask {
+        ScannerTask::from_builder(self)
     }
 }
 
@@ -157,18 +172,7 @@ impl ScannerTask {
             .create_publisher(scanner_id.clone())
             .expect("Failed to create test queue publisher");
 
-        let notification_manager = Arc::new(TokioMutex::new(AsyncNotificationManager::new()));
-
-        Self::new(
-            scanner_id,
-            repository_path,
-            repository,
-            ScanRequires::NONE,
-            test_publisher,
-            None,
-            None,
-            notification_manager,
-        )
+        Self::builder(scanner_id, repository_path, repository, test_publisher).build()
     }
 
     /// Determine if a repository path represents a remote repository

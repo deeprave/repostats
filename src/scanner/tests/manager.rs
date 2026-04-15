@@ -394,16 +394,15 @@ async fn test_commit_traversal_and_message_creation() {
             crate::notifications::api::AsyncNotificationManager::new(),
         ));
 
-        crate::scanner::task::ScannerTask::new(
+        crate::scanner::task::ScannerTask::builder(
             scanner_id,
             current_path.to_string(),
             repo,
-            ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
             test_publisher,
-            None,
-            None,
-            notification_manager,
         )
+        .with_requirements(ScanRequires::COMMITS | ScanRequires::FILE_CHANGES)
+        .with_notification_manager(notification_manager)
+        .build()
     };
 
     // Scan commits and capture messages for testing

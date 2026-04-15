@@ -132,16 +132,18 @@ async fn test_commit_traversal_and_message_creation() {
             repostats::notifications::api::AsyncNotificationManager::new(),
         ));
 
-        repostats::scanner::api::ScannerTask::new(
+        repostats::scanner::api::ScannerTask::builder(
             scanner_id,
             current_path.to_string(),
             repo,
-            repostats::scanner::api::ScanRequires::COMMITS | repostats::scanner::api::ScanRequires::FILE_CHANGES,
             test_publisher,
-            None,
-            None,
-            notification_manager,
         )
+        .with_requirements(
+            repostats::scanner::api::ScanRequires::COMMITS
+                | repostats::scanner::api::ScanRequires::FILE_CHANGES,
+        )
+        .with_notification_manager(notification_manager)
+        .build()
     };
 
     // Scan commits and capture messages for testing

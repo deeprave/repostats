@@ -130,3 +130,12 @@ Alternative considered:
 
 Rollback strategy:
 - Restore the previous flat constructor signature. This is low-risk because the change is limited to scanner initialization paths.
+
+## Outcome Notes
+
+Implemented outcome:
+- `ScannerTask` now exposes a dedicated builder for required runtime dependencies.
+- Optional scanner state is configured with builder methods for requirements, query parameters, checkout manager, and notification manager override.
+- Builder `build()` resolves the notification manager from the global service when no override is provided.
+- Test ergonomics are preserved with a concise test-only builder wrapper that auto-creates a queue publisher.
+- The `ScannerTask::new(...)` arity issue was removed; broader clippy failures remain outside this initialization change.

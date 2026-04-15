@@ -221,16 +221,10 @@ async fn test_comprehensive_scanner_task_creation() {
             repostats::notifications::api::AsyncNotificationManager::new(),
         ));
 
-        ScannerTask::new(
-            scanner_id,
-            current_path.to_string(),
-            repo,
-            ScanRequires::COMMITS | ScanRequires::FILE_CHANGES,
-            test_publisher,
-            None,
-            None,
-            notification_manager,
-        )
+        ScannerTask::builder(scanner_id, current_path.to_string(), repo, test_publisher)
+            .with_requirements(ScanRequires::COMMITS | ScanRequires::FILE_CHANGES)
+            .with_notification_manager(notification_manager)
+            .build()
     };
 
     // Verify scanner task properties
