@@ -79,7 +79,6 @@ impl PluginError {
     ///
     /// This method allows recovery of the original error type from wrapped errors,
     /// enabling more specific error handling when needed.
-    #[allow(dead_code)]
     pub fn downcast_ref<T: std::error::Error + 'static>(&self) -> Option<&T> {
         use std::any::{Any, TypeId};
 
@@ -114,7 +113,6 @@ impl PluginError {
     ///
     /// This method allows recovery of the original error by consuming the PluginError,
     /// useful when you need owned access to the underlying error.
-    #[allow(dead_code)]
     pub fn downcast<T: std::error::Error + 'static>(self) -> Result<T, Self> {
         use std::any::TypeId;
 

@@ -56,7 +56,6 @@ pub struct QueueManager {
 
 impl QueueManager {
     const GLOBAL_QUEUE_ID: &'static str = "global";
-    #[allow(dead_code)]
     const EVENT_PUBLISH_TIMEOUT: Duration = Duration::from_millis(100);
 
     pub fn new() -> Self {
@@ -88,7 +87,6 @@ impl QueueManager {
     ///
     /// This method publishes lifecycle events with a timeout to prevent deadlocks.
     /// Event publishing failures are logged but do not prevent queue operations.
-    #[allow(dead_code)]
     async fn publish_lifecycle_event(
         &self,
         event_type: QueueEventType,
@@ -178,7 +176,6 @@ impl QueueManager {
     /// // Queue system is now ready for use
     /// # }
     /// ```
-    #[allow(dead_code)]
     pub async fn create() -> Arc<Self> {
         let manager = Arc::new(Self::new());
         // Publish Started event with timeout protection
@@ -224,32 +221,27 @@ impl QueueManager {
     }
 
     /// Legacy method for compatibility - always returns the global queue
-    #[allow(dead_code)]
     pub fn get_queue(&self, _producer_id: &str) -> QueueResult<Arc<MultiConsumerQueue>> {
         Ok(Arc::clone(&self.global_queue))
     }
 
     /// Get number of queues managed (always 1 for single global queue)
-    #[allow(dead_code)]
     pub fn queue_count(&self) -> usize {
         1
     }
 
     /// Get total number of messages in the global queue
-    #[allow(dead_code)]
     pub fn total_message_count(&self) -> QueueResult<usize> {
         self.global_queue.size()
     }
 
     /// Get list of producer IDs that have published messages (not applicable for global queue)
     /// This method is kept for compatibility but doesn't make much sense with single queue
-    #[allow(dead_code)]
     pub fn producer_ids(&self) -> Vec<String> {
         vec!["global".to_string()] // Just return the global queue identifier
     }
 
     /// Get the number of active consumers
-    #[allow(dead_code)]
     pub fn active_consumer_count(&self) -> QueueResult<usize> {
         let consumer_ids = self.global_queue.consumer_ids()?;
         Ok(consumer_ids.len())
@@ -274,7 +266,6 @@ impl QueueManager {
     /// manager.shutdown().await;
     /// # }
     /// ```
-    #[allow(dead_code)]
     pub async fn shutdown(&self) {
         // Publish Shutdown event with timeout protection
         let _ = self

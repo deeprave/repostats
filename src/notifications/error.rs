@@ -3,7 +3,6 @@
 use std::fmt;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum NotificationError {
     ChannelClosed(String),
     ChannelFull(String),

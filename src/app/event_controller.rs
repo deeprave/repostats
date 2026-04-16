@@ -141,7 +141,6 @@ impl EventController {
     }
 
     /// Get the number of discovered controllers
-    #[allow(dead_code)]
     pub fn controller_count(&self) -> usize {
         self.discovered_controllers.len()
     }

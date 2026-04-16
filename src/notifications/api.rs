@@ -51,7 +51,6 @@ impl NotificationService {
     }
 
     /// Return the current number of event subscribers.
-    #[allow(dead_code)]
     pub async fn subscriber_count(self) -> usize {
         let manager = NOTIFICATION_SERVICE.lock().await;
         manager.subscriber_count()
@@ -78,7 +77,6 @@ impl NotificationService {
 /// # Ok(())
 /// # }
 /// ```
-#[allow(dead_code)]
 pub async fn get_notification_service() -> tokio::sync::MutexGuard<'static, AsyncNotificationManager>
 {
     let guard = NOTIFICATION_SERVICE.lock().await;

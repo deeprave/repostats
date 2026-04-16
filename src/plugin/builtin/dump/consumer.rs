@@ -149,7 +149,6 @@ impl DumpPlugin {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) async fn stop_consumer_loop(&mut self) -> PluginResult<()> {
         // Send shutdown signal
         if let Some(tx) = self.shutdown_tx.take() {

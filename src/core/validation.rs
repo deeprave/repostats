@@ -20,7 +20,6 @@ impl ValidationError {
         }
     }
 
-    #[allow(dead_code)]
     pub fn details(&self) -> &str {
         &self.details
     }
@@ -103,7 +102,6 @@ where
 }
 
 /// Validate date range arguments (since/until can now handle both ISO 8601 and relative formats)
-#[allow(dead_code)]
 pub fn validate_date_range(
     since: Option<&str>,
     until: Option<&str>,
@@ -125,7 +123,6 @@ pub fn validate_date_range(
 // Reference conflict validation is no longer needed since we only have --ref
 
 /// Validate positive integer value
-#[allow(dead_code)]
 pub fn validate_positive_int(value: &str) -> Result<usize, ValidationError> {
     match value.parse::<usize>() {
         Ok(0) => Err(ValidationError::new("Value must be greater than 0")),
@@ -138,7 +135,6 @@ pub fn validate_positive_int(value: &str) -> Result<usize, ValidationError> {
 }
 
 /// Validate file extension format
-#[allow(dead_code)]
 pub fn validate_extension(ext: &str) -> Result<String, ValidationError> {
     // Remove leading dot if present
     let cleaned = if let Some(stripped) = ext.strip_prefix('.') {
@@ -162,7 +158,6 @@ pub fn validate_extension(ext: &str) -> Result<String, ValidationError> {
 }
 
 /// Validate glob pattern syntax
-#[allow(dead_code)]
 pub fn validate_glob_pattern(pattern: &str) -> Result<String, ValidationError> {
     // Try to compile as glob pattern
     match glob::Pattern::new(pattern) {
@@ -175,7 +170,6 @@ pub fn validate_glob_pattern(pattern: &str) -> Result<String, ValidationError> {
 }
 
 /// Validate filter combinations for logical consistency
-#[allow(dead_code)]
 pub fn validate_filter_combinations(
     include_patterns: &[String],
     exclude_patterns: &[String],
