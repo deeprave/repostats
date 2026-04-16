@@ -9,14 +9,14 @@
 - [x] 2.1 Mark items with no concrete consumer or documented contract as `remove now`.
 - [x] 2.2 Mark items that are still serving an intentional compatibility or documented boundary role as `keep`.
 - [x] 2.3 Mark ambiguous items that affect stable boundary policy as `needs decision`.
-  Remaining scanner/check-out-manager test-support cases were identified as boundary decisions rather than routine dead-code cleanup.
+  Remaining scanner/checkout-manager test-support cases were identified as boundary decisions rather than routine dead-code cleanup.
 
 ## 3. Remove unjustified dead code
 
 - [x] 3.1 Remove unused APIs and helpers classified as `remove now`.
 - [x] 3.2 Remove corresponding `#[allow(dead_code)]` annotations that are no longer needed.
 - [x] 3.3 Narrow any remaining allowances so they apply only to the specific justified item.
-  The remaining allowances are limited to scanner/check-out-manager test-support helpers and a single styles macro case.
+  The remaining allowances are limited to scanner/checkout-manager test-support helpers and a single styles macro case.
 
 ## 4. Handle edge cases explicitly
 
@@ -30,4 +30,4 @@
 - [x] 5.1 Run `cargo clippy --all-targets --all-features -- -D warnings`.
 - [x] 5.2 Run `cargo test`.
 - [x] 5.3 Summarize which allowances were removed, which remained, and why.
-  Most allowances across `core`, `notifications`, `plugin`, and `queue` were removed. The remaining scanner/check-out-manager cases were isolated as a separate test-boundary follow-up, and one `core::styles` allowance remains narrowly scoped to the generated enum variants.
+  Most allowances across `core`, `notifications`, `plugin`, and `queue` were removed. The remaining scanner/checkout-manager cases were isolated as a separate test-boundary follow-up, and one `core::styles` allowance remains narrowly scoped to the generated enum variants.
