@@ -7,7 +7,6 @@ use std::io::Write;
 use unicode_width::UnicodeWidthStr;
 
 /// Display plugin table to a provided writer for improved testability and composability
-#[allow(dead_code)]
 pub fn display_plugin_table_to_writer<W: Write>(
     plugins: Vec<PluginInfo>,
     use_color: bool,

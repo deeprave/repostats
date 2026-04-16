@@ -47,7 +47,6 @@ impl QueueService {
     }
 
     /// Create a consumer on the global queue service.
-    #[allow(dead_code)]
     pub fn create_consumer(self, plugin_name: String) -> QueueResult<QueueConsumer> {
         QUEUE_SERVICE.create_consumer(plugin_name)
     }
@@ -73,7 +72,6 @@ impl QueueService {
 /// # Ok(())
 /// # }
 /// ```
-#[allow(dead_code)]
 pub fn get_queue_service() -> Arc<QueueManager> {
     queue_service().manager()
 }

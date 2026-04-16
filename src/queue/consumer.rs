@@ -38,9 +38,7 @@ use std::sync::{Arc, Weak};
 /// # }
 /// ```
 pub struct QueueConsumer {
-    #[allow(dead_code)]
     consumer_id: String,
-    #[allow(dead_code)]
     plugin_name: String,
     manager: Weak<QueueManager>,
     internal_consumer_id: u64,
@@ -69,18 +67,15 @@ impl QueueConsumer {
         Ok(consumer)
     }
 
-    #[allow(dead_code)]
     pub fn consumer_id(&self) -> &str {
         &self.consumer_id
     }
 
-    #[allow(dead_code)]
     pub fn plugin_name(&self) -> &str {
         &self.plugin_name
     }
 
     /// Get the internal consumer ID (used for queue position tracking)
-    #[allow(dead_code)]
     pub fn internal_consumer_id(&self) -> u64 {
         self.internal_consumer_id
     }
@@ -101,7 +96,6 @@ impl QueueConsumer {
     }
 
     /// Read a batch of messages from the global queue for improved performance
-    #[allow(dead_code)]
     pub fn read_batch(&self, batch_size: usize) -> QueueResult<Vec<Arc<Message>>> {
         let mut batch = Vec::with_capacity(batch_size);
 
@@ -118,7 +112,6 @@ impl QueueConsumer {
 
     /// Acknowledge a batch of messages (currently a no-op for compatibility)
     /// In a full implementation, this would be used for at-least-once delivery guarantees
-    #[allow(dead_code)]
     pub fn acknowledge_batch(&self, _messages: &[Arc<Message>]) -> QueueResult<usize> {
         // For now, just return the count of messages "acknowledged"
         // In a production system, this would update consumer commits/offsets

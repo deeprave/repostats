@@ -58,7 +58,6 @@ impl PluginService {
     }
 
     /// Return the current plugin API version.
-    #[allow(dead_code)]
     pub async fn api_version(self) -> u32 {
         let manager = PLUGIN_SERVICE.lock().await;
         manager.api_version()
@@ -151,7 +150,6 @@ impl PluginService {
 /// # Ok(())
 /// # }
 /// ```
-#[allow(dead_code)]
 pub async fn get_plugin_service() -> tokio::sync::MutexGuard<'static, PluginManager> {
     let guard = PLUGIN_SERVICE.lock().await;
     guard

@@ -7,7 +7,6 @@ use std::time::Duration;
 use std::time::{Instant, SystemTime};
 
 /// Abstraction over system time for testable time-dependent logic
-#[allow(dead_code)]
 pub trait TimeProvider: Send + Sync {
     /// Get the current monotonic time (for measuring intervals)
     fn now(&self) -> Instant;
@@ -40,7 +39,6 @@ pub struct MockTimeProvider {
 
 #[cfg(test)]
 impl MockTimeProvider {
-    #[allow(dead_code)]
     pub fn new_with_time(instant: Instant, system_time: SystemTime) -> Self {
         Self {
             current_instant: Arc::new(Mutex::new(instant)),

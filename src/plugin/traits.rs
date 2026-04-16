@@ -36,11 +36,9 @@ pub trait Plugin: Send + Sync {
     fn plugin_info(&self) -> PluginInfo;
 
     /// Get plugin type
-    #[allow(dead_code)]
     fn plugin_type(&self) -> PluginType;
 
     /// Get list of functions this plugin advertises
-    #[allow(dead_code)]
     fn advertised_functions(&self) -> Vec<String>;
 
     /// Get scanner requirements for this plugin
@@ -77,7 +75,6 @@ pub trait Plugin: Send + Sync {
     async fn execute(&mut self) -> PluginResult<()>;
 
     /// Clean up plugin resources
-    #[allow(dead_code)]
     async fn cleanup(&mut self) -> PluginResult<()>;
 
     /// Parse plugin-specific command line arguments with configuration context
@@ -89,7 +86,6 @@ pub trait Plugin: Send + Sync {
 
     /// Attempt to get this plugin as a ConsumerPlugin if it implements that trait
     /// Returns None if this plugin is not a ConsumerPlugin
-    #[allow(dead_code)]
     fn as_consumer_plugin(&mut self) -> Option<&mut dyn ConsumerPlugin> {
         None // Default implementation - plugins that implement ConsumerPlugin should override this
     }
@@ -115,7 +111,6 @@ pub trait ConsumerPlugin: Plugin {
     async fn inject_consumer(&mut self, consumer: QueueConsumer) -> PluginResult<()>;
 
     /// Override the default Plugin implementation to return self as ConsumerPlugin
-    #[allow(dead_code)]
     fn as_consumer_plugin(&mut self) -> Option<&mut dyn ConsumerPlugin>
     where
         Self: Sized,

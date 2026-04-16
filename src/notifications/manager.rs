@@ -21,13 +21,11 @@ const MIN_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60); // Minimum tim
 const ERROR_RATE_THRESHOLD: f64 = 0.1; // 10% error rate triggers log rate limiting
 const DEFAULT_CHANNEL_CAPACITY: usize = 1000; // Default bounded channel capacity
 
-#[allow(dead_code)]
 enum EventSender {
     Bounded(Sender<Event>),
     Unbounded(UnboundedSender<Event>),
 }
 
-#[allow(dead_code)]
 impl EventSender {
     fn try_send(&self, event: Event) -> Result<(), NotificationError> {
         match self {
@@ -60,7 +58,6 @@ impl EventReceiver {
     }
 }
 
-#[allow(dead_code)]
 struct SubscriberInfo {
     filter: EventFilter,
     source: String,
@@ -68,14 +65,12 @@ struct SubscriberInfo {
     statistics: SubscriberStatistics,
 }
 
-#[allow(dead_code)]
 pub struct HealthAssessment {
     pub high_water_mark_subscribers: Vec<String>,
     pub stale_subscribers: Vec<String>,
     pub error_prone_subscribers: Vec<String>,
 }
 
-#[allow(dead_code)]
 pub struct AsyncNotificationManager {
     subscribers: HashMap<String, SubscriberInfo>,
     time_provider: Arc<dyn TimeProvider>,
@@ -93,7 +88,6 @@ impl Default for AsyncNotificationManager {
     }
 }
 
-#[allow(dead_code)]
 impl AsyncNotificationManager {
     pub fn new() -> Self {
         Self::with_time_provider(Arc::new(SystemTimeProvider))
@@ -114,12 +108,6 @@ impl AsyncNotificationManager {
     // Helper methods for atomic f64 handling
     fn get_error_rate_threshold(&self) -> f64 {
         f64::from_bits(self.error_rate_threshold.load(Ordering::Relaxed))
-    }
-
-    #[allow(dead_code)]
-    fn set_error_rate_threshold(&self, value: f64) {
-        self.error_rate_threshold
-            .store(value.to_bits(), Ordering::Relaxed);
     }
 
     pub fn subscribe(

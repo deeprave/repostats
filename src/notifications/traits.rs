@@ -1,13 +1,14 @@
 //! Traits for the notification system
 
+#[cfg(test)]
 use crate::notifications::event::Event;
+#[cfg(test)]
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
 use std::time::Instant;
 
 /// Statistics tracking for a subscriber
-#[allow(dead_code)]
 pub struct SubscriberStatistics {
     queue_size: AtomicUsize,
     messages_processed: AtomicUsize,
@@ -23,7 +24,6 @@ impl Default for SubscriberStatistics {
     }
 }
 
-#[allow(dead_code)]
 impl SubscriberStatistics {
     pub fn new() -> Self {
         Self {
@@ -98,8 +98,8 @@ impl SubscriberStatistics {
 }
 
 /// Trait for event subscribers
+#[cfg(test)]
 #[async_trait]
-#[allow(dead_code)]
 pub trait Subscriber: Send + Sync {
     /// Handle an incoming event
     async fn handle_event(&self, event: Event) -> Result<(), Box<dyn std::error::Error>>;

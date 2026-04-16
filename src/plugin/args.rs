@@ -39,7 +39,6 @@ impl PluginConfig {
     }
 
     /// Get a boolean configuration value with default
-    #[allow(dead_code)]
     pub fn get_bool(&self, key: &str, default: bool) -> bool {
         if let Some(toml::Value::Boolean(b)) = self.toml_config.get(key) {
             *b
@@ -50,7 +49,6 @@ impl PluginConfig {
 
     /// Set a string configuration value (for testing)
     #[cfg(test)]
-    #[allow(dead_code)]
     pub fn set_string(&mut self, key: &str, value: &str) {
         self.toml_config
             .insert(key.to_string(), toml::Value::String(value.to_string()));

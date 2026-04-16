@@ -37,7 +37,6 @@ use std::sync::Weak;
 /// ```
 #[derive(Debug, Clone)]
 pub struct QueuePublisher {
-    #[allow(dead_code)]
     producer_id: String,
     manager: Weak<QueueManager>,
 }
@@ -50,7 +49,6 @@ impl QueuePublisher {
         }
     }
 
-    #[allow(dead_code)]
     pub fn producer_id(&self) -> &str {
         &self.producer_id
     }

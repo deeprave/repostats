@@ -1,15 +1,12 @@
-use crate::app::event_controller::EventController;
-use crate::core::error_handling::log_error_with_context;
-use crate::notifications::api::{notification_service, Event, SystemEvent, SystemEventType};
-use crate::scanner::api::ScanError;
-
-mod app;
-mod core;
-mod notifications;
-mod plugin;
-mod queue;
-mod scanner;
-use notifications::api::*;
+use repostats::app;
+use repostats::app::event_controller::EventController;
+use repostats::core::error_handling::log_error_with_context;
+use repostats::notifications::api::{
+    notification_service, Event, NotificationError, SystemEvent, SystemEventType,
+};
+use repostats::plugin;
+use repostats::scanner;
+use repostats::scanner::api::ScanError;
 
 // Version access is now provided via crate::core::version
 
@@ -86,7 +83,7 @@ async fn run_scanner_simple(
 ) -> Result<(), ScanError> {
     // Initialize plugin manager
     {
-        if let Err(e) = crate::plugin::api::plugin_service().initialize().await {
+        if let Err(e) = plugin::api::plugin_service().initialize().await {
             log::error!("Failed to initialize plugin manager: {}", e);
             std::process::exit(1);
         }
@@ -116,15 +113,6 @@ async fn system_start(pid: u32) -> Result<(), NotificationError> {
         format!("System started, pid={pid}"),
     ));
     notification_service().publish(startup_event).await
-}
-
-#[allow(dead_code)]
-async fn system_stop(pid: u32) -> Result<(), NotificationError> {
-    let shutdown_event = Event::System(SystemEvent::with_message(
-        SystemEventType::Shutdown,
-        format!("System shutting down, pid={pid}"),
-    ));
-    notification_service().publish(shutdown_event).await
 }
 
 /// Start the actual repository scanner with the configured scanner manager
